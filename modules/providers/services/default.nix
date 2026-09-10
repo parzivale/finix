@@ -73,7 +73,10 @@ let
   } (lib.attrNames cfg.units);
 in
 {
-  imports = [ ./trunk.nix ];
+  imports = [
+    ./switch.nix
+    ./trunk.nix
+  ];
 
   options.providers.services = {
     supportedFeatures = {
@@ -142,6 +145,20 @@ in
           { name, ... }:
           {
             options = {
+              enable = lib.mkOption {
+                type = lib.types.bool;
+                default = true;
+                description = ''
+                  Whether this unit is part of the system.
+
+                  A disabled unit is not emitted at all, and is stopped on the next
+                  reconciliation if it happens to be running. Units which require it are left
+                  waiting, since the thing they require will never become ready - so disabling
+                  a unit something else depends on is a way to stall that branch of the graph,
+                  not a way to prune it.
+                '';
+              };
+
               type = lib.mkOption {
                 type = lib.types.enum [
                   "service"
@@ -185,6 +202,7 @@ in
                   "fork"
                   "pidfile"
                   "notify"
+                  "s6"
                 ];
                 default = "fork";
                 description = ''
@@ -193,7 +211,8 @@ in
                   ready once it exits successfully, and an `anchor` once its requirements are
                   met.
 
-                  `notify` waits for an `sd_notify`-style `READY=1` on the notification socket.
+                  `notify` waits for an `sd_notify`-style `READY=1` on the notification socket,
+                  and `s6` for an `s6`-style notification on a descriptor.
                   `pidfile` waits for the daemon to background itself and write
                   {option}`pidFile`. `fork` treats the unit as ready the moment it has been
                   forked, which is a lie for anything doing real startup work, but is the only
@@ -253,6 +272,17 @@ in
                 };
                 description = ''
                   Environment variables passed to this unit's process.
+                '';
+              };
+
+              path = lib.mkOption {
+                type = with lib.types; listOf (either package str);
+                default = [ ];
+                description = ''
+                  Packages and directories placed on this unit's `PATH`.
+
+                  Units are given a deliberately bare environment, so anything invoking a
+                  program by name rather than by store path needs to say where to find it.
                 '';
               };
 
