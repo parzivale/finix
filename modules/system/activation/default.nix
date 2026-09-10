@@ -201,7 +201,8 @@ in
               --subst-var-by logger ${pkgs.util-linuxMinimal} \
               --subst-var-by coreutils ${config.programs.coreutils.package} \
               --subst-var-by installHook ${config.providers.bootloader.installHook} \
-              --subst-var-by inhibitCheck ${config.system.build.checkSwitchInhibitors}
+              --subst-var-by inhibitCheck ${config.system.build.checkSwitchInhibitors} \
+              --subst-var-by servicesSwitch "${config.system.build.servicesSwitch}"
           ''
           + lib.optionalString config.boot.bootspec.enable ''
             ${config.boot.bootspec.writer}

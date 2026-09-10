@@ -9,6 +9,7 @@ inhibitCheck="@inhibitCheck@"
 finit="@finit@"
 logger="@logger@"
 coreutils="@coreutils@"
+servicesSwitch="@servicesSwitch@"
 
 action="${1-}"
 
@@ -78,8 +79,17 @@ if ! "$out/activate"; then
   res=2
 fi
 
-# Ask finit (or equivalent) to reload its units
-if ! "$finit/bin/initctl" reload; then
+# Reconcile the running services against the incoming ones. Everything init-specific lives
+# behind this: the engine is the same whatever init is underneath, and the selected
+# providers.services implementation supplies the three operations it drives.
+#
+# A system defining no providers.services units has no such implementation to call, so it
+# falls back to asking finit to reload directly, as it always did.
+if [[ -n "$servicesSwitch" ]]; then
+  if ! "$servicesSwitch"; then
+    (( res == 0 )) && res=3
+  fi
+elif ! "$finit/bin/initctl" reload; then
   (( res == 0 )) && res=3
 fi
 
