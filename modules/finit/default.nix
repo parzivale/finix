@@ -11,6 +11,7 @@ in
   imports = [
     ./initrd.nix
     ./mount.nix
+    ./providers.services.nix
     ./stage1.nix
     ./stage2.nix
     ./tmpfiles.nix
