@@ -52,18 +52,26 @@ let
   # re-running, and its `task/<name>/success` condition then holds for the rest of the runlevel.
   true' = lib.getExe' config.programs.coreutils.package "true";
 
-  # `service/<name>/ready` is live: it de-asserts the moment the service stops, and finit acts
-  # on that by stopping everything conditioned on it. the contract wants edges that gate
-  # starting and nothing else, so each service gets a companion task which latches its readiness
-  # once and never lets go. dependants condition on the companion, not on the service.
+  # every finit condition is live. `service/<n>/ready` de-asserts when the service stops, and
+  # `task/<n>/success` de-asserts when the task is stopped or restarted; finit acts on either
+  # by stopping whatever was conditioned on it. the contract's edges mean "this must have
+  # started before I start", which is a statement about the past, so each unit gets a companion
+  # task latching its readiness once, and dependants condition on the companion instead.
+  #
+  # this works because a companion's own success does not retract when the condition which
+  # triggered it goes away - tests/providers/services.nix pins exactly that.
+  #
+  # every unit gets one, not only services. an anchor or oneshot depended upon directly would
+  # drop its condition when restarted, and the switch engine restarts an anchor whenever a new
+  # service attaches to its trunk level - which would otherwise stop everything hanging off it.
   companionOf = name: "${name}-started";
 
-  conditionOf =
+  conditionOf = name: "task/${companionOf name}/success";
+
+  # what a companion waits for depends on how the unit it shadows reports being up
+  readyConditionOf =
     name:
-    if cfg.units.${name}.type == "service" then
-      "task/${companionOf name}/success"
-    else
-      "task/${name}/success";
+    if cfg.units.${name}.type == "service" then "service/${name}/ready" else "task/${name}/success";
 
   common =
     name: unit:
@@ -74,6 +82,7 @@ let
       conditions = map conditionOf unit.requires;
       environment = unit.environment;
     }
+    // lib.optionalAttrs (unit.path != [ ]) { inherit (unit) path; }
     // lib.optionalAttrs (unit.user != null) { inherit (unit) user; }
     // lib.optionalAttrs (unit.group != null) { inherit (unit) group; };
 
@@ -81,6 +90,7 @@ let
     fork = "none";
     pidfile = "pid";
     notify = "systemd";
+    s6 = "s6";
   };
 
   mkService =
@@ -130,15 +140,17 @@ let
     description = "${name} has started";
 
     runlevels = runlevelsFor name unit;
-    conditions = [ "service/${name}/ready" ];
+    conditions = [ (readyConditionOf name) ];
     command = true';
     remain = true;
   };
 
   isService = _: unit: unit.type == "service";
 
-  bootSide = lib.filterAttrs (name: unit: !(onShutdownSide name unit)) cfg.units;
-  shutdownSide = lib.filterAttrs onShutdownSide cfg.units;
+  enabled = lib.filterAttrs (_: u: u.enable) cfg.units;
+
+  bootSide = lib.filterAttrs (name: unit: !(onShutdownSide name unit)) enabled;
+  shutdownSide = lib.filterAttrs onShutdownSide enabled;
 
   services = lib.filterAttrs isService bootSide;
 in
@@ -167,7 +179,7 @@ in
       lib.mapAttrs mkTask (lib.filterAttrs (n: u: !(isService n u)) bootSide)
       // lib.mapAttrs' (
         name: unit: lib.nameValuePair (companionOf name) (mkCompanion name unit)
-      ) services;
+      ) bootSide;
 
     finit.run = lib.mkIf (shutdownSide != { }) {
       providers-services-shutdown = {
@@ -177,12 +189,42 @@ in
       };
     };
 
+    # finit notices a changed unit by its stanza file changing, so stamping each unit's
+    # fingerprint into its own file guarantees the file differs whenever the unit's definition
+    # does - even for a change finit's own stanza would not otherwise reflect. this is the same
+    # trick the openssh and tlp modules use to carry reload triggers, and it is also what a
+    # real `list` would read back were finit ever to stop reconciling on its own.
+    environment.etc = lib.mapAttrs' (
+      name: unit:
+      lib.nameValuePair "finit.d/${name}.conf" {
+        text = lib.mkAfter "\n# fingerprint: ${cfg.switch.fingerprints.${name}}\n";
+      }
+    ) bootSide;
+
+    # finit reconciles by itself: `initctl reload` re-reads /etc/finit.d and starts, stops and
+    # restarts stanzas to match what it finds there - tests/finit/remain-after-exit.nix pins
+    # that. so there is nothing for the engine to compute here, and the honest implementation
+    # is to say so: report nothing running, let the engine hand over the whole tree, and reload
+    # once. an init which does not self-reconcile, as dinit does not, gives a real `list` and
+    # the engine's diff does the work instead.
+    providers.services.switch = {
+      list = pkgs.writeShellScript "finit-list" ":";
+
+      activate = pkgs.writeShellScript "finit-reload" ''
+        ${lib.getExe' config.finit.package "initctl"} reload
+      '';
+
+      deactivate = pkgs.writeShellScript "finit-reload" ''
+        ${lib.getExe' config.finit.package "initctl"} reload
+      '';
+    };
+
     assertions = lib.mapAttrsToList (name: _: {
       assertion = !(cfg.units ? ${companionOf name});
       message = ''
         providers.services.units.${companionOf name} collides with the companion task the finit
         backend emits for providers.services.units.${name}. Rename one of them.
       '';
-    }) services;
+    }) bootSide;
   };
 }
