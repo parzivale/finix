@@ -149,6 +149,13 @@
         for svc in ["alpha", "beta", "gamma", "delta"]:
             assert cond(f"task/{svc}-started/success") == "on"
 
+    with subtest("anchors have companions too, so restarting one cannot cascade"):
+        # a unit depended upon directly would drop its condition when restarted, taking down
+        # everything hanging off it. the switch engine restarts an anchor whenever a service
+        # attaches to its trunk level, so anchors need the latch as much as services do.
+        for level in ["start", "sysinit", "basic", "multi-user", "running"]:
+            assert cond(f"task/{level}-started/success") == "on", f"{level} has no companion"
+
     # question 1: does the companion latch survive its own condition being lost?
 
     with subtest("stopping a service retracts its live readiness condition"):
