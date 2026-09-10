@@ -32,11 +32,7 @@
         '';
     in
     {
-      services.mdevd.enable = true;
-      services.getty.enable = true;
-
-      providers.services.backend = "finit";
-      providers.services.trunk.enable = true;
+      imports = [ ../lib/contract-base.nix ];
 
       providers.services.units = {
         keeper = {

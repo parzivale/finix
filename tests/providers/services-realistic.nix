@@ -34,8 +34,7 @@
         '';
     in
     {
-      services.mdevd.enable = true;
-      services.getty.enable = true;
+      imports = [ ../lib/contract-base.nix ];
 
       environment.systemPackages = [
         pg
@@ -49,9 +48,6 @@
         uid = config.ids.uids.postgres;
       };
       users.groups.postgres.gid = config.ids.gids.postgres;
-
-      providers.services.backend = "finit";
-      providers.services.trunk.enable = true;
 
       providers.services.units = {
         # ---- sysinit: state that everything later assumes exists ----

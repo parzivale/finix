@@ -1,21 +1,13 @@
-# a system whose daemons are providers.services units rather than finit stanzas
+# a census of what a contract-driven machine is actually running
 #
-# the other two tests are hybrids: they enable services.mdevd, which writes finit.services
-# directly, so the contract is only ever driving part of the machine. here the daemons are
-# units instead, to find out whether the abstraction can carry a system rather than decorate
-# one. it also pins two things the contract could not express until this test was written,
-# both of which mdevd needed: `path` and `readiness = "s6"`.
+# every test here builds on tests/lib/contract-base.nix, which drives the machine's daemons
+# through the contract rather than letting finit define them. this one enumerates every stanza
+# finit ends up running and reports which of them the contract did not produce, so the
+# remainder cannot grow unnoticed.
 #
-# a terminal is not a daemon and is not modelled by the contract at all. it has no readiness
-# signal and nothing ever depends on one, so it has no place in a dependency graph; and only
-# finit has a distinct tty stanza - on dinit and systemd a getty is an ordinary service - so
-# modelling one would export a finit peculiarity into the abstraction. it is therefore
-# declared here as raw finit configuration, in the same category as the kernel command line,
-# which is also what satisfies finix's assertion that finit.ttys be non-empty.
-#
-# what also remains outside the contract is the core boot machinery - tmpfiles, sysctl,
-# modprobe, the suid wrappers, remount-nix-store - emitted by modules which every system
-# imports. porting those is the migration, not a test, so the test reports them instead.
+# what remains outside is the core boot machinery - tmpfiles, sysctl, modprobe, the suid
+# wrappers, remount-nix-store - emitted by modules every system imports, plus the harness's own
+# backdoor and syslogd. porting those is the migration, not a test.
 {
   name = "providers.services-pure";
 
@@ -27,49 +19,9 @@
       ...
     }:
     {
-      # mdevd's whole config block is behind `mkIf cfg.enable`, so disabling the module also
-      # takes away /etc/mdev.conf and its activation script - configuration, activation and
-      # service definition are bundled together. the module therefore stays enabled for what
-      # it configures, and only its finit stanzas are switched off, so the daemon itself comes
-      # from the contract. this is the shape a real migration would take.
-      services.mdevd.enable = true;
-      finit.services.mdevd.enable = false;
-      finit.run.coldplug.enable = false;
-
-      # the terminal, declared as plain finit configuration rather than through the getty
-      # module or the contract. a tty is not a daemon, so it is not the contract's business.
-      finit.ttys.tty1 = {
-        description = "getty on /dev/tty1";
-        nowait = true;
-      };
-
-      providers.services.backend = "finit";
-      providers.services.trunk.enable = true;
+      imports = [ ../lib/contract-base.nix ];
 
       providers.services.units = {
-        # mdevd needs `path` and s6 readiness - neither of which the contract could express
-        # before this test was written
-        device-events = {
-          description = "device event daemon";
-          requires = [ "start" ];
-          readiness = "s6";
-          command = "${config.services.mdevd.package}/bin/mdevd -D %n -F /run/current-system/firmware -f ${
-            config.environment.etc."mdev.conf".source
-          }";
-          path = [
-            config.programs.coreutils.package
-            pkgs.execline
-            pkgs.util-linux
-          ];
-        };
-
-        coldplug = {
-          type = "oneshot";
-          description = "cold plugging system";
-          requires = [ "device-events" ];
-          command = "${config.services.mdevd.package}/bin/mdevd-coldplug";
-        };
-
         # an ordinary daemon, to prove the graph still works around the infrastructure
         marker = {
           type = "oneshot";

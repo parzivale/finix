@@ -38,11 +38,7 @@
         '';
     in
     {
-      services.mdevd.enable = true;
-      services.getty.enable = true;
-
-      providers.services.backend = "finit";
-      providers.services.trunk.enable = true;
+      imports = [ ../lib/contract-base.nix ];
 
       providers.services.units = {
         # attaches to the first trunk level, so `sysinit` cannot be reached until it is done
