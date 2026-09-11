@@ -68,17 +68,20 @@ in
         path = "/home";
       }
     ]
-    ++ lib.mapAttrsToList (username: opts: {
-      type = "directory";
-      path = opts.home;
-      mode = "0700";
-      user = opts.name;
-      inherit (opts) group;
-    }) (
-      lib.filterAttrs (
-        _: opts: opts.enable && opts.createHome && opts.home != "/var/empty"
-      ) config.users.users
-    );
+    ++
+      lib.mapAttrsToList
+        (username: opts: {
+          type = "directory";
+          path = opts.home;
+          mode = "0700";
+          user = opts.name;
+          inherit (opts) group;
+        })
+        (
+          lib.filterAttrs (
+            _: opts: opts.enable && opts.createHome && opts.home != "/var/empty"
+          ) config.users.users
+        );
 
     # default user & group definitions
     users.users.root = {

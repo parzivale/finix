@@ -21,79 +21,79 @@ let
   cfg = config.providers.services;
 
   ruleType = lib.types.submodule {
-      options = {
-        type = lib.mkOption {
-          type = lib.types.enum [
-            "directory"
-            "file"
-            "symlink"
-            "permissions"
-            "remove"
-          ];
-          description = ''
-            What the rule does.
+    options = {
+      type = lib.mkOption {
+        type = lib.types.enum [
+          "directory"
+          "file"
+          "symlink"
+          "permissions"
+          "remove"
+        ];
+        description = ''
+          What the rule does.
 
-            `directory` and `file` create the path if it is not already there; `symlink` points
-            it at {option}`argument`. `permissions` creates nothing and only changes a path
-            which already exists, for something another unit or the kernel has made. `remove`
-            deletes it, and is the one type whose {option}`path` may be a glob.
-          '';
-        };
-
-        path = lib.mkOption {
-          type = lib.types.str;
-          description = ''
-            The absolute path the rule applies to.
-
-            Taken literally, not as a pattern - except for a `remove` rule, where shell glob
-            characters match and a pattern matching nothing is not an error.
-          '';
-        };
-
-        recursive = lib.mkOption {
-          type = lib.types.bool;
-          default = false;
-          description = ''
-            Whether the rule descends into the path's contents. Meaningful for `permissions`,
-            which then applies to everything beneath the path, and for `remove`, which will
-            otherwise refuse a non-empty directory.
-          '';
-        };
-
-        mode = lib.mkOption {
-          type = with lib.types; nullOr str;
-          default = null;
-          example = "0755";
-          description = ''
-            Access mode, as {manpage}`chmod(1)` would take it. `null` leaves it alone - for a
-            path being created, that means the process umask decides.
-          '';
-        };
-
-        user = lib.mkOption {
-          type = with lib.types; nullOr str;
-          default = null;
-          description = ''
-            Owning user, by name or numeric id. `null` leaves ownership with whoever created
-            the path, which this early in boot is root.
-          '';
-        };
-
-        group = lib.mkOption {
-          type = with lib.types; nullOr str;
-          default = null;
-          description = "Owning group, by name or numeric id. `null` leaves it alone.";
-        };
-
-        argument = lib.mkOption {
-          type = with lib.types; nullOr str;
-          default = null;
-          description = ''
-            The target, for a `symlink`, or the initial contents, for a `file`. Meaningless for
-            the other types.
-          '';
-        };
+          `directory` and `file` create the path if it is not already there; `symlink` points
+          it at {option}`argument`. `permissions` creates nothing and only changes a path
+          which already exists, for something another unit or the kernel has made. `remove`
+          deletes it, and is the one type whose {option}`path` may be a glob.
+        '';
       };
+
+      path = lib.mkOption {
+        type = lib.types.str;
+        description = ''
+          The absolute path the rule applies to.
+
+          Taken literally, not as a pattern - except for a `remove` rule, where shell glob
+          characters match and a pattern matching nothing is not an error.
+        '';
+      };
+
+      recursive = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = ''
+          Whether the rule descends into the path's contents. Meaningful for `permissions`,
+          which then applies to everything beneath the path, and for `remove`, which will
+          otherwise refuse a non-empty directory.
+        '';
+      };
+
+      mode = lib.mkOption {
+        type = with lib.types; nullOr str;
+        default = null;
+        example = "0755";
+        description = ''
+          Access mode, as {manpage}`chmod(1)` would take it. `null` leaves it alone - for a
+          path being created, that means the process umask decides.
+        '';
+      };
+
+      user = lib.mkOption {
+        type = with lib.types; nullOr str;
+        default = null;
+        description = ''
+          Owning user, by name or numeric id. `null` leaves ownership with whoever created
+          the path, which this early in boot is root.
+        '';
+      };
+
+      group = lib.mkOption {
+        type = with lib.types; nullOr str;
+        default = null;
+        description = "Owning group, by name or numeric id. `null` leaves it alone.";
+      };
+
+      argument = lib.mkOption {
+        type = with lib.types; nullOr str;
+        default = null;
+        description = ''
+          The target, for a `symlink`, or the initial contents, for a `file`. Meaningless for
+          the other types.
+        '';
+      };
+    };
   };
 
   arg = lib.escapeShellArg;

@@ -273,9 +273,7 @@ in
 
       finit.tasks =
         lib.mapAttrs mkTask (lib.filterAttrs (n: u: !(isService n u)) bootSide)
-        // lib.mapAttrs' (
-          name: unit: lib.nameValuePair (companionOf name) (mkCompanion name unit)
-        ) bootSide
+        // lib.mapAttrs' (name: unit: lib.nameValuePair (companionOf name) (mkCompanion name unit)) bootSide
         # the tmpfiles.d(5) rules only finit can read. Named apart from the contract's own
         # `tmpfiles-setup` unit, which finit also emits as a stanza - two stanzas of one name
         # is refused by the contract.

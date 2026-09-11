@@ -13,7 +13,12 @@ let
     if cfg.package != null then
       cfg.package
     else
-      pkgs.util-linux // { meta = pkgs.util-linux.meta // { mainProgram = "agetty"; }; };
+      pkgs.util-linux
+      // {
+        meta = pkgs.util-linux.meta // {
+          mainProgram = "agetty";
+        };
+      };
 
   # agetty's compiled-in default is /bin/login, and finix has no /bin at all - so without this
   # the prompt never appears and the unit just respawns forever against a missing file
