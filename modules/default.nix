@@ -81,6 +81,7 @@ in
   # alternative providers.services implementations, imported explicitly - a system selects one
   # with providers.services.backend
   dinit = ./dinit;
+  s6-rc = ./s6-rc;
   runit = ./runit;
 
   # virtualisation
