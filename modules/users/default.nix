@@ -60,10 +60,21 @@ in
       ${pkgs.userborn}/bin/userborn ${configFile}
     '';
 
-    finit.tmpfiles.rules = [
-      "d /home"
+    # home directories are not finit's business either - a user declared with createHome has
+    # one whichever init the machine boots
+    providers.services.tmpfiles.rules = [
+      {
+        type = "directory";
+        path = "/home";
+      }
     ]
-    ++ lib.mapAttrsToList (username: opts: "d ${opts.home} 0700 ${opts.name} ${opts.group}") (
+    ++ lib.mapAttrsToList (username: opts: {
+      type = "directory";
+      path = opts.home;
+      mode = "0700";
+      user = opts.name;
+      inherit (opts) group;
+    }) (
       lib.filterAttrs (
         _: opts: opts.enable && opts.createHome && opts.home != "/var/empty"
       ) config.users.users

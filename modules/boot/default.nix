@@ -15,10 +15,12 @@
 
   options.boot.init = lib.mkOption {
     type = lib.types.path;
-    default = "${config.finit.package}/bin/finit";
-    defaultText = lib.literalExpression ''"''${config.finit.package}/bin/finit"'';
     description = ''
       Executable run as stage-2 PID 1, symlinked as `''${config.system.build.toplevel}/init`.
+
+      Set from {option}`providers.services.backend`, which names the init and the supervisor in
+      one choice. This module deliberately has no default: naming one implementation here made
+      it PID 1 whatever the contract said, which is the coupling the contract exists to remove.
     '';
   };
 

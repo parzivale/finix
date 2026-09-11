@@ -82,8 +82,10 @@ in
       pkgs.iputils
     ];
 
-    # backdoor service for finit
-    finit.services.backdoor = {
+    # finit has its own stanza vocabulary and this one predates the contract; more to the
+    # point, `restart = 0` has no contract equivalent, and under finit that is what stops the
+    # driver's shell being respawned after the test closes it.
+    finit.services.backdoor = lib.mkIf (config.providers.services.backend == "finit") {
       description = "test driver backdoor shell";
       command = backdoorScript;
       runlevels = "234";
@@ -91,6 +93,18 @@ in
 
       # the backdoor runs bash which executes commands from hvc0 until EOF, then exits
       restart = 0;
+    };
+
+    # every other backend is PID 1 in its own right, so there is no finit to start this and
+    # the driver never gets a shell - which looks like the machine failing to boot when it is
+    # only the test harness missing. As a contract unit it comes up whichever init is running.
+    providers.services.units.backdoor = lib.mkIf (config.providers.services.backend != "finit") {
+      description = "test driver backdoor shell";
+      type.service.command = backdoorScript;
+
+      # late enough that a test seeing a shell can assume the system came up; the driver waits
+      # for this to connect, so anything it looks at afterwards has had its chance to start
+      requires = lib.optional config.providers.services.trunk.enable "multi-user";
     };
   };
 }

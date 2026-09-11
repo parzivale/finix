@@ -174,21 +174,43 @@ in
       '';
     };
 
-    # how to be run, for whatever is PID 1. it never learns what any of this means.
-    providers.services.hosting = {
-      prepare = pkgs.writeShellScript "s6-rc-prepare" ''
-        ${lib.getExe' pkgs.coreutils "mkdir"} -p ${scanDir}
-      '';
+    # s6's boot, as PID 1.
+    #
+    # s6-svscan is what supervises and what reaps, so it has to be the process the kernel is
+    # left with - hence the exec. But a compiled database is not something a scan directory
+    # notices: it has to be initialised against a scan directory which is already live, which
+    # cannot happen before s6-svscan is running. So the initialisation is forked off first and
+    # waits for the supervisor it is about to talk to.
+    #
+    # s6-linux-init exists to do exactly this and would replace the whole script, at the cost
+    # of a generated init directory to keep in step with the contract's own output.
+    providers.services.initExecutable = pkgs.writeShellScript "s6-init" ''
+      export PATH=${
+        lib.makeBinPath [
+          pkgs.coreutils
+          pkgs.s6
+          s6rc
+        ]
+      }:$PATH
 
-      command = "${lib.getExe' pkgs.s6 "s6-svscan"} ${scanDir}";
+      # s6 reads its own graph from a compiled database in the store rather than from /etc, so
+      # it would start without this - into a machine with no /etc for anything it starts
+      ${cfg.activationScript}
 
-      # the database is compiled, so bringing it up is a step of its own rather than a
-      # directory the supervisor notices
-      activate = pkgs.writeShellScript "s6-rc-activate-all" ''
-        ${lib.getExe' s6rc "s6-rc-init"} -c ${database}/db -l ${live} ${scanDir}
-        ${lib.getExe' s6rc "s6-rc"} -l ${live} -u change everything
-      '';
-    };
+      mkdir -p ${scanDir}
+
+      (
+        # the control fifo appears once s6-svscan is ready to be talked to
+        until [ -p ${scanDir}/.s6-svscan/control ]; do
+          sleep 0.1
+        done
+
+        s6-rc-init -c ${database}/db -l ${live} ${scanDir}
+        s6-rc -l ${live} -u change everything
+      ) &
+
+      exec s6-svscan ${scanDir}
+    '';
 
     environment.etc = lib.mapAttrs' (
       name: fp: lib.nameValuePair "s6-rc-fingerprints/${name}" { text = fp; }

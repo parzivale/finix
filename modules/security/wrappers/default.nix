@@ -269,12 +269,25 @@ in
       ];
     };
 
-    finit.tasks.suid-sgid-wrappers = {
+    # a contract unit rather than a finit task: without these, /run/wrappers/bin/unix_chkpwd
+    # is missing, pam_unix cannot verify a password against /etc/shadow, and every login on
+    # the machine fails with "Login incorrect" whatever was typed. Nothing about that is
+    # finit's business - it is as much a part of bringing a machine up as tmpfiles is.
+    providers.services.units.suid-sgid-wrappers = {
       description = "create suid/sgid wrappers";
-      runlevels = "S12345";
-      log = true;
-      command = wrappersScript;
-      path = [ config.programs.coreutils.package ];
+      # PATH set by the script rather than asked for as a unit property: dinit has no per-unit
+      # PATH at all, so a `path` here is a warning on that backend and a script which cannot
+      # find mktemp on any of them. Wrapping it needs nothing from the implementation.
+      type.oneshot.command = pkgs.writeShellScript "suid-sgid-wrappers" ''
+        export PATH=${lib.makeBinPath [ config.programs.coreutils.package ]}:$PATH
+        exec ${wrappersScript}
+      '';
+
+      # after the mount, not merely early: /run/wrappers is a tmpfs declared in fileSystems,
+      # and the script's first act is `chmod 755 /run/wrappers` under `set -e`. Attached to
+      # the trunk's head it races the unit which mounts it, and when it loses it dies on that
+      # chmod without saying anything.
+      requires = [ "mount-filesystems" ];
     };
   };
 }

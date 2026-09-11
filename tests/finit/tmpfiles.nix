@@ -10,6 +10,10 @@
     {
       services.mdevd.enable = true;
 
+      # tmpfiles is part of being an init now, so it is reached by selecting one - the rules
+      # and the reader are still finit's, which is what this test is about
+      providers.services.backend = "finit";
+
       # pre-create test tmpfiles.d configs for boot-time testing
       environment.etc."tmpfiles.d/test-boot.conf".text = ''
         d /run/tmpfiles-test/boot-created 0755 root root -

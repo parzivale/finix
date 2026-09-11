@@ -140,10 +140,8 @@ in
       );
     };
 
-    dinit.services.mount-fstab = {
-      type = "scripted";
-      command = "${pkgs.util-linux}/bin/mount -a";
-      boot = true;
-    };
+    # mounting the stage-2 filesystems used to be this bespoke service, which is why dinit was
+    # the only non-finit backend on which /run/wrappers existed. It is the contract's
+    # mount-filesystems unit now, so every backend gets it.
   };
 }

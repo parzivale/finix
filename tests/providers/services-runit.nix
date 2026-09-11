@@ -1,10 +1,10 @@
 # the providers.services contract driven on runit
 #
-# runit is not an init. finit is still PID 1 here; runsvdir supervises the contract's units
-# underneath it. that alone is worth testing - the other three backends are all PID 1, so this
-# is the first evidence the contract abstracts service supervision rather than init.
+# runit boots this machine: `runit-init` is PID 1, and it runs the three stage scripts runit
+# expects - setup, then runsvdir, then teardown. Selecting the backend is the whole of what
+# this configuration says about init, and nothing in it mentions finit.
 #
-# it is also the first backend whose target cannot do what the contract asks. runit has no
+# this is the backend whose target cannot do what the contract asks. runit has no
 # dependency mechanism at all: every service directory is scanned, a runsv is started for each,
 # and they all come up in parallel. ordering is conventionally each service's own problem. so
 # the backend synthesises edges out of latch files, and the question this answers is whether
@@ -26,6 +26,7 @@
       # so the test script itself can call `sv`
       environment.systemPackages = [ pkgs.runit ];
 
+      # one choice: what supervises the units is also what the kernel starts
       providers.services.backend = "runit";
       providers.services.trunk.enable = true;
 
@@ -55,36 +56,6 @@
           '';
           requires = [ "second" ];
         };
-      };
-
-      # runsv creates `supervise` inside each service directory, so the generated tree has to
-      # be somewhere writable rather than read straight out of the store
-      finit.tasks.runit-setup = {
-        description = "stage the runit service directories";
-        runlevels = "S12345789";
-
-        # without this the task re-runs on entering runlevel 2 and its `rm -rf` deletes the
-        # tree out from under the runsvdir it just started
-        remain = true;
-        command = pkgs.writeShellScript "runit-setup" ''
-          export PATH=${lib.makeBinPath [ pkgs.coreutils ]}:$PATH
-          mkdir -p /run/svc-test /run/providers-services
-          rm -rf /run/service
-          cp -rL ${config.providers.services.runit.serviceDir} /run/service
-          chmod -R u+w /run/service
-        '';
-      };
-
-      finit.services.runsvdir = {
-        description = "runit service supervisor";
-        runlevels = "S12345789";
-        conditions = "task/runit-setup/success";
-
-        # runsvdir execs `runsv` per service directory, looked up on PATH, and finit hands
-        # services a deliberately bare one
-        path = [ pkgs.runit ];
-        log = true;
-        command = "${lib.getExe' pkgs.runit "runsvdir"} /run/service";
       };
 
       environment.etc."services-switch".source = config.system.build.servicesSwitch;

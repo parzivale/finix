@@ -128,19 +128,33 @@ in
       ln -sfn /run /var/run
     '';
 
-    finit.tmpfiles.rules = [
-      "d /etc"
-      "d /run"
-      "d /tmp"
-      "d /var"
-      "d /var/cache"
-      "d /var/db"
-      "d /var/empty"
-      "d /var/lib"
-      "d /var/log"
-      "d /var/spool"
-      "L+ /var/run - - - - /run"
-    ];
+    # the base filesystem layout, declared against the contract rather than against finit: a
+    # machine needs these whichever init it boots
+    providers.services.tmpfiles.rules =
+      map
+        (path: {
+          type = "directory";
+          inherit path;
+        })
+        [
+          "/etc"
+          "/run"
+          "/tmp"
+          "/var"
+          "/var/cache"
+          "/var/db"
+          "/var/empty"
+          "/var/lib"
+          "/var/log"
+          "/var/spool"
+        ]
+      ++ [
+        {
+          type = "symlink";
+          path = "/var/run";
+          argument = "/run";
+        }
+      ];
 
     system.activation.path = map lib.getBin [
       config.programs.coreutils.package

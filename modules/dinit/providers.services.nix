@@ -231,6 +231,26 @@ in
         path = false;
       };
 
+      # dinit is its own init, so this is what the kernel runs.
+      #
+      # The wrapper is here because boot.init is a single executable the toplevel symlinks,
+      # with nowhere to put arguments. Neither argument can be a store path: the control
+      # socket has to live on a writable filesystem, and the service directory has to stay a
+      # stable name so that a switch can change what it contains without restarting PID 1.
+      # Booted against /nix/store/...-dinit.d, this dinit would go on reading the generation
+      # the machine booted with however many times the engine reloaded it.
+      #
+      # /run is already a tmpfs by the time this runs - the initrd mounts it - so there is
+      # nothing to create first.
+      providers.services.initExecutable = pkgs.writeShellScript "dinit-init" ''
+        # /etc/dinit.d is one of the things activation creates, so this has to come first -
+        # without it dinit starts correctly and then reports "could not find service
+        # description", which looks like a dinit problem and is not one
+        ${cfg.activationScript}
+
+        exec ${config.dinit.package}/bin/dinit -p /run/dinitctl -d /etc/dinit.d boot
+      '';
+
       dinit.services =
         lib.mapAttrs mkBootSide (lib.filterAttrs (n: u: !(onShutdownSide n u)) enabled)
         // lib.listToAttrs (map (unit: lib.nameValuePair unit.name (mkShutdownSide unit)) shutdownOrdered);

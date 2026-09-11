@@ -42,9 +42,7 @@
         pkgs.s6-rc
       ];
 
-      # what the kernel starts, and what supervises the units. they differ, so the first runs
-      # the second - see providers.services.hosting.
-      providers.services.init = "finit";
+      # one choice: what supervises the units is also what the kernel starts
       providers.services.backend = "s6-rc";
       providers.services.trunk.enable = true;
 

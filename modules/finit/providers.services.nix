@@ -8,6 +8,18 @@ let
   cfg = config.providers.services;
   trunk = cfg.trunk;
 
+  tmpfilesReader = "${config.finit.package}/libexec/finit/tmpfiles";
+
+  # handed to the reader by store path rather than left in /etc to be scanned, so that a rule
+  # change changes the task's command. finit reconciles from its own configuration, so a stanza
+  # whose text is identical between two generations is one it will not re-run.
+  tmpfilesRules = pkgs.writeText "tmpfiles-finix.conf" ''
+    # This file is created automatically and should not be modified.
+    # Please change the option ‘finit.tmpfiles.rules’ instead.
+
+    ${lib.concatStringsSep "\n" config.finit.tmpfiles.rules}
+  '';
+
   # boot-side stanzas sit in every runlevel except 0 (halt) and 6 (reboot); the graph carries
   # all of the ordering, so finit's own sequencing is left with nothing to do. shutdown-side
   # stanzas sit in exactly 0 and 6, which is the only vocabulary finit has for "on the way out".
@@ -175,8 +187,60 @@ in
     };
   };
 
+  options.finit.tmpfiles = {
+    rules = lib.mkOption {
+      type = with lib.types; listOf str;
+      default = [ ];
+      example = [ "d /tmp 1777 root root 10d" ];
+      description = ''
+        Rules for creation, deletion and cleaning of volatile and temporary files
+        automatically. See {manpage}`tmpfiles.d(5)` for the exact format.
+
+        Only read when finit is the selected backend, because reading them at all is a thing
+        finit can do and the other implementations cannot - it ships a {manpage}`tmpfiles.d(5)`
+        parser, and dinit, runit and s6 do not. Anything which should work under any init
+        belongs in {option}`providers.services.tmpfiles.rules`, which is declared as attrsets
+        lowered into commands at build time and so needs no parser at all.
+      '';
+    };
+
+    clean = {
+      enable = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = ''
+          Whether to enable automatic cleaning of temporary files.
+
+          :::{.note}
+          You must have a scheduler backend configured with
+          `providers.scheduler.backend` to utilize this option.
+          :::
+        '';
+      };
+
+      interval = lib.mkOption {
+        type = lib.types.str;
+        default = "daily";
+        description = ''
+          The interval at which this task should run its specified {option}`command`. Accepts either a
+          standard {manpage}`crontab(5)` expression or one of: `hourly`, `daily`, `weekly`, `monthly`, or `yearly`.
+
+          If a standard {manpage}`crontab(5)` expression is provided this value will be passed directly
+          to the `scheduler` implementation and execute exactly as specified.
+
+          If one of the special values, `hourly`, `daily`, `monthly`, `weekly`, or `yearly`, is provided then the
+          underlying `scheduler` implementation will use its features to decide when best to run.
+        '';
+      };
+    };
+  };
+
   config = lib.mkMerge [
     (lib.mkIf (cfg.backend == "finit") {
+      # backend is a bare string key, so only this module can say which binary it means.
+      # Wiring it to boot.init is the contract's job, not this one's.
+      providers.services.initExecutable = "${config.finit.package}/bin/finit";
+
       providers.services.supportedFeatures = {
         # finit can bound how long a unit takes to die - `kill`, the SIGTERM to SIGKILL delay -
         # but has nothing to bound how long one takes to become ready
@@ -211,13 +275,26 @@ in
         lib.mapAttrs mkTask (lib.filterAttrs (n: u: !(isService n u)) bootSide)
         // lib.mapAttrs' (
           name: unit: lib.nameValuePair (companionOf name) (mkCompanion name unit)
-        ) bootSide;
+        ) bootSide
+        # the tmpfiles.d(5) rules only finit can read. Named apart from the contract's own
+        # `tmpfiles-setup` unit, which finit also emits as a stanza - two stanzas of one name
+        # is refused by the contract.
+        // lib.optionalAttrs (config.finit.tmpfiles.rules != [ ]) {
+          tmpfiles-finit.command = "${tmpfilesReader} --create ${tmpfilesRules}";
+        };
 
       finit.run = lib.mkIf (shutdownSide != { }) {
         providers-services-shutdown = {
           description = "shutdown sequence";
           runlevels = shutdownRunlevels;
           command = shutdownScript;
+        };
+      };
+
+      providers.scheduler.tasks = lib.mkIf config.finit.tmpfiles.clean.enable {
+        tmpfiles-clean = {
+          interval = config.finit.tmpfiles.clean.interval;
+          command = "${tmpfilesReader} --clean ${tmpfilesRules}";
         };
       };
 
@@ -260,47 +337,5 @@ in
       }) bootSide;
     })
 
-    # ---- hosting another supervisor --------------------------------------------------
-    #
-    # Reached when finit is PID 1 but something else supervises the units. The other
-    # implementation says how it is to be run, in providers.services.hosting, and this turns
-    # that into finit's own terms - so nothing here knows what an s6-rc or a runsvdir is.
-    #
-    # These are finit stanzas rather than contract units on purpose: the units belong to the
-    # supervisor being started, so a unit which started it would have to exist before it did.
-    (lib.mkIf (cfg.init == "finit" && cfg.init != cfg.backend) {
-      finit.tasks =
-        lib.optionalAttrs (cfg.hosting.prepare != null) {
-          supervisor-prepare = {
-            description = "prepare the ${cfg.backend} supervisor";
-            runlevels = bootRunlevels;
-
-            # must not run again on entering another runlevel: whatever it puts in place is
-            # usually the very thing the running supervisor is holding open
-            remain = true;
-            command = cfg.hosting.prepare;
-          };
-        }
-        // lib.optionalAttrs (cfg.hosting.activate != null) {
-          supervisor-activate = {
-            description = "bring up the ${cfg.backend} units";
-            runlevels = bootRunlevels;
-            conditions = "service/supervisor/ready";
-            remain = true;
-            log = true;
-            command = cfg.hosting.activate;
-          };
-        };
-
-      finit.services = lib.optionalAttrs (cfg.hosting.command != null) {
-        supervisor = {
-          description = "${cfg.backend} supervisor";
-          runlevels = bootRunlevels;
-          conditions = lib.optional (cfg.hosting.prepare != null) "task/supervisor-prepare/success";
-          log = true;
-          command = cfg.hosting.command;
-        };
-      };
-    })
   ];
 }

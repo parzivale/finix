@@ -74,7 +74,10 @@ let
 in
 {
   imports = [
+    ./activation.nix
+    ./mounts.nix
     ./switch.nix
+    ./tmpfiles.nix
     ./trunk.nix
     ./users.nix
   ];
@@ -167,59 +170,42 @@ in
       default = "none";
       description = ''
         The selected module which should implement functionality for the {option}`providers.services` contract.
+
+        This is PID 1 as well as the supervisor: the module named here points
+        {option}`boot.init` at its own executable. The two are not separable, because an init
+        is not only a thing which supervises units - it is also what the kernel hands the
+        machine to. An implementation which cannot be that is not selectable here.
       '';
     };
 
-    init = lib.mkOption {
-      type = lib.types.str;
-      default = cfg.backend;
-      defaultText = lib.literalExpression "config.providers.services.backend";
+    initExecutable = lib.mkOption {
+      type = lib.types.path;
+      internal = true;
+
+      # required, but the module system's own "accessed but has no value defined" names this
+      # option rather than the thing actually wrong with the configuration
+      default = throw ''
+        providers.services.backend is "${cfg.backend}", which declares no PID 1 executable.
+
+        Selecting a backend selects the init: the module named there is expected to set
+        providers.services.initExecutable to whichever of its binaries the kernel should run.
+        Either that module does not implement the whole contract yet, or no backend was
+        selected at all and this machine has nothing to boot.
+      '';
+
       description = ''
-        What is PID 1.
+        The binary the kernel runs as PID 1, declared by the implementation selected in
+        {option}`providers.services.backend` and pointed at {option}`boot.init` here.
 
-        Where this is the same as {option}`providers.services.backend`, which is the default,
-        the thing supervising the units is also the thing the kernel started, and there is
-        nothing to arrange.
+        {option}`providers.services.backend` is a bare string key - each implementation unions
+        its own name into the enum, and this module has never heard of any of them. So the
+        key cannot be dereferenced into a package here, and the implementation answers for
+        itself, exactly as it does for {option}`providers.services.supportedFeatures`.
 
-        Where it differs, the supervisor is not PID 1 and has to be started by whatever is.
-        That cannot be said with a unit - the units belong to the supervisor being started, so
-        a unit which started it would have to exist before it did. So it is said in
-        {option}`providers.services.hosting` instead, which the init emits in its own terms.
+        Which binary it is is not derivable from the name in any case: finit and dinit are
+        their own inits, but runit boots through `runit-init` rather than the `runsvdir` which
+        supervises, and s6 needs `s6-linux-init` in front of `s6-svscan`.
       '';
-    };
-
-    hosting = {
-      prepare = lib.mkOption {
-        type = with lib.types; nullOr path;
-        default = null;
-        description = ''
-          A program run once before the supervisor, for whatever state it needs in place
-          first - a writable copy of a service tree, a directory for a control socket.
-
-          Set by an implementation which is not PID 1, and run by whichever is.
-        '';
-      };
-
-      command = lib.mkOption {
-        type = with lib.types; nullOr str;
-        default = null;
-        description = ''
-          The supervisor itself, as a long-running command.
-
-          Whatever is PID 1 runs this without knowing what it is, which is what keeps the two
-          from having to know about each other: an implementation says how to be run, and every
-          init can run a command.
-        '';
-      };
-
-      activate = lib.mkOption {
-        type = with lib.types; nullOr path;
-        default = null;
-        description = ''
-          A program run once the supervisor is up, for an implementation which needs a further
-          step before its units exist - `s6-rc-init` against a compiled database, say.
-        '';
-      };
     };
 
     units = lib.mkOption {
@@ -454,6 +440,11 @@ in
   };
 
   config = {
+    # selecting a backend is the whole of the choice: the thing supervising the units is the
+    # thing the kernel starts, so naming one here is what points stage 2 at it. No fallback -
+    # a machine whose backend declares no PID 1 has no business booting.
+    boot.init = cfg.initExecutable;
+
     warnings =
       lib.optionals (cfg.units != { } && cfg.backend == "none") [
         ''

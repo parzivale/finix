@@ -65,13 +65,19 @@
         # machinery or a regression; this pins the list so it cannot grow unnoticed
         core = {
             "ctrl-alt-del", "loadkmap", "modprobe", "remount-nix-store",
-            "setvesablank", "suid-sgid-wrappers", "sysctl", "tmpfiles-setup",
+            "setvesablank", "sysctl",
             "ifupdown-ng", "keventd", "backdoor", "syslogd",
         }
         contract = {
             "start", "sysinit", "basic", "multi-user", "running", "stopped", "shutdown",
             "device-events", "device-events-started", "coldplug", "marker",
             "providers-services-shutdown",
+            # emitted by the contract now, not by finit: putting volatile files in place and
+            # installing the setuid wrappers are part of bringing a machine up, so every
+            # backend gets these units rather than each wiring them up
+            "tmpfiles-setup",
+            "suid-sgid-wrappers",
+            "mount-filesystems",
         }
         listed = json.loads(machine.succeed("initctl -j status"))
         rows = listed if isinstance(listed, list) else listed.get("services", [])

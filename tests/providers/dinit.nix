@@ -27,27 +27,12 @@
         '';
     in
     {
-      # finit is PID 1 here, so it wants a terminal defined
-      finit.ttys.tty1 = {
-        description = "getty on /dev/tty1";
-        nowait = true;
-      };
-
-      # dinit runs supervised by finit rather than as PID 1. taking the other branch's
-      # `finit.enable` would also take its init-selection logic in system/activation, which is
-      # the same decision providers.services.backend already makes.
       # so the test script can call dinitctl
       environment.systemPackages = [ pkgs.dinit ];
-
-      finit.services.dinit = {
-        description = "dinit service manager";
-        runlevels = "S12345789";
-        path = [ pkgs.dinit ];
-        log = true;
-        command = "${pkgs.dinit}/bin/dinit -p /run/dinitctl -d /etc/dinit.d boot";
-      };
       services.mdevd.enable = true;
 
+      # one choice, and it is the whole of the configuration's opinion about init: dinit
+      # supervises the units and dinit is what the kernel starts.
       providers.services.backend = "dinit";
       providers.services.trunk.enable = true;
 

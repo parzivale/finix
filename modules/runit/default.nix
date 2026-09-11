@@ -188,6 +188,46 @@ in
       path = true;
     };
 
+    # runit's own boot, which is three scripts run in order by `runit` - PID 1 - and nothing
+    # else: stage 1 is one-time setup, stage 2 is the supervisor and is expected never to
+    # return, stage 3 is teardown. The paths are fixed by runit and not configurable.
+    # activation has to happen before runit-init rather than in stage 1, because the stage
+    # scripts are themselves at /etc/runit/[123] - they are among the things activation puts
+    # there, so runit could not find stage 1 to run it from.
+    providers.services.initExecutable = pkgs.writeShellScript "runit-init" ''
+      ${cfg.activationScript}
+      exec ${pkgs.runit}/bin/runit-init
+    '';
+
+    environment.etc = {
+      # stage 1. runsv creates `supervise` inside each service directory, so the generated tree
+      # cannot be scanned out of the store and is copied somewhere writable first. Both these
+      # directories have to exist before the first unit runs, which is why they are made here
+      # rather than declared as tmpfiles rules - tmpfiles-setup is itself a unit, and could
+      # only create them from inside the scan directory it would be creating.
+      "runit/1".source = pkgs.writeShellScript "runit-stage-1" ''
+        export PATH=${lib.makeBinPath [ pkgs.coreutils ]}:$PATH
+        mkdir -p ${latchDir}
+        rm -rf ${scanDir}
+        cp -rL ${serviceDir} ${scanDir}
+        chmod -R u+w ${scanDir}
+      '';
+
+      # stage 2. runsvdir execs `runsv` by name for each service directory, so it needs runit
+      # on PATH - which nothing else arranges, and this does for itself.
+      "runit/2".source = pkgs.writeShellScript "runit-stage-2" ''
+        export PATH=${lib.makeBinPath [ pkgs.runit ]}:$PATH
+        exec ${lib.getExe' pkgs.runit "runsvdir"} ${scanDir}
+      '';
+
+      # stage 3. runit has already stopped the supervisor by the time this runs; the contract's
+      # shutdown-side units are the graph's business, not runit's.
+      "runit/3".source = pkgs.writeShellScript "runit-stage-3" ''
+        export PATH=${lib.makeBinPath [ pkgs.coreutils ]}:$PATH
+        echo "runit: shutting down"
+      '';
+    };
+
     providers.services.switch = {
       list = pkgs.writeShellScript "runit-list" ''
         for dir in ${scanDir}/*; do
