@@ -78,6 +78,7 @@
             "tmpfiles-setup",
             "suid-sgid-wrappers",
             "mount-filesystems",
+            "set-hostname",
         }
         listed = json.loads(machine.succeed("initctl -j status"))
         rows = listed if isinstance(listed, list) else listed.get("services", [])

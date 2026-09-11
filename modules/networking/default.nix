@@ -102,6 +102,20 @@ in
       ];
     };
 
+    # writing /etc/hostname is not the same as having that hostname: something has to call
+    # sethostname(2) with it. finit does that itself as part of being finit, which is why this
+    # was never needed before - on any other init the machine comes up as "noname" with the
+    # right value sitting in a file nobody read.
+    providers.services.units.set-hostname = {
+      description = "apply the configured hostname";
+      type.oneshot.command = "${lib.getExe' pkgs.nettools "hostname"} -F /etc/hostname";
+
+      # early, so that anything logging or announcing itself later says the right name
+      requires = lib.optional config.providers.services.trunk.enable (
+        lib.head config.providers.services.trunk.levels
+      );
+    };
+
     environment.etc = {
       hostname.text = cfg.hostName + "\n";
 
