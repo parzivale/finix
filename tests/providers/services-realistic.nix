@@ -52,10 +52,9 @@
       providers.services.units = {
         # ---- sysinit: state that everything later assumes exists ----
         state-dirs = {
-          type = "oneshot";
           description = "create service state directories";
           requires = [ "start" ];
-          command = script "state-dirs" ''
+          type.oneshot.command = script "state-dirs" ''
             mkdir -p /var/lib/postgresql ${dataDir} ${sock} /var/www /run/svc-test
             chmod 1777 /run/svc-test
             chown -R postgres:postgres /var/lib/postgresql ${sock}
@@ -66,12 +65,11 @@
 
         # ---- basic: database bring-up, as a real multi-step chain ----
         pg-init = {
-          type = "oneshot";
           description = "initialise the postgres cluster";
           requires = [ "sysinit" ];
           user = "postgres";
           environment.HOME = dataDir;
-          command = script "pg-init" ''
+          type.oneshot.command = script "pg-init" ''
             if [ ! -f "${dataDir}/PG_VERSION" ]; then
               ${lib.getExe' pg "initdb"} --allow-group-access -D ${dataDir}
             fi
@@ -87,20 +85,19 @@
           # postgres forks nothing and reports nothing, so `fork` readiness is a lie here -
           # finit calls it ready the moment it execs, long before it accepts connections.
           # that lie is what `pg-ready` below exists to correct.
-          readiness = "fork";
+          type.service.readiness = "fork";
           stopTimeout = 120;
-          command = "${lib.getExe' pg "postgres"} -D ${dataDir} -k ${sock}";
+          type.service.command = "${lib.getExe' pg "postgres"} -D ${dataDir} -k ${sock}";
         };
 
         # the honest readiness gate: a oneshot which does not succeed until the database
         # actually answers. anything needing a working database depends on this, not on
         # `postgres` itself.
         pg-ready = {
-          type = "oneshot";
           description = "wait for postgres to accept connections";
           requires = [ "postgres" ];
           user = "postgres";
-          command = script "pg-ready" ''
+          type.oneshot.command = script "pg-ready" ''
             for _ in $(seq 1 100); do
               if ${lib.getExe' pg "pg_isready"} -q -h ${sock}; then
                 touch /run/svc-test/pg-ready
@@ -114,11 +111,10 @@
         };
 
         db-setup = {
-          type = "oneshot";
           description = "create the application schema";
           requires = [ "pg-ready" ];
           user = "postgres";
-          command = script "db-setup" ''
+          type.oneshot.command = script "db-setup" ''
             ${lib.getExe' pg "psql"} -h ${sock} -U postgres -d postgres \
               -c "create table if not exists finix (id int)" \
               -c "insert into finix values (1)"
@@ -134,7 +130,7 @@
             "multi-user"
             "db-setup"
           ];
-          command = script "web" ''
+          type.service.command = script "web" ''
             touch /run/svc-test/web.started
             exec ${pkgs.busybox}/bin/busybox httpd -f -p 8080 -h /var/www
           '';
@@ -146,11 +142,10 @@
         # intended behaviour rather than a gap - a level is somewhere to attach, and anything
         # which actually needs the database says so directly, as `web` does below.
         mu-probe = {
-          type = "oneshot";
           description = "probe database state at multi-user";
           requires = [ "multi-user" ];
           user = "postgres";
-          command = script "mu-probe" ''
+          type.oneshot.command = script "mu-probe" ''
             if ${lib.getExe' pg "pg_isready"} -q -h ${sock}; then
               touch /run/svc-test/mu-db-ready
             else

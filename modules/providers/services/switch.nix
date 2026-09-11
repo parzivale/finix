@@ -19,11 +19,10 @@ let
     builtins.substring 0 16 (
       builtins.hashString "sha256" (
         builtins.toJSON {
+          # `type` now carries the command and readiness of whichever kind this is, so it
+          # covers on its own what three separate fields used to
           inherit (unit)
             type
-            command
-            readiness
-            pidFile
             requires
             user
             group

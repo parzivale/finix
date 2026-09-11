@@ -43,40 +43,38 @@
       providers.services.units = {
         # attaches to the first trunk level, so `sysinit` cannot be reached until it is done
         early = {
-          type = "oneshot";
-          command = marker "early";
+          type.oneshot.command = marker "early";
           requires = [ "start" ];
         };
 
         alpha = {
-          command = daemon "alpha";
+          type.service.command = daemon "alpha";
           requires = [ "sysinit" ];
         };
 
         # depends on a service rather than a level, so it exercises the companion latch
         beta = {
-          command = daemon "beta";
+          type.service.command = daemon "beta";
           requires = [ "alpha" ];
         };
 
         gamma = {
-          command = daemon "gamma";
+          type.service.command = daemon "gamma";
           requires = [ "basic" ];
         };
 
         # left running for the shutdown test, so its marker file is still there when the
         # shutdown-side units run
         delta = {
-          command = daemon "delta";
+          type.service.command = daemon "delta";
           requires = [ "sysinit" ];
         };
 
         # shutdown side: attaches to a level after the latch, and reports both that it ran
         # at all and whether the boot-side services were gone by the time it did
         late = {
-          type = "oneshot";
           requires = [ "stopped" ];
-          command = pkgs.writeShellScript "late" ''
+          type.oneshot.command = pkgs.writeShellScript "late" ''
             if [ -e /run/svc-test/delta.running ]; then
               echo "SHUTDOWN-STEP late RACE delta still running" > /dev/console
             else
@@ -88,9 +86,8 @@
         # a second step after `late`, to prove the shutdown sequence runs to its end rather
         # than being cut off partway by the power going down
         later = {
-          type = "oneshot";
           requires = [ "stopped" ];
-          command = pkgs.writeShellScript "later" ''
+          type.oneshot.command = pkgs.writeShellScript "later" ''
             echo "SHUTDOWN-STEP later" > /dev/console
           '';
         };

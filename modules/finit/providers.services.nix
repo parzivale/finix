@@ -68,10 +68,14 @@ let
 
   conditionOf = name: "task/${companionOf name}/success";
 
+  # the tag names the kind, and carries whatever that kind needs
+  kindOf = unit: lib.head (lib.attrNames unit.type);
+  variantOf = unit: unit.type.${kindOf unit};
+
   # what a companion waits for depends on how the unit it shadows reports being up
   readyConditionOf =
     name:
-    if cfg.units.${name}.type == "service" then "service/${name}/ready" else "task/${name}/success";
+    if kindOf cfg.units.${name} == "service" then "service/${name}/ready" else "task/${name}/success";
 
   common =
     name: unit:
@@ -95,14 +99,18 @@ let
 
   mkService =
     name: unit:
+    let
+      svc = variantOf unit;
+      ready = lib.head (lib.attrNames svc.readiness);
+    in
     common name unit
     // {
-      inherit (unit) command;
-      notify = notify.${unit.readiness};
+      inherit (svc) command;
+      notify = notify.${ready};
     }
-    // lib.optionalAttrs (unit.readiness == "pidfile") {
+    // lib.optionalAttrs (ready == "pidfile") {
       type = "forking";
-      pid = unit.pidFile;
+      pid = svc.readiness.pidfile.file;
     }
     // lib.optionalAttrs (unit.stopTimeout != null) { kill = unit.stopTimeout; };
 
@@ -110,7 +118,7 @@ let
     name: unit:
     common name unit
     // {
-      command = if unit.type == "anchor" then true' else unit.command;
+      command = if kindOf unit == "anchor" then true' else (variantOf unit).command;
       remain = true;
     };
 
@@ -125,10 +133,16 @@ let
   # so finit is asked to execute exactly one thing, and the ordering of the steps within it
   # becomes the shell's job, which is a guarantee that does hold.
   shutdownScript = pkgs.writeShellScript "providers-services-shutdown" (
-    lib.concatMapStringsSep "\n" (unit: ''
-      echo "shutdown: ${unit.description}" > /dev/kmsg 2>/dev/null || true
-      ${unit.command}
-    '') (lib.filter (unit: unit.command != null) ordered)
+    lib.concatMapStringsSep "\n"
+      (unit: ''
+        echo "shutdown: ${unit.description}" > /dev/kmsg 2>/dev/null || true
+        ${unit.command}
+      '')
+      (
+        lib.filter (unit: unit.command != null) (
+          map (u: u // { command = (variantOf u).command or null; }) ordered
+        )
+      )
   );
 
   # priority is no longer an ordering finit acts on - it only sorts the script's steps here
@@ -145,7 +159,7 @@ let
     remain = true;
   };
 
-  isService = _: unit: unit.type == "service";
+  isService = _: unit: kindOf unit == "service";
 
   enabled = lib.filterAttrs (_: u: u.enable) cfg.units;
 

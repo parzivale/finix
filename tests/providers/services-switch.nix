@@ -36,22 +36,22 @@
 
       providers.services.units = {
         keeper = {
-          command = daemon "keeper" "gen1";
+          type.service.command = daemon "keeper" "gen1";
           requires = [ "sysinit" ];
         };
 
         goner = {
-          command = daemon "goner" "gen1";
+          type.service.command = daemon "goner" "gen1";
           requires = [ "sysinit" ];
         };
 
         changer = {
-          command = daemon "changer" "gen1";
+          type.service.command = daemon "changer" "gen1";
           requires = [ "sysinit" ];
         };
 
         dependant = {
-          command = daemon "dependant" "gen1";
+          type.service.command = daemon "dependant" "gen1";
           requires = [ "changer" ];
         };
       };
@@ -61,11 +61,11 @@
           goner.enable = lib.mkForce false;
 
           changer = {
-            command = lib.mkForce (daemon "changer" "gen2");
+            type.service.command = lib.mkForce (daemon "changer" "gen2");
           };
 
           newcomer = {
-            command = daemon "newcomer" "gen2";
+            type.service.command = daemon "newcomer" "gen2";
             requires = [ "sysinit" ];
           };
         };

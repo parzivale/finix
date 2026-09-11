@@ -45,8 +45,8 @@
     device-events = {
       description = "device event daemon";
       requires = [ "start" ];
-      readiness = "s6";
-      command = "${config.services.mdevd.package}/bin/mdevd -D %n -F /run/current-system/firmware -f ${
+      type.service.readiness = "s6";
+      type.service.command = "${config.services.mdevd.package}/bin/mdevd -D %n -F /run/current-system/firmware -f ${
         config.environment.etc."mdev.conf".source
       }";
       path = [
@@ -57,10 +57,9 @@
     };
 
     coldplug = {
-      type = "oneshot";
       description = "cold plugging system";
       requires = [ "device-events" ];
-      command = "${config.services.mdevd.package}/bin/mdevd-coldplug";
+      type.oneshot.command = "${config.services.mdevd.package}/bin/mdevd-coldplug";
     };
   };
 }

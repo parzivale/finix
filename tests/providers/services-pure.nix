@@ -24,11 +24,10 @@
       providers.services.units = {
         # an ordinary daemon, to prove the graph still works around the infrastructure
         marker = {
-          type = "oneshot";
           description = "record that the graph ran";
           requires = [ "basic" ];
           path = [ config.programs.coreutils.package ];
-          command = pkgs.writeShellScript "marker" ''
+          type.oneshot.command = pkgs.writeShellScript "marker" ''
             mkdir -p /run/svc-test
             touch /run/svc-test/marker.ran
           '';

@@ -160,72 +160,107 @@ in
               };
 
               type = lib.mkOption {
-                type = lib.types.enum [
-                  "service"
-                  "oneshot"
-                  "anchor"
-                ];
-                default = "service";
+                default = {
+                  service = { };
+                };
+                defaultText = lib.literalExpression "{ service = { }; }";
+                example = lib.literalExpression ''{ service.readiness.pidfile.file = "/run/x.pid"; }'';
                 description = ''
-                  The kind of unit.
+                  What kind of unit this is, and whatever that kind needs.
 
                   `service` is a long-running process. `oneshot` is a command which runs to
-                  completion and is ready once it has exited successfully.
+                  completion and is ready once it has exited successfully. `anchor` has no
+                  process at all and is ready once its own requirements are.
 
-                  `anchor` is a unit with no process at all, ready once its own requirements
-                  are. Anchors exist to be named, so a unit can say "after the system is
-                  basically up" without naming the units that means. In practice they are the
-                  trunk, and ordinary modules have no reason to declare one - an interchangeable
+                  Anchors exist to be named, so a unit can say "after the system is basically
+                  up" without naming the units that means. In practice they are the trunk, and
+                  ordinary modules have no reason to declare one - an interchangeable
                   implementation should be selected by a `providers.` contract and define the
                   shared unit name directly, rather than hiding behind an anchor.
+
+                  A kind carrying nothing may be written as a bare string, so `type = "anchor"`
+                  and `type = { anchor = { }; }` mean the same thing.
                 '';
+                type =
+                  let
+                    command = lib.mkOption {
+                      type = program;
+                      description = ''
+                        The command this unit runs.
+                      '';
+                    };
+
+                    readiness = lib.mkOption {
+                      default = {
+                        fork = { };
+                      };
+                      defaultText = lib.literalExpression "{ fork = { }; }";
+                      description = ''
+                        How this unit reports that it has become ready, and so how units
+                        requiring it learn they may start.
+
+                        `notify` waits for an `sd_notify`-style `READY=1` on the notification
+                        socket, and `s6` for an `s6`-style notification on a descriptor.
+                        `pidfile` waits for the daemon to background itself and write the file
+                        it names. `fork` treats the unit as ready the moment it has been forked,
+                        which is a lie for anything doing real startup work, but is the only
+                        option left for a daemon which cannot report readiness at all.
+                      '';
+                      type = lib.types.coercedTo lib.types.str (kind: { ${kind} = { }; }) (
+                        lib.types.attrTag {
+                          fork = lib.mkOption {
+                            type = lib.types.submodule { };
+                            description = "Ready as soon as it has been forked.";
+                          };
+                          notify = lib.mkOption {
+                            type = lib.types.submodule { };
+                            description = "Ready on an sd_notify-style READY=1.";
+                          };
+                          s6 = lib.mkOption {
+                            type = lib.types.submodule { };
+                            description = "Ready on an s6-style notification.";
+                          };
+
+                          pidfile = lib.mkOption {
+                            description = "Ready once it has backgrounded itself and written its pid.";
+                            type = lib.types.submodule {
+                              options.file = lib.mkOption {
+                                type = lib.types.str;
+                                example = "/run/nginx.pid";
+                                description = ''
+                                  The file this unit writes its process ID to.
+                                '';
+                              };
+                            };
+                          };
+                        }
+                      );
+                    };
+                  in
+                  lib.types.coercedTo lib.types.str (kind: { ${kind} = { }; }) (
+                    lib.types.attrTag {
+                      service = lib.mkOption {
+                        description = "A long-running process.";
+                        type = lib.types.submodule { options = { inherit command readiness; }; };
+                      };
+
+                      oneshot = lib.mkOption {
+                        description = "A command which runs to completion.";
+                        type = lib.types.submodule { options = { inherit command; }; };
+                      };
+
+                      anchor = lib.mkOption {
+                        description = "A unit with no process at all.";
+                        type = lib.types.submodule { };
+                      };
+                    }
+                  );
               };
 
               description = lib.mkOption {
                 type = lib.types.str;
                 description = ''
                   A short human-readable description of this unit.
-                '';
-              };
-
-              command = lib.mkOption {
-                type = lib.types.nullOr program;
-                default = null;
-                description = ''
-                  The command this unit runs. Required for `service` and `oneshot` units, and
-                  invalid for `anchor` units, which have no process.
-                '';
-              };
-
-              readiness = lib.mkOption {
-                type = lib.types.enum [
-                  "fork"
-                  "pidfile"
-                  "notify"
-                  "s6"
-                ];
-                default = "fork";
-                description = ''
-                  How this unit reports that it has become ready, and so how units requiring it
-                  learn they may start. Only meaningful for `service` units - a `oneshot` is
-                  ready once it exits successfully, and an `anchor` once its requirements are
-                  met.
-
-                  `notify` waits for an `sd_notify`-style `READY=1` on the notification socket,
-                  and `s6` for an `s6`-style notification on a descriptor.
-                  `pidfile` waits for the daemon to background itself and write
-                  {option}`pidFile`. `fork` treats the unit as ready the moment it has been
-                  forked, which is a lie for anything doing real startup work, but is the only
-                  option left for a daemon that cannot report readiness at all.
-                '';
-              };
-
-              pidFile = lib.mkOption {
-                type = with lib.types; nullOr str;
-                default = null;
-                description = ''
-                  The file this unit writes its process ID to. Required when {option}`readiness`
-                  is `pidfile`.
                 '';
               };
 
@@ -347,18 +382,7 @@ in
         '';
       }
     ]
-    ++ lib.mapAttrsToList (name: unit: {
-      assertion = unit.type == "anchor" -> unit.command == null;
-      message = "providers.services.units.${name} is an anchor, and so must not set a command";
-    }) cfg.units
-    ++ lib.mapAttrsToList (name: unit: {
-      assertion = unit.type != "anchor" -> unit.command != null;
-      message = "providers.services.units.${name} is a ${unit.type}, and so must set a command";
-    }) cfg.units
-    ++ lib.mapAttrsToList (name: unit: {
-      assertion = (unit.type == "service" && unit.readiness == "pidfile") -> unit.pidFile != null;
-      message = "providers.services.units.${name} reports readiness by pidfile, and so must set pidFile";
-    }) cfg.units
+
     ++ lib.mapAttrsToList (name: unit: {
       assertion =
         (unit.startTimeout != null && cfg.backend != "none") -> cfg.supportedFeatures.startTimeout;
