@@ -62,6 +62,17 @@ let
   # completed oneshots therefore park rather than return.
   park = "exec ${sleep} infinity";
 
+  # runit does not drop privileges itself; `chpst` ships with it for exactly this. without it
+  # a unit asking to run as someone would run as root, which is the one failure here that is
+  # worse than refusing outright.
+  chpst = lib.getExe' pkgs.runit "chpst";
+  asUser =
+    unit:
+    if unit.user == null then
+      ""
+    else
+      "${chpst} -u ${unit.user}${lib.optionalString (unit.group != null) ":${unit.group}"} ";
+
   runScript =
     name: unit:
     let
@@ -83,7 +94,7 @@ let
           ''
         else if kind == "oneshot" then
           ''
-            ${v.command}
+            ${asUser unit}${v.command}
             ${touch} ${latch name}
             ${park}
           ''
@@ -93,14 +104,14 @@ let
             # alongside it and latches when the pid file appears
             ( while [ ! -s ${v.readiness.pidfile.file} ]; do ${sleep} 0.1; done
               ${touch} ${latch name} ) &
-            exec ${v.command}
+            exec ${asUser unit}${v.command}
           ''
         else
           ''
             # `fork` readiness: up the moment it is running, which is what runit itself means
             # by a service being up
             ${touch} ${latch name}
-            exec ${v.command}
+            exec ${asUser unit}${v.command}
           ''
       )
     );
@@ -161,25 +172,21 @@ in
       # out of latch files, because runit has no notion of either
       nativeAnchors = false;
       nativeStartOnlyEdges = false;
-    };
 
-    # runit can only tell that a process is running, or that a pid file appeared. it has no
-    # readiness protocol at all, so a unit asking for one cannot be honoured rather than
-    # silently downgraded.
-    assertions = lib.mapAttrsToList (name: unit: {
-      assertion =
-        kindOf unit == "service"
-        -> lib.elem (readinessOf unit) [
-          "fork"
-          "pidfile"
-        ];
-      message = ''
-        providers.services.units.${name} reports readiness by ${readinessOf unit}, which runit
-        cannot observe - it knows only whether a process is running, and whether a pid file
-        has appeared. Use `fork` or `pidfile`, or gate dependants behind a oneshot which polls
-        for whatever readiness actually means for this unit.
-      '';
-    }) (lib.filterAttrs (_: u: kindOf u == "service") enabled);
+      # runit knows only that a process is running, or that a pid file appeared. it has no
+      # readiness protocol, so the two it cannot see are refused by the contract.
+      readiness = [
+        "fork"
+        "pidfile"
+      ];
+
+      # through `chpst`, which ships with runit
+      user = true;
+      group = true;
+
+      # the generated run script sets it before exec
+      path = true;
+    };
 
     providers.services.switch = {
       list = pkgs.writeShellScript "runit-list" ''

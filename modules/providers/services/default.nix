@@ -76,6 +76,7 @@ in
   imports = [
     ./switch.nix
     ./trunk.nix
+    ./users.nix
   ];
 
   options.providers.services = {
@@ -115,6 +116,50 @@ in
           emulated by latching the dependency's readiness behind a separate unit.
         '';
       };
+
+      readiness = lib.mkOption {
+        type = lib.types.listOf (
+          lib.types.enum [
+            "fork"
+            "pidfile"
+            "notify"
+            "s6"
+          ]
+        );
+        description = ''
+          The ways the selected {option}`providers.services` implementation can observe a unit
+          becoming ready.
+
+          A kind absent from this list cannot be honoured, and asking for one is refused rather
+          than quietly downgraded to `fork` - which would report a unit ready the moment it was
+          spawned and start everything behind it too early.
+        '';
+      };
+
+      user = lib.mkOption {
+        type = lib.types.bool;
+        description = ''
+          Whether the selected {option}`providers.services` implementation can run a unit as a
+          given user. An implementation which cannot must say so, since the alternative is
+          running as `root` something which asked not to be.
+        '';
+      };
+
+      group = lib.mkOption {
+        type = lib.types.bool;
+        description = ''
+          Whether the selected {option}`providers.services` implementation can run a unit under
+          a given group.
+        '';
+      };
+
+      path = lib.mkOption {
+        type = lib.types.bool;
+        description = ''
+          Whether the selected {option}`providers.services` implementation can give a unit its
+          own `PATH`. Where it cannot, a unit's command must name everything it runs absolutely.
+        '';
+      };
     };
 
     backend = lib.mkOption {
@@ -123,6 +168,58 @@ in
       description = ''
         The selected module which should implement functionality for the {option}`providers.services` contract.
       '';
+    };
+
+    init = lib.mkOption {
+      type = lib.types.str;
+      default = cfg.backend;
+      defaultText = lib.literalExpression "config.providers.services.backend";
+      description = ''
+        What is PID 1.
+
+        Where this is the same as {option}`providers.services.backend`, which is the default,
+        the thing supervising the units is also the thing the kernel started, and there is
+        nothing to arrange.
+
+        Where it differs, the supervisor is not PID 1 and has to be started by whatever is.
+        That cannot be said with a unit - the units belong to the supervisor being started, so
+        a unit which started it would have to exist before it did. So it is said in
+        {option}`providers.services.hosting` instead, which the init emits in its own terms.
+      '';
+    };
+
+    hosting = {
+      prepare = lib.mkOption {
+        type = with lib.types; nullOr path;
+        default = null;
+        description = ''
+          A program run once before the supervisor, for whatever state it needs in place
+          first - a writable copy of a service tree, a directory for a control socket.
+
+          Set by an implementation which is not PID 1, and run by whichever is.
+        '';
+      };
+
+      command = lib.mkOption {
+        type = with lib.types; nullOr str;
+        default = null;
+        description = ''
+          The supervisor itself, as a long-running command.
+
+          Whatever is PID 1 runs this without knowing what it is, which is what keeps the two
+          from having to know about each other: an implementation says how to be run, and every
+          init can run a command.
+        '';
+      };
+
+      activate = lib.mkOption {
+        type = with lib.types; nullOr path;
+        default = null;
+        description = ''
+          A program run once the supervisor is up, for an implementation which needs a further
+          step before its units exist - `s6-rc-init` against a compiled database, say.
+        '';
+      };
     };
 
     units = lib.mkOption {
@@ -357,13 +454,82 @@ in
   };
 
   config = {
-    warnings = lib.optionals (cfg.units != { } && cfg.backend == "none") [
-      ''
-        no services provider backend has been enabled, yet the following units are defined:
-        ${lib.concatStringsSep ", " (lib.attrNames cfg.units)}
-        select a backend implementation to use these units
-      ''
-    ];
+    warnings =
+      lib.optionals (cfg.units != { } && cfg.backend == "none") [
+        ''
+          no services provider backend has been enabled, yet the following units are defined:
+          ${lib.concatStringsSep ", " (lib.attrNames cfg.units)}
+          select a backend implementation to use these units
+        ''
+      ]
+      # a timeout the implementation cannot bound is a warning rather than a refusal: the unit
+      # behaves exactly as it would had no timeout been asked for, so nothing the configuration
+      # says becomes untrue - only a guard is missing. Every check below changes what the system
+      # actually does, and so is refused instead.
+      ++ lib.optionals (cfg.backend != "none" && !cfg.supportedFeatures.startTimeout) (
+        lib.mapAttrsToList (
+          name: _:
+          "providers.services.units.${name} sets a startTimeout, which the ${cfg.backend} "
+          + "implementation cannot bound - a unit which never becomes ready will stall "
+          + "everything requiring it."
+        ) (lib.filterAttrs (_: u: u.startTimeout != null) cfg.units)
+      )
+      ++ lib.optionals (cfg.backend != "none" && !cfg.supportedFeatures.stopTimeout) (
+        lib.mapAttrsToList (
+          name: _:
+          "providers.services.units.${name} sets a stopTimeout, which the ${cfg.backend} "
+          + "implementation cannot bound - it will be killed on whatever schedule that "
+          + "implementation uses."
+        ) (lib.filterAttrs (_: u: u.stopTimeout != null) cfg.units)
+      )
+      # every capability a unit asks for and the implementation cannot provide is reported here
+      # rather than refused. The configuration still says what it meant, and the warning says
+      # where it was not honoured - which keeps one unit definition usable across implementations
+      # with different capabilities, instead of forcing it to be written per backend.
+      #
+      # `user` is the one to watch: unhonoured, the unit runs as root rather than as whoever was
+      # named, which is more privilege than was asked for rather than less.
+      ++ lib.optionals (cfg.backend != "none") (
+        lib.mapAttrsToList
+          (
+            name: unit:
+            let
+              ready = lib.head (lib.attrNames (unit.type.service or { }).readiness or { fork = { }; });
+            in
+            "providers.services.units.${name} reports readiness by ${ready}, which the "
+            + "${cfg.backend} implementation cannot observe (it observes "
+            + "${lib.concatStringsSep ", " cfg.supportedFeatures.readiness}) - it will be treated "
+            + "as ready when spawned, so anything requiring it may start too early."
+          )
+          (
+            lib.filterAttrs (
+              _: u:
+              u.type ? service
+              && !(lib.elem (lib.head (lib.attrNames u.type.service.readiness)) cfg.supportedFeatures.readiness)
+            ) cfg.units
+          )
+        ++ lib.optionals (!cfg.supportedFeatures.user) (
+          lib.mapAttrsToList (
+            name: unit:
+            "providers.services.units.${name} is to run as ${unit.user}, which the ${cfg.backend} "
+            + "implementation cannot arrange - it will run as root instead."
+          ) (lib.filterAttrs (_: u: u.user != null) cfg.units)
+        )
+        ++ lib.optionals (!cfg.supportedFeatures.group) (
+          lib.mapAttrsToList (
+            name: unit:
+            "providers.services.units.${name} is to run under the group ${unit.group}, which the "
+            + "${cfg.backend} implementation cannot arrange."
+          ) (lib.filterAttrs (_: u: u.group != null) cfg.units)
+        )
+        ++ lib.optionals (!cfg.supportedFeatures.path) (
+          lib.mapAttrsToList (
+            name: _:
+            "providers.services.units.${name} sets a path, which the ${cfg.backend} "
+            + "implementation cannot give it - its command must name what it runs absolutely."
+          ) (lib.filterAttrs (_: u: u.path != [ ]) cfg.units)
+        )
+      );
 
     assertions = [
       {
@@ -383,23 +549,6 @@ in
       }
     ]
 
-    ++ lib.mapAttrsToList (name: unit: {
-      assertion =
-        (unit.startTimeout != null && cfg.backend != "none") -> cfg.supportedFeatures.startTimeout;
-      message = ''
-        providers.services.units.${name} sets a startTimeout, but the ${cfg.backend} backend cannot
-        bound unit startup. Remove it, or accept that a unit which never becomes ready stalls
-        everything requiring it.
-      '';
-    }) cfg.units
-    ++ lib.mapAttrsToList (name: unit: {
-      assertion =
-        (unit.stopTimeout != null && cfg.backend != "none") -> cfg.supportedFeatures.stopTimeout;
-      message = ''
-        providers.services.units.${name} sets a stopTimeout, but the ${cfg.backend} backend cannot
-        bound how long a unit takes to stop.
-      '';
-    }) cfg.units
     ++ lib.mapAttrsToList (
       name: unit:
       let

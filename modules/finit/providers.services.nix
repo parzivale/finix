@@ -175,70 +175,132 @@ in
     };
   };
 
-  config = lib.mkIf (cfg.backend == "finit") {
-    providers.services.supportedFeatures = {
-      # finit can bound how long a unit takes to die - `kill`, the SIGTERM to SIGKILL delay -
-      # but has nothing to bound how long one takes to become ready
-      startTimeout = false;
-      stopTimeout = true;
+  config = lib.mkMerge [
+    (lib.mkIf (cfg.backend == "finit") {
+      providers.services.supportedFeatures = {
+        # finit can bound how long a unit takes to die - `kill`, the SIGTERM to SIGKILL delay -
+        # but has nothing to bound how long one takes to become ready
+        startTimeout = false;
+        stopTimeout = true;
 
-      # both emulated above, with a task running `true`
-      nativeAnchors = false;
-      nativeStartOnlyEdges = false;
-    };
+        # both emulated above, with a task running `true`
+        nativeAnchors = false;
+        nativeStartOnlyEdges = false;
 
-    finit.services = lib.mapAttrs mkService services;
+        # finit observes all four, through `notify`
+        readiness = [
+          "fork"
+          "pidfile"
+          "notify"
+          "s6"
+        ];
 
-    finit.tasks =
-      lib.mapAttrs mkTask (lib.filterAttrs (n: u: !(isService n u)) bootSide)
-      // lib.mapAttrs' (
-        name: unit: lib.nameValuePair (companionOf name) (mkCompanion name unit)
+        user = true;
+        group = true;
+        path = true;
+      };
+
+      # finit has no per-user mode. it runs a unit as a given user, which is what the first rule
+      # for user units uses, but there is no per-user finit to be one user's own supervisor - so
+      # it never claims the user scope.
+      providers.services.user.supported = lib.mkDefault false;
+
+      finit.services = lib.mapAttrs mkService services;
+
+      finit.tasks =
+        lib.mapAttrs mkTask (lib.filterAttrs (n: u: !(isService n u)) bootSide)
+        // lib.mapAttrs' (
+          name: unit: lib.nameValuePair (companionOf name) (mkCompanion name unit)
+        ) bootSide;
+
+      finit.run = lib.mkIf (shutdownSide != { }) {
+        providers-services-shutdown = {
+          description = "shutdown sequence";
+          runlevels = shutdownRunlevels;
+          command = shutdownScript;
+        };
+      };
+
+      # finit notices a changed unit by its stanza file changing, so stamping each unit's
+      # fingerprint into its own file guarantees the file differs whenever the unit's definition
+      # does - even for a change finit's own stanza would not otherwise reflect. this is the same
+      # trick the openssh and tlp modules use to carry reload triggers, and it is also what a
+      # real `list` would read back were finit ever to stop reconciling on its own.
+      environment.etc = lib.mapAttrs' (
+        name: unit:
+        lib.nameValuePair "finit.d/${name}.conf" {
+          text = lib.mkAfter "\n# fingerprint: ${cfg.switch.fingerprints.${name}}\n";
+        }
       ) bootSide;
 
-    finit.run = lib.mkIf (shutdownSide != { }) {
-      providers-services-shutdown = {
-        description = "shutdown sequence";
-        runlevels = shutdownRunlevels;
-        command = shutdownScript;
+      # finit reconciles by itself: `initctl reload` re-reads /etc/finit.d and starts, stops and
+      # restarts stanzas to match what it finds there - tests/finit/remain-after-exit.nix pins
+      # that. so there is nothing for the engine to compute here, and the honest implementation
+      # is to say so: report nothing running, let the engine hand over the whole tree, and reload
+      # once. an init which does not self-reconcile, as dinit does not, gives a real `list` and
+      # the engine's diff does the work instead.
+      providers.services.switch = {
+        list = pkgs.writeShellScript "finit-list" ":";
+
+        activate = pkgs.writeShellScript "finit-reload" ''
+          ${lib.getExe' config.finit.package "initctl"} reload
+        '';
+
+        deactivate = pkgs.writeShellScript "finit-reload" ''
+          ${lib.getExe' config.finit.package "initctl"} reload
+        '';
       };
-    };
 
-    # finit notices a changed unit by its stanza file changing, so stamping each unit's
-    # fingerprint into its own file guarantees the file differs whenever the unit's definition
-    # does - even for a change finit's own stanza would not otherwise reflect. this is the same
-    # trick the openssh and tlp modules use to carry reload triggers, and it is also what a
-    # real `list` would read back were finit ever to stop reconciling on its own.
-    environment.etc = lib.mapAttrs' (
-      name: unit:
-      lib.nameValuePair "finit.d/${name}.conf" {
-        text = lib.mkAfter "\n# fingerprint: ${cfg.switch.fingerprints.${name}}\n";
-      }
-    ) bootSide;
+      assertions = lib.mapAttrsToList (name: _: {
+        assertion = !(cfg.units ? ${companionOf name});
+        message = ''
+          providers.services.units.${companionOf name} collides with the companion task the finit
+          backend emits for providers.services.units.${name}. Rename one of them.
+        '';
+      }) bootSide;
+    })
 
-    # finit reconciles by itself: `initctl reload` re-reads /etc/finit.d and starts, stops and
-    # restarts stanzas to match what it finds there - tests/finit/remain-after-exit.nix pins
-    # that. so there is nothing for the engine to compute here, and the honest implementation
-    # is to say so: report nothing running, let the engine hand over the whole tree, and reload
-    # once. an init which does not self-reconcile, as dinit does not, gives a real `list` and
-    # the engine's diff does the work instead.
-    providers.services.switch = {
-      list = pkgs.writeShellScript "finit-list" ":";
+    # ---- hosting another supervisor --------------------------------------------------
+    #
+    # Reached when finit is PID 1 but something else supervises the units. The other
+    # implementation says how it is to be run, in providers.services.hosting, and this turns
+    # that into finit's own terms - so nothing here knows what an s6-rc or a runsvdir is.
+    #
+    # These are finit stanzas rather than contract units on purpose: the units belong to the
+    # supervisor being started, so a unit which started it would have to exist before it did.
+    (lib.mkIf (cfg.init == "finit" && cfg.init != cfg.backend) {
+      finit.tasks =
+        lib.optionalAttrs (cfg.hosting.prepare != null) {
+          supervisor-prepare = {
+            description = "prepare the ${cfg.backend} supervisor";
+            runlevels = bootRunlevels;
 
-      activate = pkgs.writeShellScript "finit-reload" ''
-        ${lib.getExe' config.finit.package "initctl"} reload
-      '';
+            # must not run again on entering another runlevel: whatever it puts in place is
+            # usually the very thing the running supervisor is holding open
+            remain = true;
+            command = cfg.hosting.prepare;
+          };
+        }
+        // lib.optionalAttrs (cfg.hosting.activate != null) {
+          supervisor-activate = {
+            description = "bring up the ${cfg.backend} units";
+            runlevels = bootRunlevels;
+            conditions = "service/supervisor/ready";
+            remain = true;
+            log = true;
+            command = cfg.hosting.activate;
+          };
+        };
 
-      deactivate = pkgs.writeShellScript "finit-reload" ''
-        ${lib.getExe' config.finit.package "initctl"} reload
-      '';
-    };
-
-    assertions = lib.mapAttrsToList (name: _: {
-      assertion = !(cfg.units ? ${companionOf name});
-      message = ''
-        providers.services.units.${companionOf name} collides with the companion task the finit
-        backend emits for providers.services.units.${name}. Rename one of them.
-      '';
-    }) bootSide;
-  };
+      finit.services = lib.optionalAttrs (cfg.hosting.command != null) {
+        supervisor = {
+          description = "${cfg.backend} supervisor";
+          runlevels = bootRunlevels;
+          conditions = lib.optional (cfg.hosting.prepare != null) "task/supervisor-prepare/success";
+          log = true;
+          command = cfg.hosting.command;
+        };
+      };
+    })
+  ];
 }

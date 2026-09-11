@@ -19,7 +19,6 @@ let
     service = {
       fork = "process";
       pidfile = "bgprocess";
-      notify = "process";
     };
   };
 
@@ -140,6 +139,64 @@ let
     // lib.optionalAttrs (commandOf unit != null) { stop-command = commandOf unit; }
     // lib.optionalAttrs (unit.user != null) { run-as = unit.user; }
     // lib.optionalAttrs (unit.stopTimeout != null) { stop-timeout = unit.stopTimeout; };
+
+  # ---- the user role ----------------------------------------------------------------
+  #
+  # Reached when providers.services.user.backend names dinit and the system supervisor is
+  # something else. The system supervisor then runs one dinit per user, and that dinit owns
+  # the user's tree; the two cannot observe each other's state, which is why the contract
+  # refuses an edge leaving a user's tree in this case.
+  #
+  # Nothing here is specific to what the system supervisor happens to be: the per-user trees
+  # are written out, and one ordinary unit per user is added to the system graph to run them,
+  # so finit - or anything else - runs a command it does not have to understand.
+  settingsFormat = import ./format.nix { inherit pkgs lib; };
+
+  userDir = user: "dinit-user/${user}";
+  socketDir = user: "/run/user-services/${user}";
+
+  # each user's tree, plus a root for their instance to start. the root only waits for its
+  # members, so one failing unit does not fail that user's whole session - the same soft pull
+  # the system role uses.
+  userFiles =
+    user: u:
+    lib.mapAttrs' (
+      name: unit:
+      lib.nameValuePair "${userDir user}/${name}" {
+        # the same bookkeeping keys the system tree strips: they are ours, not dinit's, and
+        # it exits rather than ignoring one it does not recognise
+        source = settingsFormat.generate name (
+          builtins.removeAttrs (mkBootSide name unit) [
+            "enable"
+            "environment"
+            "path"
+            "boot"
+            "default"
+          ]
+        );
+      }
+    ) u.units
+    // {
+      "${userDir user}/boot".source = settingsFormat.generate "boot" {
+        type = "internal";
+        waits-for = lib.attrNames u.units;
+      };
+    };
+
+  # the unit the system supervisor runs. it is an ordinary unit of the system graph, so it may
+  # depend on system units - and everything in that user's tree sits transitively behind
+  # whatever it depends on. that is the only cross-scope dependency this rule offers.
+  supervisorUnit = user: {
+    description = "dinit service manager for ${user}";
+    user = user;
+    # the socket directory must exist and be hers before her instance can open a socket in it
+    requires = [
+      "multi-user"
+      "user-services-dir--${user}"
+    ];
+    type.service.command = "${config.dinit.package}/bin/dinit --user -d /etc/${userDir user} -p ${socketDir user}/dinitctl boot";
+  };
+
 in
 {
   options.providers.services = {
@@ -148,69 +205,112 @@ in
     };
   };
 
-  config = lib.mkIf (cfg.backend == "dinit") {
-    providers.services.supportedFeatures = {
-      startTimeout = true;
-      stopTimeout = true;
+  config = lib.mkMerge [
+    (lib.mkIf (cfg.backend == "dinit") {
+      providers.services.supportedFeatures = {
+        startTimeout = true;
+        stopTimeout = true;
 
-      # both native: `internal` services and `depends-ms` respectively
-      nativeAnchors = true;
-      nativeStartOnlyEdges = true;
-    };
+        # both native: `internal` services and `depends-ms` respectively
+        nativeAnchors = true;
+        nativeStartOnlyEdges = true;
 
-    dinit.services =
-      lib.mapAttrs mkBootSide (lib.filterAttrs (n: u: !(onShutdownSide n u)) enabled)
-      // lib.listToAttrs (map (unit: lib.nameValuePair unit.name (mkShutdownSide unit)) shutdownOrdered);
+        # dinit does have a readiness protocol, through `readiness-notification`, but this
+        # backend does not use it yet - so `notify` and `s6` are refused rather than mapped
+        # onto a plain `process`, which would call a unit ready the moment it was spawned and
+        # start everything behind it too early.
+        readiness = [
+          "fork"
+          "pidfile"
+        ];
 
-    # dinit's service files are a strict key/value format with no room for opaque metadata, so
-    # each unit's fingerprint is written beside them instead. `list` reads them back.
-    environment.etc = lib.mapAttrs' (
-      name: fp: lib.nameValuePair "dinit-fingerprints/${name}" { text = fp; }
-    ) cfg.switch.fingerprints;
+        user = true;
 
-    # unlike finit, dinit does not reconcile from its own configuration - which is why this
-    # branch carries a bespoke python reconciler at all. so it gives the engine a real `list`,
-    # and the engine's diff does the work the python script was written to do.
-    providers.services.switch = {
-      # `dinitctl list` reports every *loaded* service, started or not, so its output alone
-      # would keep reporting a unit that has been stopped - and the engine would then see
-      # nothing to reconcile. state is checked explicitly per unit rather than by parsing the
-      # status glyphs in the list output, which are easy to misread and undocumented as an
-      # interface.
-      list = pkgs.writeShellScript "dinit-list" ''
-        ${lib.getExe' config.dinit.package "dinitctl"} list 2>/dev/null |
-          ${lib.getExe' pkgs.gnused "sed"} -n 's/^\[[^]]*\][[:space:]]*\([^[:space:]]*\).*/\1/p' |
+        # `run-as` names a user and not a group, and dinit has no per-service PATH
+        group = false;
+        path = false;
+      };
+
+      dinit.services =
+        lib.mapAttrs mkBootSide (lib.filterAttrs (n: u: !(onShutdownSide n u)) enabled)
+        // lib.listToAttrs (map (unit: lib.nameValuePair unit.name (mkShutdownSide unit)) shutdownOrdered);
+
+      # dinit's service files are a strict key/value format with no room for opaque metadata, so
+      # each unit's fingerprint is written beside them instead. `list` reads them back.
+      environment.etc = lib.mapAttrs' (
+        name: fp: lib.nameValuePair "dinit-fingerprints/${name}" { text = fp; }
+      ) cfg.switch.fingerprints;
+
+      # unlike finit, dinit does not reconcile from its own configuration - which is why this
+      # branch carries a bespoke python reconciler at all. so it gives the engine a real `list`,
+      # and the engine's diff does the work the python script was written to do.
+      providers.services.switch = {
+        # `dinitctl list` reports every *loaded* service, started or not, so its output alone
+        # would keep reporting a unit that has been stopped - and the engine would then see
+        # nothing to reconcile. state is checked explicitly per unit rather than by parsing the
+        # status glyphs in the list output, which are easy to misread and undocumented as an
+        # interface.
+        list = pkgs.writeShellScript "dinit-list" ''
+          ${lib.getExe' config.dinit.package "dinitctl"} list 2>/dev/null |
+            ${lib.getExe' pkgs.gnused "sed"} -n 's/^\[[^]]*\][[:space:]]*\([^[:space:]]*\).*/\1/p' |
+            while read -r unit; do
+              case "$unit" in boot|default) continue ;; esac
+
+              fp="/etc/dinit-fingerprints/$unit"
+              [ -e "$fp" ] || continue
+
+              ${lib.getExe' config.dinit.package "dinitctl"} status "$unit" 2>/dev/null |
+                ${lib.getExe' pkgs.gnugrep "grep"} -q 'State: STARTED' || continue
+
+              printf '%s\t%s\n' "$unit" "$(cat "$fp")"
+            done
+        '';
+
+        activate = pkgs.writeShellScript "dinit-activate" ''
           while read -r unit; do
-            case "$unit" in boot|default) continue ;; esac
-
-            fp="/etc/dinit-fingerprints/$unit"
-            [ -e "$fp" ] || continue
-
-            ${lib.getExe' config.dinit.package "dinitctl"} status "$unit" 2>/dev/null |
-              ${lib.getExe' pkgs.gnugrep "grep"} -q 'State: STARTED' || continue
-
-            printf '%s\t%s\n' "$unit" "$(cat "$fp")"
+            # pick up a changed definition before starting; harmless when it is unchanged
+            ${lib.getExe' config.dinit.package "dinitctl"} reload "$unit" >/dev/null 2>&1 || true
+            ${lib.getExe' config.dinit.package "dinitctl"} start "$unit" || echo "start $unit failed" >&2
           done
-      '';
+        '';
 
-      activate = pkgs.writeShellScript "dinit-activate" ''
-        while read -r unit; do
-          # pick up a changed definition before starting; harmless when it is unchanged
-          ${lib.getExe' config.dinit.package "dinitctl"} reload "$unit" >/dev/null 2>&1 || true
-          ${lib.getExe' config.dinit.package "dinitctl"} start "$unit" || echo "start $unit failed" >&2
-        done
-      '';
+        deactivate = pkgs.writeShellScript "dinit-deactivate" ''
+          while read -r unit; do
+            # a unit reachable from the root cannot simply be stopped, so detach it first
+            ${lib.getExe' config.dinit.package "dinitctl"} rm-dep need boot "$unit" >/dev/null 2>&1 || true
+            ${lib.getExe' config.dinit.package "dinitctl"} rm-dep waits-for default "$unit" >/dev/null 2>&1 || true
+            ${lib.getExe' config.dinit.package "dinitctl"} stop "$unit" || echo "stop $unit failed" >&2
+            ${lib.getExe' config.dinit.package "dinitctl"} unload "$unit" >/dev/null 2>&1 || true
+            rm -f "/etc/dinit.d/boot.d/$unit" "/etc/dinit.d/default.d/$unit"
+          done
+        '';
+      };
+    })
 
-      deactivate = pkgs.writeShellScript "dinit-deactivate" ''
-        while read -r unit; do
-          # a unit reachable from the root cannot simply be stopped, so detach it first
-          ${lib.getExe' config.dinit.package "dinitctl"} rm-dep need boot "$unit" >/dev/null 2>&1 || true
-          ${lib.getExe' config.dinit.package "dinitctl"} rm-dep waits-for default "$unit" >/dev/null 2>&1 || true
-          ${lib.getExe' config.dinit.package "dinitctl"} stop "$unit" || echo "stop $unit failed" >&2
-          ${lib.getExe' config.dinit.package "dinitctl"} unload "$unit" >/dev/null 2>&1 || true
-          rm -f "/etc/dinit.d/boot.d/$unit" "/etc/dinit.d/default.d/$unit"
-        done
-      '';
-    };
-  };
+    # dinit as the per-user supervisor, with something else running the system
+    (lib.mkIf (cfg.user.backend == "dinit" && cfg.user.backend != cfg.backend) {
+      # dinit has a per-user mode, so it can serve this role
+      providers.services.user.supported = true;
+
+      environment.etc = lib.concatMapAttrs userFiles cfg.users;
+
+      # the socket directory has to exist and belong to the user before their instance can
+      # open a control socket in it
+      providers.services.units =
+        lib.mapAttrs' (
+          user: _:
+          lib.nameValuePair "user-services-dir--${user}" {
+            description = "control socket directory for ${user}";
+            requires = [ "sysinit" ];
+            type.oneshot.command = pkgs.writeShellScript "user-services-dir-${user}" ''
+              ${lib.getExe' pkgs.coreutils "mkdir"} -p ${socketDir user}
+              ${lib.getExe' pkgs.coreutils "chown"} ${user} ${socketDir user}
+            '';
+          }
+        ) cfg.users
+        // lib.mapAttrs' (
+          user: _: lib.nameValuePair "user-services--${user}" (supervisorUnit user)
+        ) cfg.users;
+    })
+  ];
 }
