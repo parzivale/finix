@@ -78,6 +78,10 @@ in
 // programModules
 // serviceModules
 // {
+  # alternative providers.services implementations, imported explicitly - a system selects one
+  # with providers.services.backend
+  runit = ./runit;
+
   # virtualisation
 
   android = ./virtualisation/android.nix;
