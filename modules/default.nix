@@ -80,6 +80,7 @@ in
 // {
   # alternative providers.services implementations, imported explicitly - a system selects one
   # with providers.services.backend
+  dinit = ./dinit;
   runit = ./runit;
 
   # virtualisation
