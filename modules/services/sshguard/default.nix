@@ -11,7 +11,10 @@ let
   format = pkgs.formats.keyValue { };
 in
 {
-  imports = [ modules.nftables ];
+  imports = [
+    ./providers.services.nix
+    modules.nftables
+  ];
 
   options.services.sshguard = {
     enable = lib.mkOption {
@@ -94,28 +97,5 @@ in
       )
     );
 
-    providers.services.units.sshguard = {
-      description = "ssh brute-force guard";
-
-      # nftables is a contract unit now, so what was a condition naming finit's own task is an
-      # ordinary edge. syslogd is in the head tier and needs no naming.
-      requires = [
-        "basic"
-        "network-online"
-      ]
-      ++ lib.optional (cfg.settings.BACKEND == "nft-sets") "nftables";
-
-      # sshguard runs its backend scripts, and those run nft by name
-      path = [
-        config.programs.coreutils.package
-      ]
-      ++ lib.optional (cfg.settings.BACKEND == "nft-sets") config.services.nftables.package;
-
-      type.service.command = lib.getExe cfg.package;
-
-      environment = lib.optionalAttrs cfg.debug {
-        SSHGUARD_DEBUG = "1";
-      };
-    };
   };
 }

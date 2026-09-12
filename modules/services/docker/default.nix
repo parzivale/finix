@@ -13,6 +13,8 @@ let
   configFile = format.generate "daemon.json" cfg.settings;
 in
 {
+  imports = [ ./providers.services.nix ];
+
   options.services.docker = {
     enable = lib.mkOption {
       type = lib.types.bool;
@@ -235,36 +237,6 @@ in
 
     users.groups = lib.optionalAttrs (cfg.group == "docker") {
       docker = { };
-    };
-
-    providers.services.units.docker = {
-      description = "docker daemon";
-
-      # `hook/net/up` was a finit hook condition, which nothing else has; `network-online` is
-      # the portable unit meaning the same. syslogd is in the head tier and needs no naming.
-      requires = [
-        "basic"
-        "network-online"
-      ];
-
-      # dockerd runs modprobe and the configured extra packages by name
-      path = [ pkgs.kmod ] ++ cfg.extraPackages;
-
-      type.service = {
-        command = "${cfg.package}/bin/dockerd " + lib.escapeShellArgs cfg.extraArgs;
-
-        # `reload` was `kill -s HUP $MAINPID` - finit's own substitution for the service's pid,
-        # which nothing else has. dockerd reloads on SIGHUP, so the same thing said without
-        # asking the supervisor for the pid.
-        reload = "${pkgs.procps}/bin/pkill -HUP -x dockerd";
-
-        # dockerd speaks sd_notify; where the implementation cannot observe it, the daemon is
-        # taken as ready once spawned
-        readiness = [
-          "notify"
-          "fork"
-        ];
-      };
     };
 
     providers.scheduler.tasks = lib.optionalAttrs cfg.prune.enable {

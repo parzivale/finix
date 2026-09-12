@@ -21,6 +21,7 @@ let
 in
 {
   imports = [
+    ./providers.services.nix
     ./providers.scheduler.nix
   ];
 
@@ -180,6 +181,18 @@ in
         A list of `cron` jobs to be appended to the system-wide `crontab`.
       '';
     };
+
+    # the generated file, exposed so that providers.services.nix can name it. The unit has to,
+    # because a changed crontab must be a changed unit for a switch to restart the daemon -
+    # and it cannot read it back out of `environment.etc`, which is where implementations put
+    # the unit itself.
+    crontabFile = lib.mkOption {
+      type = lib.types.path;
+      internal = true;
+      readOnly = true;
+      default = crontab;
+      description = "The generated {file}`/etc/crontab`.";
+    };
   };
 
   config = lib.mkIf cfg.enable {
@@ -198,6 +211,16 @@ in
     environment.systemPackages = [
       cfg.package
     ];
+
+    security.wrappers.crontab = {
+      setuid = true;
+      owner = "root";
+      group = "root";
+      source = "${cfg.package}/bin/crontab";
+    };
+
+    # this module supplies an implementation for `providers.scheduler`
+    providers.scheduler.backend = lib.mkDefault "cron";
 
     providers.services.tmpfiles.rules = [
       {
@@ -222,35 +245,5 @@ in
         path = "/etc/cron.d";
       }
     ];
-
-    security.wrappers.crontab = {
-      setuid = true;
-      owner = "root";
-      group = "root";
-      source = "${cfg.package}/bin/crontab";
-    };
-
-    providers.services.units.cron = {
-      description = "cron daemon";
-      requires = [ "basic" ];
-
-      type.service = {
-        # `-n` is foreground, so ready-on-fork is the only honest answer - see atd for why
-        # `notify = "pid"` does not carry over.
-        #
-        # cron reads /etc/crontab, but the unit names the file that was generated from, so a
-        # changed crontab is a changed unit and the daemon is restarted with it. The "standard
-        # nixos trick" this replaces was appended to finit.d/cron.conf - a trick only finit
-        # ever fell for, which left every other init running yesterday's schedule.
-        command = pkgs.writeShellScript "cron" ''
-          # restart trigger: ${crontab}
-          exec ${lib.getExe cfg.package} -n ${lib.escapeShellArgs cfg.extraArgs}
-        '';
-        readiness = "fork";
-      };
-    };
-
-    # this module supplies an implementation for `providers.scheduler`
-    providers.scheduler.backend = lib.mkDefault "cron";
   };
 }

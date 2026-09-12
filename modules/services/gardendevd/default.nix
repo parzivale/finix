@@ -24,6 +24,8 @@ let
 
 in
 {
+  imports = [ ./providers.services.nix ];
+
   options.services.gardendevd = {
     enable = lib.mkOption {
       type = lib.types.bool;
@@ -149,31 +151,6 @@ in
           done
         '';
 
-    providers.services.units.gardendevd = {
-      description = "device event daemon (gardendevd)";
-
-      # the head tier, beside the other device managers, so `sysinit` waits for device events
-      requires = [ (lib.head config.providers.services.trunk.levels) ];
-
-      # the rules gardendevd runs invoke helpers by name. Every implementation gives a unit a
-      # PATH now, dinit's is scripted in by its backend, so this says what it wants and no more.
-      inherit (cfg) path;
-
-      type.service = {
-        command = "${cfg.package}/bin/gardendevd " + lib.escapeShellArgs cfg.extraArgs;
-
-        # what the daemon can do, best first. The contract takes the best of these the
-        # implementation can observe; `fork` last is what makes that always resolvable.
-        #
-        # `gardendevd --help`: `-D <fd>  Readiness notification file descriptor`. Which
-        # descriptor is the implementation's business, and it appends it.
-        readiness = [
-          { s6.flag = "-D"; }
-          "fork"
-        ];
-      };
-    };
-
     # the two `run` stanzas become one oneshot. They were ordered against each other by finit
     # priority, which no other implementation has - and the ordering is the whole point, since
     # settling before the trigger settles nothing. In one script it is the shell's guarantee,
@@ -181,20 +158,6 @@ in
     #
     # Named `gardendevd-settle`, beside udev's `udev-settle` and mdevd's `coldplug`: attached
     # to the head tier, so `sysinit` waits for the device nodes to be there.
-    providers.services.units.gardendevd-settle = {
-      description = "trigger device events and wait for gardendevd to settle";
-
-      requires = [
-        (lib.head config.providers.services.trunk.levels)
-        "gardendevd"
-      ];
-
-      type.oneshot.command = pkgs.writeShellScript "gardendevd-settle" ''
-        ${cfg.package}/bin/gardendevctl trigger -c add -t all
-        ${cfg.package}/bin/gardendevctl settle -t 30
-      '';
-    };
-
     # TODO: share between device managers
     system.activation.scripts.gardendevd = lib.mkIf config.boot.kernel.enable {
       text = ''

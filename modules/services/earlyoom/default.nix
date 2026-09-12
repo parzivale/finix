@@ -8,6 +8,8 @@ let
   cfg = config.services.earlyoom;
 in
 {
+  imports = [ ./providers.services.nix ];
+
   options.services.earlyoom = {
     enable = lib.mkOption {
       type = lib.types.bool;
@@ -51,16 +53,5 @@ in
   config = lib.mkIf cfg.enable {
     services.earlyoom.extraArgs = [ "-p" ] ++ lib.optionals cfg.debug [ "--debug" ];
 
-    providers.services.units.earlyoom = {
-      description = "early oom daemon";
-      requires = [ "basic" ];
-
-      # with `-n` earlyoom sends desktop notifications through dbus-send
-      path = lib.optional (lib.elem "-n" cfg.extraArgs) pkgs.dbus;
-
-      # `cgroup.settings` is gone with the stanza - finit's own resource limits, which the
-      # contract does not model and no other implementation would honour.
-      type.service.command = "${cfg.package}/bin/earlyoom --syslog " + lib.escapeShellArgs cfg.extraArgs;
-    };
   };
 }

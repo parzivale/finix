@@ -8,6 +8,8 @@ let
   cfg = config.services.fprintd;
 in
 {
+  imports = [ ./providers.services.nix ];
+
   options.services.fprintd = {
     enable = lib.mkOption {
       type = lib.types.bool;
@@ -68,19 +70,5 @@ in
       });
     '';
 
-    providers.services.units.fprintd = {
-      description = "fingerprint authentication daemon";
-
-      requires = [
-        "basic"
-        "polkit"
-      ];
-
-      type.service.command = "${cfg.package}/libexec/fprintd --no-timeout";
-
-      environment = {
-        G_MESSAGES_DEBUG = lib.mkIf cfg.debug "all";
-      };
-    };
   };
 }

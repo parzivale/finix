@@ -9,6 +9,8 @@ let
   format = pkgs.formats.keyValue { };
 in
 {
+  imports = [ ./providers.services.nix ];
+
   options.services.uptime-kuma = {
     enable = lib.mkOption {
       type = lib.types.bool;
@@ -98,35 +100,6 @@ in
       NODE_ENV = "production";
     };
 
-    providers.services.units.uptime-kuma = {
-      inherit (cfg) user group;
-
-      description = "uptime kuma";
-
-      requires = [
-        "basic"
-        "network-online"
-      ];
-
-      # `kill = 10` becomes the contract's stopTimeout, which every implementation bounds
-      # except runit - and says so.
-      stopTimeout = lib.mkDefault 10;
-
-      # uptime-kuma runs ping by name for its monitors
-      path = [ pkgs.unixtools.ping ];
-
-      type.service.command = lib.getExe cfg.package;
-
-      environment = cfg.settings;
-    };
-
-    providers.services.tmpfiles.rules = lib.optional (cfg.settings.DATA_DIR == "/var/lib/uptime-kuma") {
-      type = "directory";
-      path = cfg.settings.DATA_DIR;
-      mode = "0750";
-      inherit (cfg) user group;
-    };
-
     users.users = lib.mkIf (cfg.user == "uptime-kuma") {
       uptime-kuma = {
         group = cfg.group;
@@ -135,6 +108,13 @@ in
 
     users.groups = lib.mkIf (cfg.group == "uptime-kuma") {
       uptime-kuma = { };
+    };
+
+    providers.services.tmpfiles.rules = lib.optional (cfg.settings.DATA_DIR == "/var/lib/uptime-kuma") {
+      type = "directory";
+      path = cfg.settings.DATA_DIR;
+      mode = "0750";
+      inherit (cfg) user group;
     };
   };
 }

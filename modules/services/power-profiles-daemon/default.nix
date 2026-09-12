@@ -8,6 +8,8 @@ let
   cfg = config.services.power-profiles-daemon;
 in
 {
+  imports = [ ./providers.services.nix ];
+
   options.services.power-profiles-daemon = {
     enable = lib.mkOption {
       type = lib.types.bool;
@@ -61,16 +63,6 @@ in
         return polkit.Result.NOT_HANDLED;
       });
     '';
-
-    providers.services.units.power-profiles-daemon = {
-      description = "power profiles daemon";
-
-      # nothing about the bus: it and its socket gate are in the head tier, so anything here
-      # is after them
-      requires = [ "basic" ];
-
-      type.service.command = "${cfg.package}/libexec/power-profiles-daemon";
-    };
 
     providers.services.tmpfiles.rules = [
       {

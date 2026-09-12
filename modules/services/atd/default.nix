@@ -8,6 +8,8 @@ let
   cfg = config.services.atd;
 in
 {
+  imports = [ ./providers.services.nix ];
+
   options.services.atd = {
     enable = lib.mkOption {
       type = lib.types.bool;
@@ -54,20 +56,6 @@ in
       text = lib.concatStringsSep "\n" cfg.deny;
     };
 
-    providers.services.units.atd = {
-      description = "deferred execution scheduler";
-      requires = [ "basic" ];
-
-      type.service = {
-        # `-f` is foreground, so ready-on-fork is the only honest answer. `notify = "pid"`
-        # asked finit to manage a pid file on the daemon's behalf, which says nothing about
-        # readiness and would be read by dinit as a daemon which forks and exits - which a
-        # foreground process never does.
-        command = "${pkgs.at}/bin/atd -f " + lib.escapeShellArgs cfg.extraArgs;
-        readiness = "fork";
-      };
-    };
-
     users.users = {
       atd = {
         description = "atd user";
@@ -86,6 +74,25 @@ in
       setuid = true;
       setgid = true;
     });
+
+    security.pam.services.atd = {
+      text = ''
+        # Account management.
+        account required pam_unix.so # unix (order 10900)
+
+        # Authentication management.
+        auth sufficient pam_unix.so likeauth try_first_pass # unix (order 11500)
+        auth required pam_deny.so # deny (order 12300)
+
+        # Password management.
+        password sufficient pam_unix.so nullok yescrypt # unix (order 10200)
+
+        # Session management.
+        session required pam_env.so conffile=/etc/security/pam_env.conf readenv=0 # env (order 10100)
+        session required pam_unix.so # unix (order 10200)
+        session required pam_limits.so
+      '';
+    };
 
     providers.services.tmpfiles.rules = [
       {
@@ -110,24 +117,5 @@ in
         group = "atd";
       }
     ];
-
-    security.pam.services.atd = {
-      text = ''
-        # Account management.
-        account required pam_unix.so # unix (order 10900)
-
-        # Authentication management.
-        auth sufficient pam_unix.so likeauth try_first_pass # unix (order 11500)
-        auth required pam_deny.so # deny (order 12300)
-
-        # Password management.
-        password sufficient pam_unix.so nullok yescrypt # unix (order 10200)
-
-        # Session management.
-        session required pam_env.so conffile=/etc/security/pam_env.conf readenv=0 # env (order 10100)
-        session required pam_unix.so # unix (order 10200)
-        session required pam_limits.so
-      '';
-    };
   };
 }

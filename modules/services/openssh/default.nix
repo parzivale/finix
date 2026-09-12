@@ -82,6 +82,8 @@ let
       false;
 in
 {
+  imports = [ ./providers.services.nix ];
+
   options.services.openssh = {
     enable = lib.mkOption {
       type = lib.types.bool;
@@ -308,48 +310,6 @@ in
         lib.mkIf cfg.sftp.enable "${cfg.sftp.executable} ${lib.concatStringsSep " " cfg.sftp.flags}";
     };
 
-    providers.services.units.ssh-keygen = {
-      description = "generate ssh host keys";
-
-      # before anything can serve with them, and before the tier which completes `basic`
-      requires = [ "sysinit" ];
-
-      type.oneshot.command = pkgs.writeShellScript "ssh-keygen.sh" ''
-        if ! [ -s "/var/lib/sshd/ssh_host_ed25519_key" ]; then
-          ${cfg.package}/bin/ssh-keygen -t ed25519 -f "/var/lib/sshd/ssh_host_ed25519_key" -N ""
-        fi
-      '';
-    };
-
-    providers.services.units.sshd = {
-      description = "openssh daemon";
-
-      # `basic`, where the rest of the network daemons are. `net/lo/up` and
-      # `service/syslogd/ready` are both behind it - loopback and the logger come up in the
-      # tier which completes `basic` - so only the keys still need naming, and they are named
-      # because a daemon serving before they exist offers a host identity it then changes.
-      requires = [
-        "basic"
-        "ssh-keygen"
-      ];
-
-      type.service = {
-        command = "${cfg.package}/bin/sshd -D -f /etc/ssh/sshd_config";
-
-        # `notify:pid` was finit waiting for the pid file. The portable form of that is
-        # `waitFor.path` and not `waitFor.pidfile`: the pidfile kind also says the daemon
-        # forks into the background to write it, and `-D` is sshd being told not to. An
-        # implementation waiting for that fork would fail the unit on its start timeout.
-        readiness.waitFor.path.path = "/run/sshd.pid";
-
-        # sshd rereads its configuration on SIGHUP, and re-execs itself doing it, so a switch
-        # which only changed sshd_config need not drop the listening socket. By the pid file
-        # rather than by name: a session is an `sshd` process too, and a HUP to one of those
-        # ends somebody's login.
-        reload = "${lib.getExe' pkgs.coreutils "kill"} -HUP \"$(${lib.getExe' pkgs.coreutils "cat"} /run/sshd.pid)\"";
-      };
-    };
-
     environment.etc."ssh/sshd_config".source = configFile;
 
     security.pam.services.sshd = lib.mkIf cfg.settings.UsePAM {
@@ -380,14 +340,6 @@ in
       cfg.package
     ];
 
-    providers.services.tmpfiles.rules = [
-      {
-        type = "directory";
-        path = "/var/lib/sshd";
-        mode = "0755";
-      }
-    ];
-
     users.users.sshd = {
       group = "sshd";
       description = "SSH privilege separation user";
@@ -396,5 +348,13 @@ in
     users.groups = {
       sshd = { };
     };
+
+    providers.services.tmpfiles.rules = [
+      {
+        type = "directory";
+        path = "/var/lib/sshd";
+        mode = "0755";
+      }
+    ];
   };
 }

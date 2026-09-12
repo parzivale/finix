@@ -15,6 +15,8 @@ let
   };
 in
 {
+  imports = [ ./providers.services.nix ];
+
   options.programs.pmount = {
     enable = lib.mkOption {
       type = lib.types.bool;

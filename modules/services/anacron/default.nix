@@ -10,6 +10,7 @@ let
 in
 {
   imports = [
+    ./providers.services.nix
     ./providers.scheduler.nix
 
     # anacron has a hard dependency on cron
@@ -129,6 +130,9 @@ in
       '';
     };
 
+    # this module supplies an implementation for `providers.scheduler`
+    providers.scheduler.backend = "anacron";
+
     providers.services.tmpfiles.rules = [
       {
         type = "directory";
@@ -136,8 +140,5 @@ in
         mode = "0755";
       }
     ];
-
-    # this module supplies an implementation for `providers.scheduler`
-    providers.scheduler.backend = "anacron";
   };
 }

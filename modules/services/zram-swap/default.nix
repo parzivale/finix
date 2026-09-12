@@ -8,6 +8,8 @@ let
   cfg = config.services.zram-swap;
 in
 {
+  imports = [ ./providers.services.nix ];
+
   options.services.zram-swap = {
     enable = lib.mkOption {
       type = lib.types.bool;
@@ -50,29 +52,5 @@ in
   config = lib.mkIf cfg.enable {
     boot.kernelModules = [ "zram" ];
 
-    providers.services.units.zram-swap = {
-      description = "zram swap (${toString cfg.memoryPercent}% RAM, ${cfg.algorithm})";
-
-      # swap belongs early, before the tier which completes `basic`. `task/modprobe/success`
-      # named a finit task of finit's own; the module is always present, so what this actually
-      # waits on is the kernel module being loadable, which `zramctl` does for itself.
-      requires = [ "sysinit" ];
-
-      path = [
-        pkgs.coreutils
-        pkgs.util-linux
-        pkgs.gnugrep
-        pkgs.gawk
-      ];
-
-      type.oneshot.command = pkgs.writeShellScript "zram-swap" ''
-        set -eu
-        grep -q zram /proc/swaps && exit 0
-        mem_kb=$(awk '/MemTotal/ {print $2}' /proc/meminfo)
-        dev=$(zramctl --find --size "$((mem_kb * ${toString cfg.memoryPercent} / 100))K" --algorithm ${cfg.algorithm})
-        mkswap "$dev" >/dev/null
-        swapon -p ${toString cfg.priority} "$dev"
-      '';
-    };
   };
 }

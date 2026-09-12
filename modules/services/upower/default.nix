@@ -10,6 +10,8 @@ let
   format = pkgs.formats.ini { };
 in
 {
+  imports = [ ./providers.services.nix ];
+
   options.services.upower = {
     enable = lib.mkOption {
       type = lib.types.bool;
@@ -46,16 +48,6 @@ in
     services.dbus.enable = true;
     services.dbus.packages = [ cfg.package ];
     services.udev.packages = [ cfg.package ];
-
-    providers.services.units.upower = {
-      description = "daemon for power management";
-
-      # nothing about the bus: it and its socket gate are in the head tier, so anything here
-      # is after them
-      requires = [ "basic" ];
-
-      type.service.command = "${cfg.package}/libexec/upowerd";
-    };
 
     environment.etc."UPower/UPower.conf".source = format.generate "UPower.conf" cfg.settings;
   };

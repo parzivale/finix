@@ -28,6 +28,8 @@ let
   };
 in
 {
+  imports = [ ./providers.services.nix ];
+
   options.services.acpid = {
     enable = lib.mkOption {
       type = lib.types.bool;
@@ -58,12 +60,5 @@ in
       in
       lib.mkMerge [ etcTree ];
 
-    providers.services.units.acpid = {
-      description = "acpi daemon";
-      requires = [ "basic" ];
-
-      # `--foreground`, so the process running is the whole of what any backend can observe
-      type.service.command = "${pkgs.acpid}/bin/acpid --foreground --netlink";
-    };
   };
 }

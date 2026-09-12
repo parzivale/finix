@@ -10,6 +10,8 @@ let
   configFile = "${cfg.stateDir}/nzbget.conf";
 in
 {
+  imports = [ ./providers.services.nix ];
+
   options.services.nzbget = {
     enable = lib.mkOption {
       type = lib.types.bool;
@@ -114,44 +116,19 @@ in
       UpdateCheck = "none";
     };
 
-    providers.services.units.nzbget =
-      let
-        configOpts = lib.concatStringsSep " " (
-          lib.mapAttrsToList (name: value: "-o ${name}=${lib.escapeShellArg (toStr value)}") cfg.settings
-        );
-        toStr =
-          v:
-          if v == true then
-            "yes"
-          else if v == false then
-            "no"
-          else if lib.isInt v then
-            toString v
-          else
-            v;
-
-        script = pkgs.writeShellScript "nzbget.sh" ''
-          exec ${lib.getExe cfg.package} --configfile ${configFile} ${configOpts} "$@"
-        '';
-      in
-      {
-        inherit (cfg) user group;
-
-        description = "nzbget daemon";
-        requires = [ "basic" ];
-
-        # `pre` was finit's own start action, and `stop`/`reload` its own verbs - none of which
-        # the contract models. The seeding `pre` did is folded into the command, which is the
-        # one place every implementation runs: it has to happen before the server starts and
-        # nothing else waits on it, so it needs no unit of its own.
-        type.service.command = pkgs.writeShellScript "nzbget-server" ''
-          if [ ! -f ${configFile} ]; then
-            ${lib.getExe' config.programs.coreutils "install"} -o ${cfg.user} -g ${cfg.group} -m 0700 ${cfg.package}/share/nzbget/nzbget.conf ${configFile}
-          fi
-
-          exec ${script} --server
-        '';
+    users.users = lib.mkIf (cfg.user == "nzbget") {
+      nzbget = {
+        home = cfg.stateDir;
+        group = cfg.group;
+        uid = config.ids.uids.nzbget;
       };
+    };
+
+    users.groups = lib.mkIf (cfg.group == "nzbget") {
+      nzbget = {
+        gid = config.ids.gids.nzbget;
+      };
+    };
 
     providers.services.tmpfiles.rules = [
       {
@@ -166,20 +143,6 @@ in
       path = cfg.stateDir;
       mode = "0750";
       inherit (cfg) user group;
-    };
-
-    users.users = lib.mkIf (cfg.user == "nzbget") {
-      nzbget = {
-        home = cfg.stateDir;
-        group = cfg.group;
-        uid = config.ids.uids.nzbget;
-      };
-    };
-
-    users.groups = lib.mkIf (cfg.group == "nzbget") {
-      nzbget = {
-        gid = config.ids.gids.nzbget;
-      };
     };
   };
 }

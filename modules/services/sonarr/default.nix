@@ -23,6 +23,8 @@ let
     );
 in
 {
+  imports = [ ./providers.services.nix ];
+
   options.services.sonarr = {
     enable = lib.mkOption {
       type = lib.types.bool;
@@ -144,32 +146,6 @@ in
   };
 
   config = lib.mkIf cfg.enable {
-    providers.services.tmpfiles.rules = lib.optionals (cfg.dataDir == "/var/lib/sonarr") [
-      {
-        type = "directory";
-        path = cfg.dataDir;
-        mode = "0700";
-        inherit (cfg) user group;
-      }
-    ];
-
-    providers.services.units.sonarr = {
-      inherit (cfg) user group;
-
-      description = "sonarr";
-
-      # syslogd is in the head tier; `net/route/default` was a finit netlink condition, and
-      # `network-online` is the portable unit which means the same
-      requires = [
-        "basic"
-        "network-online"
-      ];
-
-      type.service.command = "${lib.getExe cfg.package} -nobrowser -data=${cfg.dataDir}";
-
-      environment = toEnvVars cfg.settings;
-    };
-
     users.users = lib.optionalAttrs (cfg.user == "sonarr") {
       sonarr = {
         group = cfg.group;
@@ -181,5 +157,14 @@ in
     users.groups = lib.optionalAttrs (cfg.group == "sonarr") {
       sonarr.gid = config.ids.gids.sonarr;
     };
+
+    providers.services.tmpfiles.rules = lib.optionals (cfg.dataDir == "/var/lib/sonarr") [
+      {
+        type = "directory";
+        path = cfg.dataDir;
+        mode = "0700";
+        inherit (cfg) user group;
+      }
+    ];
   };
 }

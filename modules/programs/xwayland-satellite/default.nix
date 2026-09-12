@@ -8,6 +8,8 @@ let
   cfg = config.programs.xwayland-satellite;
 in
 {
+  imports = [ ./providers.services.nix ];
+
   options.programs.xwayland-satellite = {
     enable = lib.mkOption {
       type = lib.types.bool;
@@ -36,6 +38,7 @@ in
     #
     # These rules run once, from `tmpfiles-setup`, which is what the `!` in `D!` and `r!` asked
     # for - there is no periodic cleaner here to tell "boot only".
+
     providers.services.tmpfiles.rules =
       lib.concatMap
         (path: [

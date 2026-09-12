@@ -8,6 +8,8 @@ let
   cfg = config.services.ddccontrol;
 in
 {
+  imports = [ ./providers.services.nix ];
+
   options.services.ddccontrol = {
     enable = lib.mkOption {
       type = lib.types.bool;
@@ -34,14 +36,5 @@ in
       pkgs.ddccontrol
     ];
 
-    providers.services.units.ddccontrol = {
-      description = "control monitor parameters, like brightness, contrast, and other...";
-
-      # nothing about the bus: it and its socket gate are in the head tier, so anything here
-      # is after them
-      requires = [ "basic" ];
-
-      type.service.command = "${pkgs.ddccontrol}/libexec/ddccontrol/ddccontrol_service";
-    };
   };
 }

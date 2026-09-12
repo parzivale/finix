@@ -8,6 +8,8 @@ let
   cfg = config.services.zerotierone;
 in
 {
+  imports = [ ./providers.services.nix ];
+
   options.services.zerotierone = {
     enable = lib.mkOption {
       type = lib.types.bool;
@@ -50,20 +52,8 @@ in
       cfg.package
     ];
 
-    providers.services.units.zerotierone = {
-      description = "zerotier one";
-
-      # syslogd is in the head tier and needs no naming; `net/route/default` was a finit
-      # netlink condition, and `network-online` is the portable unit which means the same
-      requires = [
-        "basic"
-        "network-online"
-      ];
-
-      type.service.command = "${cfg.package}/bin/zerotier-one ${cfg.stateDir}";
-    };
-
     # TODO: ${cfg.stateDir}/networks.d/<JOIN> -> managed by linker
+
     providers.services.tmpfiles.rules = lib.optionals (cfg.stateDir == "/var/lib/zerotier-one") [
       {
         type = "directory";

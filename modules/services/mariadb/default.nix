@@ -13,6 +13,8 @@ let
   mysqldOptions = "--user=${cfg.user} --datadir=${cfg.dataDir} --basedir=${cfg.package}";
 in
 {
+  imports = [ ./providers.services.nix ];
+
   options.services.mariadb = {
     enable = lib.mkOption {
       type = lib.types.bool;
@@ -114,57 +116,6 @@ in
       mariadb = { };
     };
 
-    providers.services.units.mariadb-init = {
-      inherit (cfg) user group;
-
-      description = "mariadb database init";
-
-      # before the tier which completes `basic`, so the database it creates is there for the
-      # daemon which serves it
-      requires = [ "sysinit" ];
-
-      type.oneshot.command = pkgs.writeShellApplication {
-        name = "mariadb-init.sh";
-        runtimeInputs = [
-          config.programs.coreutils.package
-          pkgs.nettools
-          pkgs.gnused
-        ];
-        text = ''
-          if ! test -e '${cfg.dataDir}/mysql'; then
-            ${cfg.package}/bin/mysql_install_db --defaults-file=/etc/my.cnf ${mysqldOptions}
-            touch '${cfg.dataDir}/mysql_init'
-          fi
-        '';
-      };
-    };
-
-    providers.services.units.mariadb = {
-      inherit (cfg) user group;
-
-      description = "mariadb database service";
-
-      # the logger is behind the tier which completes `basic`; the init is not, so it is named
-      requires = [
-        "basic"
-        "mariadb-init"
-      ];
-
-      # a database flushing its buffer pool on the way out is the case this option exists for
-      stopTimeout = 120;
-
-      type.service = {
-        command = "${cfg.package}/bin/mysqld --defaults-file=/etc/my.cnf ${mysqldOptions}";
-
-        # mysqld speaks sd_notify, which only finit can observe here; elsewhere it is taken as
-        # ready once spawned
-        readiness = [
-          "notify"
-          "fork"
-        ];
-      };
-    };
-
     environment.systemPackages = [
       cfg.package
     ];
@@ -173,6 +124,7 @@ in
 
     # the `d` rule creates it, the `permissions` rule fixes up what is already inside it -
     # which is what the `Z` lines were for, and is recursive here rather than the FIXME it was
+
     providers.services.tmpfiles.rules =
       lib.concatMap
         (

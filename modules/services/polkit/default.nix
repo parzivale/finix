@@ -8,6 +8,8 @@ let
   cfg = config.services.polkit;
 in
 {
+  imports = [ ./providers.services.nix ];
+
   options.services.polkit = {
     enable = lib.mkOption {
       type = lib.types.bool;
@@ -95,19 +97,6 @@ in
       cfg.package.bin
       cfg.package.out
     ];
-
-    providers.services.units.polkit = {
-      description = "policykit authorization manager";
-
-      # nothing about sessiond: the session and seat managers are in the tier before this one,
-      # so anything here is after them. Naming one would also have made it an optional edge,
-      # which is the shape that hides a requirement rather than stating it.
-      requires = [ "basic" ];
-
-      type.service.command =
-        "${cfg.package.out}/lib/polkit-1/polkitd --no-debug "
-        + lib.optionalString cfg.debug "--log-level=debug";
-    };
 
     # The polkit daemon reads action/rule files
     environment.pathsToLink = [ "/share/polkit-1" ];

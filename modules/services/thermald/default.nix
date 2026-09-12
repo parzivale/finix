@@ -8,6 +8,8 @@ let
   cfg = config.services.thermald;
 in
 {
+  imports = [ ./providers.services.nix ];
+
   options.services.thermald = {
     enable = lib.mkOption {
       type = lib.types.bool;
@@ -54,13 +56,5 @@ in
 
     services.dbus.packages = [ cfg.package ];
 
-    providers.services.units.thermald = {
-      description = "thermal daemon service";
-
-      # nothing about syslogd: it is in the head tier, so anything here is after it
-      requires = [ "basic" ];
-
-      type.service.command = "${lib.getExe cfg.package} " + lib.escapeShellArgs cfg.extraArgs;
-    };
   };
 }

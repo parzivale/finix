@@ -8,6 +8,8 @@ let
   cfg = config.services.tzupdate;
 in
 {
+  imports = [ ./providers.services.nix ];
+
   options.services.tzupdate = {
     enable = lib.mkOption {
       type = lib.types.bool;
@@ -38,21 +40,5 @@ in
   config = lib.mkIf cfg.enable {
     time.timeZone = null;
 
-    providers.services.units.tzupdate = {
-      description = "timezone update service";
-
-      # it asks the network where it is, so it waits for one. syslogd is in the head tier and
-      # needs no naming.
-      requires = [
-        "basic"
-        "network-online"
-      ];
-
-      type.oneshot.command = "${cfg.package}/bin/tzupdate -z ${pkgs.tzdata}/share/zoneinfo -d /dev/null";
-
-      environment = {
-        RUST_LOG = lib.mkIf cfg.debug "debug";
-      };
-    };
   };
 }

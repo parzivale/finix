@@ -20,6 +20,8 @@ let
     };
 in
 {
+  imports = [ ./providers.services.nix ];
+
   options.services.dhcpcd = {
     enable = lib.mkOption {
       type = lib.types.bool;
@@ -210,26 +212,14 @@ in
       debug = cfg.debug;
     };
 
-    providers.services.units.dhcpcd = {
-      description = "dhcp client";
-
-      type.service = {
-        # PATH set in the command rather than asked for as a unit property: dinit has no
-        # per-unit PATH, and dhcpcd needs resolvconf on it to write /etc/resolv.conf.
-        command = pkgs.writeShellScript "dhcpcd" ''
-          ${lib.optionalString config.programs.resolvconf.enable "export PATH=${config.programs.resolvconf.package}/bin:$PATH"}
-          exec ${lib.getExe cfg.package} ${lib.escapeShellArgs cfg.extraArgs}
-        '';
-
-        readiness = "fork";
+    users.users = {
+      dhcpcd = {
+        group = "dhcpcd";
       };
+    };
 
-      # `basic` puts it in the multi-user tier. Not the basic tier: nothing before multi-user
-      # needs the network, and gating `basic` on a DHCP lease would stall the whole trunk on a
-      # machine with no link. syslogd is in the head tier, so this is already after it.
-      # `basic` puts it in the multi-user tier, which is after the head tier the device
-      # manager settles in - so neither that nor syslogd is named here any more.
-      requires = [ "basic" ];
+    users.groups = {
+      dhcpcd = { };
     };
 
     providers.services.tmpfiles.rules = [
@@ -245,15 +235,5 @@ in
         group = "dhcpcd";
       }
     ];
-
-    users.users = {
-      dhcpcd = {
-        group = "dhcpcd";
-      };
-    };
-
-    users.groups = {
-      dhcpcd = { };
-    };
   };
 }

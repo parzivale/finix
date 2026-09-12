@@ -54,6 +54,7 @@ let
 in
 {
   imports = [
+    ./providers.services.nix
     (lib.mkRenamedOptionModule [ "programs" "openresolv" ] [ "programs" "resolvconf" ])
   ];
 
@@ -100,14 +101,5 @@ in
 
     environment.systemPackages = [ cfg.package ];
 
-    providers.services.units.resolvconf = {
-      description = "update resolv.conf from the interface records";
-
-      # early, and before anything which resolves a name: the records are written by whatever
-      # configured the interface, and this is what turns them into /etc/resolv.conf
-      requires = [ "sysinit" ];
-
-      type.oneshot.command = "${lib.getExe cfg.package} -u";
-    };
   };
 }

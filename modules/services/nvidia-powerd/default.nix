@@ -8,6 +8,8 @@ let
   cfg = config.services.nvidia-powerd;
 in
 {
+  imports = [ ./providers.services.nix ];
+
   options.services.nvidia-powerd = {
     enable = lib.mkOption {
       type = lib.types.bool;
@@ -41,15 +43,5 @@ in
 
     services.dbus.packages = [ cfg.package.bin ];
 
-    providers.services.units.nvidia-powerd = {
-      description = "NVIDIA Dynamic Boost";
-      requires = [ "basic" ];
-
-      path = [ pkgs.util-linux ]; # nvidia-powerd wants lscpu
-
-      # `restart = -1` is gone with the stanza - restarting a service which dies is what a
-      # supervisor does, on all four.
-      type.service.command = "${cfg.package.bin}/bin/nvidia-powerd";
-    };
   };
 }

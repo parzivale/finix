@@ -29,6 +29,7 @@ let
 in
 {
   imports = with modules; [
+    ./providers.services.nix
     accounts-daemon
     greetd
   ];
@@ -136,8 +137,6 @@ in
     # regreet reads the user list over the bus, so the greeter it configures has to wait for
     # the daemon which answers that - an edge added to greetd's own unit rather than declared
     # there, because it is this greeter which needs it and not greetd
-    providers.services.units.greetd.requires = [ "accounts-daemon" ];
-
     programs.regreet.settings = {
       commands =
         lib.optionalAttrs config.services.seatd.enable {

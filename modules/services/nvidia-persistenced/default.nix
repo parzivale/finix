@@ -10,6 +10,8 @@ let
   runtimeDir = "/var/run/nvidia-persistenced";
 in
 {
+  imports = [ ./providers.services.nix ];
+
   options.services.nvidia-persistenced = {
     enable = lib.mkOption {
       type = lib.types.bool;
@@ -86,32 +88,15 @@ in
 
     environment.systemPackages = [ cfg.package ];
 
-    providers.services.units.nvidia-persistenced = {
-      inherit (cfg) user group;
-
-      description = "NVIDIA persistence daemon";
-      requires = [ "basic" ];
-
-      type.service = {
-        command = "${lib.getExe cfg.package} " + lib.escapeShellArgs cfg.extraArgs;
-
-        # deliberately not a list ending in `fork`. This daemon forks and the process which was
-        # spawned exits - which finit and dinit watch natively, and which runsv and
-        # s6-supervise read as a crash and restart forever. Offering `fork` as a fallback would
-        # trade a build-time refusal for a restart loop on the machine, so the contract is left
-        # to refuse it where it cannot work.
-        readiness.waitFor.pidfile.file = "${runtimeDir}/nvidia-persistenced.pid";
+    # `post` was finit's stop action; the shutdown side is where that lives now
+    users.users = lib.optionalAttrs (cfg.user == "nvidia-persistenced") {
+      nvidia-persistenced = {
+        inherit (cfg) group;
       };
     };
 
-    # `post` was finit's stop action; the shutdown side is where that lives now
-    providers.services.units.nvidia-persistenced-cleanup = {
-      description = "clear the NVIDIA persistence daemon's runtime directory";
-      requires = [ "stopped" ];
-
-      type.oneshot.command = pkgs.writeShellScript "nvidia-persistenced-cleanup" ''
-        ${lib.getExe pkgs.findutils} ${runtimeDir} -mindepth 1 -delete
-      '';
+    users.groups = lib.optionalAttrs (cfg.group == "nvidia-persistenced") {
+      nvidia-persistenced = { };
     };
 
     providers.services.tmpfiles.rules = [
@@ -122,15 +107,5 @@ in
         inherit (cfg) user group;
       }
     ];
-
-    users.users = lib.optionalAttrs (cfg.user == "nvidia-persistenced") {
-      nvidia-persistenced = {
-        inherit (cfg) group;
-      };
-    };
-
-    users.groups = lib.optionalAttrs (cfg.group == "nvidia-persistenced") {
-      nvidia-persistenced = { };
-    };
   };
 }

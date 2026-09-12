@@ -12,6 +12,7 @@ let
 in
 {
   imports = [
+    ./providers.services.nix
     ./providers.scheduler.nix
   ];
 
@@ -170,14 +171,6 @@ in
       cfg.package
     ];
 
-    providers.services.tmpfiles.rules = lib.optional (cfg.settings.fcrontabs == "/var/spool/fcron") {
-      type = "directory";
-      path = cfg.settings.fcrontabs;
-      mode = "0770";
-      user = "fcron";
-      group = "fcron";
-    };
-
     security.wrappers = {
       fcrontab = {
         source = "${cfg.package}/bin/fcrontab";
@@ -201,40 +194,6 @@ in
       };
     };
 
-    providers.services.units.fcrontab = {
-      description = "reload fcrontab";
-
-      # the setuid wrappers are a contract unit, so this is an ordinary edge now rather than a
-      # condition naming finit's own task. syslogd is in the head tier and needs no naming.
-      requires = [
-        "basic"
-        "suid-sgid-wrappers"
-      ];
-
-      # fcrontab runs fcron's own helpers by name
-      path = [ cfg.package ];
-
-      # still a script, for the redirection: a command is exec'd, not run through a shell
-      # https://github.com/NixOS/nixpkgs/issues/25072
-      type.oneshot.command = pkgs.writeShellScript "fcrontab-reload" ''
-        exec ${cfg.package}/bin/fcrontab -u systab - < ${systab}
-      '';
-    };
-
-    providers.services.units.fcron = {
-      description = "fcron daemon";
-
-      # the systab has to be loaded before the daemon reads it. `task/fcrontab/success` named
-      # finit's own task; it is a contract unit now, so this is an ordinary edge.
-      requires = [
-        "basic"
-        "fcrontab"
-      ];
-
-      # `--foreground`, so the process running is all any backend can observe
-      type.service.command = "${cfg.package}/bin/fcron --foreground " + lib.escapeShellArgs cfg.extraArgs;
-    };
-
     users.users = {
       fcron = {
         uid = config.ids.uids.fcron;
@@ -249,5 +208,13 @@ in
 
     # this module supplies an implementation for `providers.scheduler`
     providers.scheduler.backend = "fcron";
+
+    providers.services.tmpfiles.rules = lib.optional (cfg.settings.fcrontabs == "/var/spool/fcron") {
+      type = "directory";
+      path = cfg.settings.fcrontabs;
+      mode = "0770";
+      user = "fcron";
+      group = "fcron";
+    };
   };
 }

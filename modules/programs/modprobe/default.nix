@@ -9,6 +9,7 @@ let
 in
 {
   imports = [
+    ./providers.services.nix
     (lib.mkRenamedOptionModule
       [ "boot" "blacklistedKernelModules" ]
       [ "programs" "modprobe" "blacklist" ]
@@ -81,25 +82,6 @@ in
 
     # a contract unit rather than a finit task: which modules a machine loads at boot is not
     # finit's business, and written as a stanza they were loaded on finit and on nothing else
-    providers.services.units.modprobe = {
-      description = "load the configured kernel modules";
-
-      # the head of the trunk: a driver anything later needs should be in the kernel by the
-      # time that thing starts
-      requires = [ (lib.head config.providers.services.trunk.levels) ];
-
-      # one at a time, and a module which will not load is reported rather than fatal. As a
-      # finit task nothing waited on this, so a missing module was a line in the log; as a
-      # unit at the head of the trunk every level above waits for it, and `modprobe -a`
-      # returning non-zero for one absent module would hold the entire boot.
-      type.oneshot.command = pkgs.writeShellScript "load-kernel-modules" ''
-        for module in ${lib.escapeShellArgs config.boot.kernelModules}; do
-          ${lib.getExe' pkgs.kmod "modprobe"} -b "$module" ||
-            echo "modprobe: $module could not be loaded" >&2
-        done
-      '';
-    };
-
     # TODO: can this be converted to a `finit.run` stanza to run in runlevel S? is that early enough?
     system.activation.scripts.modprobe = ''
       # Allow the kernel to find our wrapped modprobe (which searches

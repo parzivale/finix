@@ -10,6 +10,8 @@ let
   format = pkgs.formats.ini { };
 in
 {
+  imports = [ ./providers.services.nix ];
+
   options.services.bluetooth = {
     enable = lib.mkOption {
       type = lib.types.bool;
@@ -64,16 +66,5 @@ in
     services.dbus.packages = [ cfg.package ];
     services.udev.packages = [ cfg.package ];
 
-    providers.services.units.bluetooth = {
-      description = "bluetooth service";
-
-      # nothing about the bus: it and its socket gate are in the head tier, so anything here
-      # is after them
-      requires = [ "basic" ];
-
-      type.service.command =
-        "${cfg.package}/libexec/bluetooth/bluetoothd -f /etc/bluetooth/main.conf"
-        + lib.optionalString cfg.debug " -d";
-    };
   };
 }

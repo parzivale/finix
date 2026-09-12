@@ -10,6 +10,8 @@ let
   notifySupport = lib.versionAtLeast cfg.package.version "4.9";
 in
 {
+  imports = [ ./providers.services.nix ];
+
   options.services.chrony = {
     enable = lib.mkOption {
       type = lib.types.bool;
@@ -91,19 +93,17 @@ in
 
     environment.systemPackages = [ cfg.package ];
 
-    providers.services.units.chronyd = {
-      description = "chrony ntp daemon";
-      requires = [ "basic" ];
-
-      type.service = {
-        command = "${cfg.package}/bin/chronyd " + lib.escapeShellArgs cfg.extraArgs;
-
-        # chrony speaks the s6 protocol from 4.9, and is told which descriptor by the
-        # implementation. Older builds cannot, so the list is just `fork` there - which is
-        # what saying it as a list buys: the version test stays here and the question of
-        # which backends can observe it does not have to be asked at all.
-        readiness = lib.optional notifySupport { s6.flag = "-N"; } ++ [ "fork" ];
+    users.users = {
+      chrony = {
+        uid = config.ids.uids.chrony;
+        group = "chrony";
+        description = "chrony daemon user";
+        home = "/var/lib/chrony";
       };
+    };
+
+    users.groups = {
+      chrony.gid = config.ids.gids.chrony;
     };
 
     providers.services.tmpfiles.rules = [
@@ -129,18 +129,5 @@ in
         group = "chrony";
       }
     ];
-
-    users.users = {
-      chrony = {
-        uid = config.ids.uids.chrony;
-        group = "chrony";
-        description = "chrony daemon user";
-        home = "/var/lib/chrony";
-      };
-    };
-
-    users.groups = {
-      chrony.gid = config.ids.gids.chrony;
-    };
   };
 }

@@ -8,6 +8,8 @@ let
   cfg = config.services.jellyfin;
 in
 {
+  imports = [ ./providers.services.nix ];
+
   options.services.jellyfin = {
     enable = lib.mkOption {
       type = lib.types.bool;
@@ -70,13 +72,8 @@ in
   };
 
   config = lib.mkIf cfg.enable {
-    providers.services.units.jellyfin = {
-      inherit (cfg) user group;
-
-      description = "jellyfin media server";
-      requires = [ "basic" ];
-
-      type.service.command = "${lib.getExe cfg.package} --datadir ${cfg.dataDir} --configdir ${cfg.dataDir}/config --cachedir /var/cache/jellyfin --logdir /var/log/jellyfin";
+    users.groups = lib.optionalAttrs (cfg.group == "jellyfin") {
+      jellyfin = { };
     };
 
     providers.services.tmpfiles.rules =
@@ -95,16 +92,5 @@ in
         (owned "0700" cfg.dataDir)
         (owned "0700" "${cfg.dataDir}/config")
       ];
-
-    users.users = lib.optionalAttrs (cfg.user == "jellyfin") {
-      jellyfin = {
-        group = "jellyfin";
-        isSystemUser = true;
-      };
-    };
-
-    users.groups = lib.optionalAttrs (cfg.group == "jellyfin") {
-      jellyfin = { };
-    };
   };
 }

@@ -18,6 +18,8 @@ let
   };
 in
 {
+  imports = [ ./providers.services.nix ];
+
   options.services.postgresql = {
     enable = lib.mkOption {
       type = lib.types.bool;
@@ -138,46 +140,15 @@ in
     # `pre` was finit running this as part of starting the service; the contract has no
     # such step, and a database which has to be created before it can be served is a unit of
     # its own anyway - it runs as the postgres user, exactly as the `pre` did.
-    providers.services.units.postgresql-initdb = lib.mkIf cfg.initdb.enable {
-      description = "create the postgresql cluster";
-
-      inherit (cfg) user group;
-      requires = [ "sysinit" ];
-
-      type.oneshot.command = pkgs.writeShellScript "postgresql-initdb.sh" ''
-        if [ ! -f "${cfg.dataDir}/PG_VERSION" ]; then
-          ${lib.getExe' cfg.package "initdb"} ${lib.escapeShellArgs cfg.initdb.extraArgs} ${cfg.dataDir}
-        fi
-      '';
+    users.users.${cfg.user} = {
+      name = cfg.user;
+      group = cfg.group;
+      home = cfg.dataDir;
+      uid = config.ids.uids.postgres;
     };
 
-    providers.services.units.postgresql = {
-      description = "postgresql database service";
-
-      inherit (cfg) user group;
-
-      # the logger and loopback are both behind the tier which completes `basic`
-      requires = [
-        "basic"
-      ]
-      ++ lib.optional cfg.initdb.enable "postgresql-initdb";
-
-      # `kill = 120` was finit's; a database is the case the option was written for. A
-      # checkpoint on shutdown can take minutes on a large cluster, and being killed part way
-      # through one is how a cluster comes back needing recovery.
-      stopTimeout = 120;
-
-      type.service = {
-        command = "${lib.getExe' cfg.package "postgres"} " + lib.escapeShellArgs cfg.extraArgs;
-
-        # postgres rereads postgresql.conf, pg_hba.conf and pg_ident.conf on SIGHUP, which is
-        # what the commented-out "reload trigger" in the generated finit stanza was reaching
-        # for. Signalled directly rather than through `pg_ctl reload`, which refuses to run as
-        # root, and a reload command is run by whatever is doing the switch.
-        reload = "${lib.getExe' pkgs.coreutils "kill"} -HUP \"$(${lib.getExe' pkgs.coreutils "head"} -n1 ${cfg.dataDir}/postmaster.pid)\"";
-      };
-
-      path = [ cfg.package ];
+    users.groups.${cfg.group} = {
+      gid = config.ids.gids.postgres;
     };
 
     providers.services.tmpfiles.rules = [
@@ -200,16 +171,5 @@ in
           "/var/lib/postgresql/${cfg.package.psqlSchema}"
         ]
     );
-
-    users.users.${cfg.user} = {
-      name = cfg.user;
-      group = cfg.group;
-      home = cfg.dataDir;
-      uid = config.ids.uids.postgres;
-    };
-
-    users.groups.${cfg.group} = {
-      gid = config.ids.gids.postgres;
-    };
   };
 }

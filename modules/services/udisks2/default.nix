@@ -10,6 +10,8 @@ let
   format = pkgs.formats.ini { };
 in
 {
+  imports = [ ./providers.services.nix ];
+
   options.services.udisks2 = {
     enable = lib.mkOption {
       type = lib.types.bool;
@@ -65,17 +67,5 @@ in
     services.dbus.packages = [ cfg.package ];
     services.udev.packages = [ cfg.package ];
 
-    providers.services.units.udisks2 = {
-      description = "disk manager";
-
-      # nothing about the bus: it and its socket gate are in the head tier, so anything here
-      # is after them
-      requires = [ "basic" ];
-
-      # `log` is gone with the stanza: finit's own logging, which the contract does not model -
-      # every implementation gives a unit's output to its supervisor.
-      type.service.command =
-        "${cfg.package}/libexec/udisks2/udisksd" + lib.optionalString cfg.debug " --debug";
-    };
   };
 }

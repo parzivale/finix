@@ -17,6 +17,8 @@ let
       null;
 in
 {
+  imports = [ ./providers.services.nix ];
+
   options.services.illum = {
     enable = lib.mkOption {
       type = lib.types.bool;
@@ -41,13 +43,5 @@ in
   };
 
   config = lib.mkIf cfg.enable {
-    providers.services.units.illum = {
-      description = "backlight adjustment service";
-
-      # nothing about syslogd: it is in the head tier, so anything here is after it
-      requires = [ "basic" ];
-
-      type.service.command = lib.getExe cfg.package;
-    };
   };
 }
