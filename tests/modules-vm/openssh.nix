@@ -45,11 +45,6 @@ in
       imports = [ (import ./base.nix { inherit backend; }) ];
 
       services.openssh.enable = true;
-
-      # finix has no `users.users.<name>.openssh.authorizedKeys`, so sshd is pointed at the
-      # public half directly. A store path suits it: sshd refuses a key file anyone but the
-      # owner can write, and /nix/store is root-owned and read-only.
-      services.openssh.settings.AuthorizedKeysFile = [ "${keys}/authorized_keys" ];
     };
 
   testScript = ''
@@ -67,10 +62,23 @@ in
         machine.wait_until_succeeds("${lib.getExe' pkgs.netcat "nc"} -z 127.0.0.1 22", timeout=120)
 
     with subtest("a session opens, and runs as the user who logged in"):
-        machine.succeed("mkdir -p /root/.ssh && install -m 600 ${keys}/id_ed25519 /root/.ssh/id_ed25519")
+        # both halves are copied out of the store rather than named there. sshd applies its
+        # strict-mode check to the whole path of an authorized_keys file, and /nix/store is
+        # mode 1775 - group-writable - so a key file inside it is refused and the client falls
+        # back to asking for a password.
+        machine.succeed("install -d -m 700 /root/.ssh")
+        machine.succeed("install -m 600 ${keys}/authorized_keys /root/.ssh/authorized_keys")
+        machine.succeed("install -m 600 ${keys}/id_ed25519 /root/.ssh/id_ed25519")
 
+        # `-n` matters as much as the key does. The driver feeds commands to a shell reading
+        # /dev/hvc0, and ssh without it reads that same stdin - so the session works, closes,
+        # and the driver waits forever for output from a channel ssh has eaten.
+        #
+        # BatchMode so that a rejected key fails here rather than waiting out sshd's login
+        # grace period on a prompt nothing will ever answer.
         who = machine.succeed(
-            "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+            "ssh -n -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+            " -o BatchMode=yes -o ConnectTimeout=10"
             " -i /root/.ssh/id_ed25519 root@127.0.0.1 id -un"
         ).strip()
         assert who == "root", f"the session belongs to {who}"
