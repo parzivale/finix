@@ -6,6 +6,14 @@
 }:
 let
   cfg = config.services.elogind;
+
+  format = pkgs.formats.systemd { };
+
+  # generated here rather than inline in `environment.etc`, so the unit can name them without
+  # reading them back out of `environment.etc` - which is where most implementations put the
+  # unit itself, making it a definition in terms of itself
+  loginConf = format.generate "logind.conf" { inherit (cfg.settings) Login; };
+  sleepConf = format.generate "sleep.conf" { inherit (cfg.settings) Sleep; };
 in
 {
   options.services.elogind = {
@@ -23,6 +31,32 @@ in
       defaultText = lib.literalExpression "pkgs.elogind";
       description = ''
         The package to use for `elogind`.
+      '';
+    };
+
+    debug = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        Whether to enable debug logging.
+      '';
+    };
+
+    settings.Login = lib.mkOption {
+      type = (pkgs.formats.keyValue { }).type;
+      default = { };
+      description = ''
+        `elogind` login manager configuration. See {manpage}`logind.conf(5)`
+        for additional details.
+      '';
+    };
+
+    settings.Sleep = lib.mkOption {
+      type = (pkgs.formats.keyValue { }).type;
+      default = { };
+      description = ''
+        `elogind` suspend and hibernation configuration. See {manpage}`sleep.conf(5)`
+        for additional details.
       '';
     };
   };
@@ -49,9 +83,29 @@ in
       # in the one after, so it is already behind both.
       requires = [ "sysinit" ];
 
-      # the stanza named no notification protocol, so finit called it ready once started.
-      # `fork` is that, said in the contract's words.
-      type.service.command = "${cfg.package}/libexec/elogind";
+      type.service = {
+        # the config files are named here rather than only in /etc, so that changing one is a
+        # changed unit. That is what the `# reload trigger` comment appended to
+        # finit.d/elogind.conf was for, and it was for finit alone.
+        command = pkgs.writeShellScript "elogind" ''
+          # reload triggers: ${loginConf} ${sleepConf}
+          exec ${cfg.package}/libexec/elogind
+        '';
+
+        # elogind speaks sd_notify, which only finit can observe here; everywhere else it is
+        # taken as ready once spawned, the same bargain sessiond and mdevd make
+        readiness = [
+          "notify"
+          "fork"
+        ];
+      };
+
+      environment = {
+        SYSTEMD_LOG_TARGET = "syslog";
+      }
+      // lib.optionalAttrs cfg.debug {
+        SYSTEMD_LOG_LEVEL = "debug";
+      };
     };
 
     services.dbus.enable = true;
@@ -60,12 +114,7 @@ in
 
     environment.systemPackages = [ cfg.package ];
 
-    environment.etc."elogind/logind.conf".text = ''
-      [Login]
-    '';
-
-    environment.etc."elogind/sleep.conf".text = ''
-      [Sleep]
-    '';
+    environment.etc."elogind/logind.conf.d/00-nixos.conf".source = loginConf;
+    environment.etc."elogind/sleep.conf.d/00-nixos.conf".source = sleepConf;
   };
 }

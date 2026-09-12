@@ -8,6 +8,7 @@ let
       "modprobe"
       "plymouth"
       "resolvconf"
+      "sh"
       "shadow"
 
       # deprecated, remove at some point
@@ -59,6 +60,7 @@ in
       ./programs/modprobe
       ./programs/plymouth
       ./programs/resolvconf
+      ./programs/sh
       ./programs/shadow
       ./security
       ./services/dbus

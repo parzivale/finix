@@ -7,6 +7,41 @@
 
 let
   cfg = config.services.keventd;
+
+  # in the `let` rather than inline in `environment.etc`, so the unit below can name it without
+  # reading it back out of `environment.etc` - which is where most implementations put the unit
+  # itself, making it a definition in terms of itself
+  rules =
+    pkgs.runCommand "keventd-rules"
+      {
+        __structuredAttrs = true;
+        preferLocalBuild = true;
+        allowSubstitutes = false;
+        packages = lib.unique config.services.udev.packages;
+      }
+      ''
+        mkdir -p $out
+        shopt -s nullglob
+
+        for i in "''${packages[@]}"; do
+          echo "Adding rules for package $i"
+          for j in $i/{etc,lib,var/lib}/udev/rules.d/*; do
+            echo "Copying $j to $out/$(basename $j)"
+            cat $j > $out/$(basename $j)
+          done
+        done
+
+        for i in $out/*.rules; do
+          substituteInPlace $i \
+            --replace-quiet \"/sbin/modprobe \"${lib.getExe' pkgs.kmod "modprobe"} \
+            --replace-quiet \"/sbin/mdadm \"${pkgs.mdadm}/sbin/mdadm \
+            --replace-quiet \"/sbin/blkid \"${pkgs.util-linux}/sbin/blkid \
+            --replace-quiet \"/bin/mount \"${pkgs.util-linux}/bin/mount \
+            --replace-quiet /usr/bin/readlink ${lib.getExe' config.programs.coreutils.package "readlink"} \
+            --replace-quiet /usr/bin/cat ${lib.getExe' config.programs.coreutils.package "cat"} \
+            --replace-quiet /usr/bin/basename ${lib.getExe' config.programs.coreutils.package "basename"} 2>/dev/null
+        done
+      '';
 in
 {
   options.services.keventd = {
@@ -71,37 +106,7 @@ in
     # contribute finit's bundled rules to the udev packages list.
     services.udev.packages = [ config.finit.package ];
 
-    environment.etc."udev/rules.d".source =
-      pkgs.runCommand "keventd-rules"
-        {
-          __structuredAttrs = true;
-          preferLocalBuild = true;
-          allowSubstitutes = false;
-          packages = lib.unique config.services.udev.packages;
-        }
-        ''
-          mkdir -p $out
-          shopt -s nullglob
-
-          for i in "''${packages[@]}"; do
-            echo "Adding rules for package $i"
-            for j in $i/{etc,lib,var/lib}/udev/rules.d/*; do
-              echo "Copying $j to $out/$(basename $j)"
-              cat $j > $out/$(basename $j)
-            done
-          done
-
-          for i in $out/*.rules; do
-            substituteInPlace $i \
-              --replace-quiet \"/sbin/modprobe \"${lib.getExe' pkgs.kmod "modprobe"} \
-              --replace-quiet \"/sbin/mdadm \"${pkgs.mdadm}/sbin/mdadm \
-              --replace-quiet \"/sbin/blkid \"${pkgs.util-linux}/sbin/blkid \
-              --replace-quiet \"/bin/mount \"${pkgs.util-linux}/bin/mount \
-              --replace-quiet /usr/bin/readlink ${lib.getExe' config.programs.coreutils.package "readlink"} \
-              --replace-quiet /usr/bin/cat ${lib.getExe' config.programs.coreutils.package "cat"} \
-              --replace-quiet /usr/bin/basename ${lib.getExe' config.programs.coreutils.package "basename"} 2>/dev/null
-          done
-        '';
+    environment.etc."udev/rules.d".source = rules;
 
     providers.services.units.keventd = {
       description = "device event daemon (keventd)";
@@ -116,7 +121,14 @@ in
       inherit (cfg) path;
 
       type.service = {
-        command = "${config.finit.package}/libexec/finit/keventd " + lib.escapeShellArgs cfg.extraArgs;
+        # the rules are read from /etc/udev/rules.d, but the unit names the tree they were
+        # generated from, so a changed rule is a changed unit and the daemon is restarted with
+        # it. The `# reload trigger` this replaces was appended to finit.d/keventd.conf, and so
+        # reached finit alone.
+        command = pkgs.writeShellScript "keventd" ''
+          # reload trigger: ${rules}
+          exec ${config.finit.package}/libexec/finit/keventd ${lib.escapeShellArgs cfg.extraArgs}
+        '';
 
         # `notify = "pid"` is gone with the stanza: it asked finit to manage a pid file on the
         # daemon's behalf, which says nothing about readiness and has no equivalent elsewhere.
@@ -124,13 +136,6 @@ in
         readiness = "fork";
       };
     };
-
-    # TODO: add finit.services.reloadTriggers option
-    environment.etc."finit.d/keventd.conf".text = lib.mkAfter ''
-
-      # reload trigger
-      # ${config.environment.etc."udev/rules.d".source}
-    '';
 
     # TODO: share between device managers
     system.activation.scripts.keventd = lib.mkIf config.boot.kernel.enable {
