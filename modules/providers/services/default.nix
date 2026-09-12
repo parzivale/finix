@@ -37,6 +37,20 @@ let
     )
   );
 
+  # a unit's readiness kind, written the way supportedFeatures.readiness names it: the tag,
+  # except that a waitFor is qualified by which of its kinds it is, since an implementation may
+  # have a mechanism for one and nothing for another.
+  readinessNameOf =
+    unit:
+    let
+      readiness = unit.type.service.readiness;
+      kind = lib.head (lib.attrNames readiness);
+    in
+    if kind == "waitFor" then "waitFor.${lib.head (lib.attrNames readiness.waitFor)}" else kind;
+
+  unsupportedReadiness =
+    unit: unit.type ? service && !(lib.elem (readinessNameOf unit) cfg.supportedFeatures.readiness);
+
   # a name which resolves to nothing compiles to a dependency no backend can ever satisfy, so
   # the unit silently never starts. this is a local property - no traversal needed.
   danglingEdges = lib.concatLists (
@@ -129,22 +143,27 @@ in
       readiness = lib.mkOption {
         type = lib.types.listOf (
           lib.types.enum [
+            "fork"
             "notify"
             "s6"
+            "waitFor.socket"
+            "waitFor.pidfile"
+            "waitFor.path"
+            "waitFor.check"
           ]
         );
         description = ''
-          The readiness protocols the selected {option}`providers.services` implementation can
-          observe, out of the two which need the daemon's cooperation.
+          Every readiness kind the selected {option}`providers.services` implementation can
+          observe, named as it is tagged in {option}`providers.services.units.<name>.type`.
 
-          A kind absent from this list cannot be honoured, and asking for one is refused rather
-          than quietly downgraded to `fork` - which would report a unit ready the moment it was
-          spawned and start everything behind it too early.
+          A kind absent from this list cannot be honoured, and asking for one is refused.
 
-          `fork` and `waitFor` are not listed, because every implementation can do them:
-          forking is what a supervisor already watches, and waiting for something to appear is
-          polling where nothing better is available. They are part of the contract's vocabulary
-          rather than a capability, in the same way an anchor is.
+          This lists the whole vocabulary rather than only the protocols needing the daemon's
+          cooperation, because the ones that do not are not universally available either.
+          `waitFor.pidfile` says the daemon forks and the process which was spawned exits;
+          `runsv` and `s6-supervise` read that exit as a crash and restart it forever, so on
+          those two it cannot work at all - where finit and dinit both watch it natively.
+          Listing only `notify` and `s6` left that unsayable, and so unrefused.
         '';
       };
 
@@ -619,35 +638,9 @@ in
       #
       # `user` is the one to watch: unhonoured, the unit runs as root rather than as whoever was
       # named, which is more privilege than was asked for rather than less.
-      # a unit asking for a readiness protocol the implementation cannot observe. Only `notify`
-      # and `s6` can be asked for and not got: `fork` needs nothing observed, and every waitFor
-      # kind is available everywhere - by a native mechanism or by the backend waiting itself.
+      # readiness is not here: an unobservable kind is refused outright, in assertions below.
       ++ lib.optionals (cfg.backend != "none") (
-        lib.mapAttrsToList
-          (
-            name: unit:
-            let
-              ready = lib.head (lib.attrNames unit.type.service.readiness);
-            in
-            "providers.services.units.${name} reports readiness by ${ready}, which the "
-            + "${cfg.backend} implementation cannot observe (it observes "
-            + "${lib.concatStringsSep ", " cfg.supportedFeatures.readiness}) - it will be treated "
-            + "as ready when spawned, so anything requiring it may start too early."
-          )
-          (
-            lib.filterAttrs (
-              _: u:
-              let
-                ready = if u.type ? service then lib.head (lib.attrNames u.type.service.readiness) else null;
-              in
-              lib.elem ready [
-                "notify"
-                "s6"
-              ]
-              && !(lib.elem ready cfg.supportedFeatures.readiness)
-            ) cfg.units
-          )
-        ++ lib.optionals (!cfg.supportedFeatures.user) (
+        lib.optionals (!cfg.supportedFeatures.user) (
           lib.mapAttrsToList (
             name: unit:
             "providers.services.units.${name} is to run as ${unit.user}, which the ${cfg.backend} "
@@ -701,6 +694,25 @@ in
           this unit, by way of the earlier one, which is a cycle.
         '';
       }
-    ) (lib.filterAttrs (name: _: !(lib.elem name cfg.trunk.levels)) cfg.units);
+    ) (lib.filterAttrs (name: _: !(lib.elem name cfg.trunk.levels)) cfg.units)
+
+    # a readiness kind the implementation cannot observe is refused rather than warned about,
+    # which is what supportedFeatures.readiness has always said would happen. Every other
+    # unhonoured capability leaves the unit behaving as though it had not been asked for;
+    # these do not. Unobserved, `notify` and `s6` mean a unit reported ready the moment it was
+    # spawned, and everything behind it starts too early. `waitFor.pidfile` is worse: the
+    # daemon forks, the spawned process exits, and a supervisor which cannot expect that
+    # restarts it forever.
+    ++ lib.optionals (cfg.backend != "none") (
+      lib.mapAttrsToList (name: unit: {
+        assertion = false;
+        message = ''
+          providers.services.units.${name} reports readiness by ${readinessNameOf unit}, which
+          the ${cfg.backend} implementation cannot observe.
+
+          It observes: ${lib.concatStringsSep ", " cfg.supportedFeatures.readiness}
+        '';
+      }) (lib.filterAttrs (_: unsupportedReadiness) cfg.units)
+    );
   };
 }

@@ -244,11 +244,18 @@ in
         stopTimeout = true;
 
         # dinit does have a readiness protocol, through `readiness-notification`, but this
-        # backend does not use it yet - so both are refused rather than mapped onto a plain
-        # `process`, which would call a unit ready the moment it was spawned and start
-        # everything behind it too early. Every waitFor kind is available: `pidfile` through
-        # bgprocess, the rest through a wait unit.
-        readiness = [ ];
+        # backend does not use it yet - so `notify` and `s6` are refused rather than mapped
+        # onto a plain `process`, which would call a unit ready the moment it was spawned and
+        # start everything behind it too early. Every waitFor kind is available: `pidfile`
+        # through bgprocess, which is dinit watching the fork itself, the rest through a
+        # wait unit.
+        readiness = [
+          "fork"
+          "waitFor.socket"
+          "waitFor.pidfile"
+          "waitFor.path"
+          "waitFor.check"
+        ];
 
         user = true;
 

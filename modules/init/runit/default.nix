@@ -174,9 +174,19 @@ in
       stopTimeout = false;
 
       # runit speaks neither protocol - it knows only that a process is running - so both are
-      # refused by the contract rather than silently treated as `fork`. Every waitFor kind is
-      # available, polled from inside the run script.
-      readiness = [ ];
+      # refused by the contract rather than silently treated as `fork`. The rest are polled
+      # from inside the run script.
+      #
+      # `waitFor.pidfile` is refused for a different reason, and is the one kind this cannot
+      # fake: it says the daemon forks and the process runsv spawned exits. runsv reads that
+      # exit as the service dying and starts it again, forever. The polling would succeed and
+      # the supervision would be wrong, so refusing is the only honest answer.
+      readiness = [
+        "fork"
+        "waitFor.socket"
+        "waitFor.path"
+        "waitFor.check"
+      ];
 
       # through `chpst`, which ships with runit
       user = true;

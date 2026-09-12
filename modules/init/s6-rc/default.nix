@@ -284,9 +284,21 @@ in
       startTimeout = true;
       stopTimeout = true;
 
-      # native s6 notification, and no notion of a pid file at all
-      # s6 speaks its own protocol natively and has no notion of sd_notify
-      readiness = [ "s6" ];
+      # s6 speaks its own protocol natively and has no notion of sd_notify. The waitFor kinds
+      # are turned into an s6 notification by the run script, which waits beside the daemon and
+      # writes the descriptor s6 is already listening on.
+      #
+      # `waitFor.pidfile` is the exception, and s6 has no notion of a pid file at all: the kind
+      # means the spawned process forks and exits, which s6-supervise reads as the service
+      # dying and restarts, forever. Waiting for the file would work and the supervision would
+      # not, so it is refused.
+      readiness = [
+        "fork"
+        "s6"
+        "waitFor.socket"
+        "waitFor.path"
+        "waitFor.check"
+      ];
 
       user = true;
       group = false;

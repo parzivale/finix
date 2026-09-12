@@ -288,10 +288,17 @@ in
         startTimeout = false;
         stopTimeout = true;
 
-        # finit speaks both protocols
+        # the only implementation which can observe everything. Both protocols are native, a
+        # forking daemon is watched through `pid:!<file>`, and the kinds finit has no mechanism
+        # for are waited out by the unit's companion task.
         readiness = [
+          "fork"
           "notify"
           "s6"
+          "waitFor.socket"
+          "waitFor.pidfile"
+          "waitFor.path"
+          "waitFor.check"
         ];
 
         user = true;
