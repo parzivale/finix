@@ -89,7 +89,12 @@ in
       # implementations lower a unit into /etc, so a unit whose command reads back out of
       # `environment.etc` is defined in terms of itself - which surfaces as infinite recursion
       # rather than as anything a person could read.
-      type.oneshot.command = "${pkgs.procps}/bin/sysctl -p ${sysctlConf}";
+      #
+      # `-e` because a key the running kernel does not have is not a reason to stop booting.
+      # As a finit task this was free - nothing waited on a task - but a unit at the head of
+      # the trunk is waited for by every level above it, so one stale entry in
+      # boot.kernel.sysctl would otherwise take the whole machine down with it.
+      type.oneshot.command = "${pkgs.procps}/bin/sysctl -e -p ${sysctlConf}";
     };
 
     # Hide kernel pointers (e.g. in /proc/modules) for unprivileged

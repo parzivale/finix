@@ -84,8 +84,12 @@ in
       # is what puts it there, and it is in the head tier, so this sits in the tier after it.
       requires = [ "sysinit" ];
 
+      # reported rather than fatal, like the finit task this was: nothing waited on a task, but
+      # every level above `sysinit` waits on a unit, and a console which will not take a keymap
+      # is not a reason to stop booting - it is a reason to say so and carry on with us.
       type.oneshot.command = pkgs.writeShellScript "loadkmap" ''
-        exec ${pkgs.busybox}/bin/loadkmap < ${cfg.binaryKeyMap}
+        ${pkgs.busybox}/bin/loadkmap < ${cfg.binaryKeyMap} ||
+          echo "loadkmap: could not load the console keymap; continuing" >&2
       '';
     };
 
@@ -99,7 +103,13 @@ in
         # the logger is in the head tier, which `sysinit` is already behind
         requires = [ "sysinit" ];
 
-        type.oneshot.command = "${pkgs.kbd}/bin/setvesablank ${value}";
+        # plenty of consoles have no VESA blanking to turn ${value}, and on those setvesablank
+        # fails. That was a line in the log when this was a finit task; as a unit it would hold
+        # every level above `sysinit`, which is a heavy price for a screensaver.
+        type.oneshot.command = pkgs.writeShellScript "setvesablank" ''
+          ${pkgs.kbd}/bin/setvesablank ${value} ||
+            echo "setvesablank: this console does not support blanking; continuing" >&2
+        '';
       };
   };
 

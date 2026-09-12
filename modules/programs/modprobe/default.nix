@@ -88,8 +88,15 @@ in
       # time that thing starts
       requires = [ (lib.head config.providers.services.trunk.levels) ];
 
+      # one at a time, and a module which will not load is reported rather than fatal. As a
+      # finit task nothing waited on this, so a missing module was a line in the log; as a
+      # unit at the head of the trunk every level above waits for it, and `modprobe -a`
+      # returning non-zero for one absent module would hold the entire boot.
       type.oneshot.command = pkgs.writeShellScript "load-kernel-modules" ''
-        ${lib.getExe' pkgs.kmod "modprobe"} -a ${lib.escapeShellArgs config.boot.kernelModules}
+        for module in ${lib.escapeShellArgs config.boot.kernelModules}; do
+          ${lib.getExe' pkgs.kmod "modprobe"} -b "$module" ||
+            echo "modprobe: $module could not be loaded" >&2
+        done
       '';
     };
 
