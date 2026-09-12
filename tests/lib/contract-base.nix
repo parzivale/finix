@@ -19,16 +19,15 @@
   # switched off, because the module only knew how to write stanzas.
   services.mdevd.enable = true;
 
-  # a terminal is not a daemon: no readiness signal, nothing ever depends on one, and only
-  # finit has a distinct tty stanza at all - on dinit and systemd a getty is an ordinary
-  # service. modelling one in the contract would export a finit peculiarity into the
-  # abstraction, so it is declared here as plain finit configuration, in the same category as
-  # the kernel command line. this is also what satisfies finix's assertion that finit.ttys be
-  # non-empty.
+  # a terminal is not a daemon: no readiness signal, and nothing ever depends on one. So it is
+  # not a `providers.services` unit - modelling one there would export finit's tty stanza into
+  # an abstraction the other three would have to honour - but its own provider, which finit
+  # implements natively and everything else lowers to an ordinary supervised prompt. This is
+  # also what satisfies finix's assertion that finit.ttys be non-empty.
   services.getty.enable = false;
-  finit.ttys.tty1 = {
+  providers.ttys.devices.tty1 = {
     description = "getty on /dev/tty1";
-    nowait = true;
+    requires = [ ];
   };
 
   providers.services.backend = "finit";

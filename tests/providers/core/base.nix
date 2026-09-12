@@ -24,14 +24,16 @@
   services.mdevd.enable = true;
 
   # a terminal is not a daemon - no readiness signal, and nothing ever depends on one - so it is
-  # not modelled as a unit. finix asserts finit.ttys is non-empty when finit is PID 1; no other
-  # backend needs a terminal for these tests at all.
+  # not a `providers.services` unit but its own provider, which is what lets this be said once
+  # for all four backends. It used to be a `finit.ttys` stanza under an `mkIf`, because a
+  # terminal was only expressible to finit.
   services.getty.enable = false;
-  finit.ttys = lib.mkIf (backend == "finit") {
-    tty1 = {
-      description = "getty on /dev/tty1";
-      nowait = true;
-    };
+  providers.ttys.devices.tty1 = {
+    description = "getty on /dev/tty1";
+
+    # nothing in these tests is waiting for the system to be up before a prompt is useful, and
+    # a test which stalls the trunk is one where a prompt is the only way to see why
+    requires = [ ];
   };
 
   # the marker directory, made once before any unit runs rather than by each unit for itself.

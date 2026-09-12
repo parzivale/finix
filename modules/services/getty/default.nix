@@ -6,39 +6,6 @@
 }:
 let
   cfg = config.services.getty;
-
-  # finit supplies its own when none is named; nothing else does, so for every other backend
-  # the login prompt has to be a real program
-  gettyPackage =
-    if cfg.package != null then
-      cfg.package
-    else
-      pkgs.util-linux
-      // {
-        meta = pkgs.util-linux.meta // {
-          mainProgram = "agetty";
-        };
-      };
-
-  # agetty's compiled-in default is /bin/login, and finix has no /bin at all - so without this
-  # the prompt never appears and the unit just respawns forever against a missing file
-  loginProgram = "/run/current-system/sw/bin/login";
-
-  gettyCommand =
-    device:
-    lib.concatStringsSep " " (
-      [
-        (lib.getExe gettyPackage)
-        "--login-program"
-        loginProgram
-        "--noclear"
-      ]
-      ++ cfg.extraArgs
-      ++ [
-        device
-        "linux"
-      ]
-    );
 in
 {
   options.services.getty = {
@@ -96,38 +63,20 @@ in
       '';
     };
 
-    # finit has a first-class notion of a tty - it opens the device, handles the session and
-    # respawns the prompt when it exits - so under finit these stay finit's own stanzas rather
-    # than becoming contract units which would duplicate all of that badly.
-    finit.ttys = lib.mkIf (config.providers.services.backend == "finit") (
-      lib.genAttrs cfg.ttys (
-        device:
-        {
-          description = "getty on ${device}";
-          nowait = true;
+    providers.ttys = {
+      inherit (cfg) package extraArgs;
 
-          # a tty stanza is finit's own, not a contract unit, so the trunk does not order it -
-          # it starts when its runlevel is entered, which says nothing about which units are
-          # up. The contract lowering below gets this from elogind's tier; here it has to be
-          # named. Stated in this module rather than elogind's, which would have to reach into
-          # finit.ttys from outside and could then only ever say it for finit.
-          conditions = lib.optional config.services.elogind.enable "service/elogind/ready";
-        }
-        // lib.optionalAttrs (cfg.package != null) {
-          command = "${lib.getExe cfg.package} ${lib.escapeShellArgs cfg.extraArgs} ${device}";
-        }
-      )
-    );
-
-    # every other backend has no tty concept at all, so a login prompt is an ordinary
-    # supervised service: agetty opens the device itself, and the supervisor restarts it when
-    # a session ends, which is the respawn finit does natively.
-    providers.services.units = lib.mkIf (config.providers.services.backend != "finit") (
-      lib.genAttrs' cfg.ttys (
+      # at default priority, so that a display manager or an autologin claims a device simply
+      # by defining it. This module has no idea which terminals something else wants and does
+      # not need one: it offers a prompt on each, and whatever else claims one wins.
+      #
+      # The command is left to the provider. finit runs a login prompt of its own on a device
+      # named with no command, which is better than anything this module could pass it, and
+      # every other implementation falls back to agetty.
+      devices = lib.genAttrs cfg.ttys (
         device:
-        lib.nameValuePair "getty-${device}" {
-          description = "login prompt on ${device}";
-          type.service.command = gettyCommand device;
+        lib.mkDefault {
+          description = "getty on /dev/${device}";
 
           # late: a login prompt before the system is up is a prompt into a half-built machine.
           #
@@ -136,7 +85,7 @@ in
           # and saying it again as an edge would only be a second way to be wrong.
           requires = [ "multi-user" ];
         }
-      )
-    );
+      );
+    };
   };
 }

@@ -90,22 +90,20 @@ in
       '';
     };
 
-    # autologin is hardcoded to run on tty1
-    finit.ttys.tty1.enable = lib.mkForce false;
-
-    providers.services.units.autologin = {
+    # autologin is hardcoded to run on tty1, so it claims it. That claim is the whole of what
+    # used to be `finit.ttys.tty1.enable = lib.mkForce false` plus a service of its own - and
+    # the force only ever reached finit, so on any other init a getty held tty1 at the same
+    # time and the two fought over the keyboard.
+    providers.ttys.devices.tty1 = {
       description = "autologin";
 
-      # finit's `tty` gave this a controlling terminal; the contract has no notion of one,
-      # because three of the four implementations have no notion of one either. So the unit
-      # takes tty1 for itself - which is what finit was arranging on its behalf.
-      type.service = {
-        command = pkgs.writeShellScript "autologin-tty1" ''
-          exec </dev/tty1 >/dev/tty1 2>&1
-          exec ${lib.getExe pkgs.autologin} ${cfg.user} ${cfg.command}
-        '';
-        readiness = "fork";
-      };
+      # the redirect is autologin's own business: unlike a getty it does not take a device, so
+      # the terminal has to be its standard streams before it is exec'd. Which is what finit
+      # was arranging on its behalf when this was a `tty` stanza with no command.
+      command = pkgs.writeShellScript "autologin-tty1" ''
+        exec </dev/tty1 >/dev/tty1 2>&1
+        exec ${lib.getExe pkgs.autologin} ${cfg.user} ${cfg.command}
+      '';
 
       # `multi-user`, like any other login prompt: a session before the system is up is a
       # session into a half-built machine.

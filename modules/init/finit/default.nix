@@ -12,6 +12,7 @@ in
     ./initrd.nix
     ./mount.nix
     ./providers.services.nix
+    ./providers.ttys.nix
     ./stage1.nix
     ./stage2.nix
   ];

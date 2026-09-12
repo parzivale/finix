@@ -69,7 +69,7 @@ in
             # The key used to shutdown. Possibilities are F1 to F12.
             key = "F1";
             # The command that is executed when the key is pressed
-            cmd = "${config.finit.package}/bin/initctl poweroff";
+            cmd = "/run/current-system/sw/bin/poweroff";
           }
 
           {
@@ -83,7 +83,7 @@ in
             # The key used to reboot. Possibilities are F1 to F12.
             key = "F2";
             # The command that is executed when the key is pressed
-            cmd = "${config.finit.package}/bin/initctl reboot";
+            cmd = "/run/current-system/sw/bin/reboot";
           }
         ];
       };
@@ -130,14 +130,16 @@ in
 
     environment.etc."lemurs/config.toml".source = configFile;
 
-    # disable the tty that lemurs runs on
-    finit.ttys."tty${toString cfg.settings.tty}".enable = false;
-
-    finit.services.lemurs = {
+    # lemurs takes the terminal it runs on, which is the whole of what it has to say: the
+    # getty which would otherwise be there is a default definition of this same device, and
+    # this overrides it. Disabling that getty separately - `finit.ttys.<dev>.enable = false` -
+    # was a thing only finit heard, so on any other init both held the device at once.
+    providers.ttys.devices."tty${toString cfg.settings.tty}" = {
       description = "lemurs terminal user interface display/login manager";
-      conditions = "service/syslogd/ready";
+
+      # agetty opens the terminal and hands the session to lemurs, which is how a greeter gets
+      # a device it can take over
       command = "${pkgs.util-linux}/bin/agetty -nil ${cfg.package}/bin/lemurs tty${toString cfg.settings.tty}";
-      cgroup.name = "user";
     };
   };
 }
