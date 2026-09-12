@@ -593,6 +593,20 @@ in
     # a machine whose backend declares no PID 1 has no business booting.
     boot.init = cfg.initExecutable;
 
+    # switching between init systems is not something a switch can do. Everything else in a
+    # generation can be replaced while the machine runs, but PID 1 is the one process that
+    # cannot: the kernel started it, `switch-to-configuration` has no way to hand the machine to
+    # another, and the supervisor that ends up running the new generation's units would be the
+    # old init with none of the new one's state. The result is a machine whose services are
+    # described by one implementation and supervised by another.
+    #
+    # So this is a reboot, and the inhibitor says so rather than letting the switch half-happen.
+    #
+    # The backend's name, not initExecutable: the executable is a generated wrapper carrying the
+    # activation script - and, on dinit, the unit fingerprints - so it changes whenever anything
+    # does, and an inhibitor which fires on every switch is one nobody reads.
+    system.switch.inhibitors.init = cfg.backend;
+
     # the other half of being PID 1. Every implementation ships binaries under these names, and
     # each one talks only to its own init - finit's poweroff asks finit, over finit's socket -
     # so on a machine running any other backend the wrong one is a command which reports a

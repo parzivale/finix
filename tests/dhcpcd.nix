@@ -10,6 +10,12 @@
     {
       services.mdevd.enable = true;
 
+      # finit is PID 1 here: the contract needs a backend named before it can point boot.init
+      # at one. getty supplies the terminal finix asserts exists - on finit it reduces to a
+      # finit tty stanza, which is what a hand-written finit.ttys would have been.
+      providers.services.backend = "finit";
+      services.getty.enable = true;
+
       # TODO: write a dnsmasq service
       finit.services.dnsmasq = {
         description = "dhcp server";
@@ -25,6 +31,12 @@
     { lib, ... }:
     {
       services.mdevd.enable = true;
+
+      # finit is PID 1 here: the contract needs a backend named before it can point boot.init
+      # at one. getty supplies the terminal finix asserts exists - on finit it reduces to a
+      # finit tty stanza, which is what a hand-written finit.ttys would have been.
+      providers.services.backend = "finit";
+      services.getty.enable = true;
       services.dhcpcd.enable = true;
 
       # don't assign a static ip to eth0 - let dhcpcd handle it

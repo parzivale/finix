@@ -35,9 +35,63 @@ let
   # s6-rc dependencies order the change operations and nothing else: a longrun which dies is
   # restarted by its supervisor, and nothing depending on it is touched. that is the contract's
   # start-only edge without any emulation, which only dinit has otherwise managed.
+  #
+  # That holds while the machine runs. It does not hold across a database update, and the
+  # difference is worth writing down: s6-rc-update restarts a service which "has a dependency
+  # to [...] a new service that did not previously exist", so adding a unit low in the trunk
+  # restarts everything attached to the levels above it. The contract's model defines how
+  # services are brought up, not that a switch moves the same set on every implementation, so
+  # this is a property of s6-rc rather than a contract violation - but a machine switching
+  # here bounces more than one switching on finit, dinit or runit does.
   dependencies = unit: lib.concatMapStrings (dep: "${dep}\n") unit.requires;
 
   readinessLib = import ../../providers/services/readiness.nix { inherit pkgs lib; };
+  shutdownLib = import ../../providers/services/shutdown.nix { inherit pkgs lib; };
+
+  # the `everything` bundle is brought up at boot, and s6-rc has no notion of a unit which is
+  # in the database but not to be started yet. A shutdown-side unit compiled into it therefore
+  # ran during boot, which is not late but wrong - so the database is built from the boot side
+  # alone, and the shutdown side is run from rc.shutdown instead.
+  bootSide = lib.filterAttrs (name: unit: !(shutdownLib.onShutdownSide cfg.trunk name unit)) enabled;
+
+  shutdownScript = shutdownLib.scriptFor cfg;
+
+  # what the engine may be told to start and stop, and what `list` may report: the boot side,
+  # minus the anchors. An anchor is a bundle here, and a bundle is a compile-time name for a
+  # set - it has no state, so s6-rc will neither list it nor change it.
+  atomic = lib.filterAttrs (_: unit: kindOf unit != "anchor") bootSide;
+
+  # everything in the generation which s6-rc has no state for: the shutdown side, which is not
+  # in the database because s6-rc starts what it knows about at boot, and the anchors, which
+  # are bundles.
+  #
+  # `list` reports them with the fingerprint this generation was built from. They are not
+  # running - an anchor never is, and the shutdown side only runs on the way down - but neither
+  # can the engine start them. Reporting nothing would leave them in the incoming tree and out
+  # of the current one, so every switch would resolve to "start the shutdown side and every
+  # level", forever. Reported as already matching, the engine finds nothing to do.
+  unmanaged = lib.filterAttrs (name: _: !(atomic ? ${name})) enabled;
+
+  reportUnmanaged = lib.concatStrings (
+    lib.mapAttrsToList (
+      name: _: "printf '%s\\t%s\\n' ${name} ${lib.escapeShellArg cfg.switch.fingerprints.${name}}\n"
+    ) unmanaged
+  );
+
+  # the engine reconciles the whole incoming tree, which includes the shutdown side and the
+  # anchors - neither of which s6-rc can be asked about. The shutdown side is deliberately not
+  # in this database, because s6-rc starts everything it knows about at boot; the anchors are
+  # bundles. Naming either fails the entire change, taking the units which do exist down with
+  # it. Reads unit names on stdin and leaves the survivors in $units.
+  knownFilter = ''
+    known=" ${lib.concatStringsSep " " (lib.attrNames atomic)} "
+    units=""
+    while read -r unit; do
+      case "$known" in
+        *" $unit "*) units="$units $unit" ;;
+      esac
+    done
+  '';
 
   # null unless this unit is a service with a waitFor readiness
   waitScript =
@@ -72,60 +126,72 @@ let
     let
       kind = kindOf unit;
     in
-    ''
-      mkdir -p $out/source/${name}
-      printf '%s\n' ${if kind == "service" then "longrun" else "oneshot"} > $out/source/${name}/type
-      printf '%s' ${lib.escapeShellArg (dependencies unit)} > $out/source/${name}/dependencies
-    ''
-    + (
-      # a longrun's `run` is an executable the supervisor execs, but a oneshot's `up` is an
-      # execline command line which s6-rc-compile reads as text - so one is linked in and the
-      # other is written out. linking a binary in as `up` makes s6-rc try to parse an ELF
-      # header as a command.
-      if kind == "service" then
-        ''
-          ln -s ${runScript name unit} $out/source/${name}/run
-        ''
-        # `fork` means no notification at all: s6 calls it up once spawned. `s6` is the daemon
-        # notifying for itself, and `waitFor` is the wrapper in the run script notifying on its
-        # behalf - both arrive on the same descriptor, so both are declared the same way.
-        +
-          lib.optionalString
-            (lib.elem (readinessOf unit) [
-              "s6"
-              "waitFor"
-            ])
-            ''
-              printf '3\n' > $out/source/${name}/notification-fd
-            ''
-      else if kind == "oneshot" then
-        ''
-          printf '%s\n' ${runScript name unit} > $out/source/${name}/up
-        ''
-      else
-        # an anchor has no process, and s6-rc has no process-less kind - but a oneshot whose
-        # `up` does nothing is exactly that, and costs one `true` at the moment it comes up
-        ''
-          printf '%s\n' ${lib.getExe' pkgs.coreutils "true"} > $out/source/${name}/up
-        ''
-    )
-    + lib.optionalString (unit.startTimeout != null) ''
-      printf '%d\n' ${toString (unit.startTimeout * 1000)} > $out/source/${name}/timeout-up
-    ''
-    + lib.optionalString (unit.stopTimeout != null) ''
-      printf '%d\n' ${toString (unit.stopTimeout * 1000)} > $out/source/${name}/timeout-down
-    '';
+    if kind == "anchor" then
+      # an anchor is a name for a set rather than something which runs, and that is precisely
+      # what an s6-rc bundle is. As a oneshot running `true` it had state, and s6-rc-update
+      # then felt obliged to reconcile it: a trunk level's edges change whenever any unit is
+      # added or removed anywhere, so every switch found the level's definition changed,
+      # restarted it, and - dependencies here being hard - brought down everything above it.
+      # One added unit restarted the machine.
+      #
+      # A bundle has no state, so changing its contents restarts nothing. Depending on one is
+      # depending on all of its members, which is exactly what "this level has been reached"
+      # means. Bundles cannot have dependencies of their own, so what would have been the
+      # anchor's `requires` becomes its contents - the same set, said the other way round.
+      ''
+        mkdir -p $out/source/${name}
+        printf 'bundle\n' > $out/source/${name}/type
+        printf '%s' ${lib.escapeShellArg (dependencies unit)} > $out/source/${name}/contents
+      ''
+    else
+      ''
+        mkdir -p $out/source/${name}
+        printf '%s\n' ${if kind == "service" then "longrun" else "oneshot"} > $out/source/${name}/type
+        printf '%s' ${lib.escapeShellArg (dependencies unit)} > $out/source/${name}/dependencies
+      ''
+      + (
+        # a longrun's `run` is an executable the supervisor execs, but a oneshot's `up` is an
+        # execline command line which s6-rc-compile reads as text - so one is linked in and the
+        # other is written out. linking a binary in as `up` makes s6-rc try to parse an ELF
+        # header as a command.
+        if kind == "service" then
+          ''
+            ln -s ${runScript name unit} $out/source/${name}/run
+          ''
+          # `fork` means no notification at all: s6 calls it up once spawned. `s6` is the daemon
+          # notifying for itself, and `waitFor` is the wrapper in the run script notifying on its
+          # behalf - both arrive on the same descriptor, so both are declared the same way.
+          +
+            lib.optionalString
+              (lib.elem (readinessOf unit) [
+                "s6"
+                "waitFor"
+              ])
+              ''
+                printf '3\n' > $out/source/${name}/notification-fd
+              ''
+        else
+          ''
+            printf '%s\n' ${runScript name unit} > $out/source/${name}/up
+          ''
+      )
+      + lib.optionalString (unit.startTimeout != null) ''
+        printf '%d\n' ${toString (unit.startTimeout * 1000)} > $out/source/${name}/timeout-up
+      ''
+      + lib.optionalString (unit.stopTimeout != null) ''
+        printf '%d\n' ${toString (unit.stopTimeout * 1000)} > $out/source/${name}/timeout-down
+      '';
 
   # the whole point of this backend: the database is built here, not assembled at boot. a
   # configuration error is a build failure rather than something discovered on the machine.
   database = pkgs.runCommand "s6-rc-database" { nativeBuildInputs = [ s6rc ]; } ''
     mkdir -p $out
-    ${lib.concatStrings (lib.mapAttrsToList unitDir enabled)}
+    ${lib.concatStrings (lib.mapAttrsToList unitDir bootSide)}
 
     mkdir -p $out/source/everything
     printf 'bundle\n' > $out/source/everything/type
     printf '%s' ${
-      lib.escapeShellArg (lib.concatMapStrings (n: "${n}\n") (lib.attrNames enabled))
+      lib.escapeShellArg (lib.concatMapStrings (n: "${n}\n") (lib.attrNames bootSide))
     } > $out/source/everything/contents
 
     s6-rc-compile $out/db $out/source
@@ -133,6 +199,25 @@ let
 
   live = "/run/s6-rc";
   scanDir = "/run/service";
+
+  # where the running generation's fingerprints live, and the store copy /run is seeded from at
+  # boot. Not /etc: switch-to-configuration runs activation before it runs the engine, so /etc
+  # already describes the generation being switched into by the time `list` is asked what is
+  # running. A removed unit's file was gone, so the engine never learned it was running and
+  # never stopped it; a changed unit's file already held the new value, so it compared equal to
+  # itself and was never restarted.
+  runFingerprints = "/run/s6-rc-fingerprints";
+
+  fingerprintDir = pkgs.runCommand "s6-rc-fingerprints" { } (
+    ''
+      mkdir -p $out
+    ''
+    + lib.concatStrings (
+      lib.mapAttrsToList (
+        name: fp: "printf '%s' ${lib.escapeShellArg fp} > $out/${name}\n"
+      ) cfg.switch.fingerprints
+    )
+  );
 
   # ---- being an init, rather than merely supervising ---------------------------------------
   #
@@ -170,6 +255,13 @@ let
 
     ${cfg.activationScript}
 
+    # the generation about to be started, recorded as the running one. Here rather than in
+    # activation, which runs on every switch too - rewriting these then would tell the next
+    # `list` that whatever is running was already what is being switched into.
+    rm -rf ${runFingerprints}
+    cp -rL ${fingerprintDir} ${runFingerprints}
+    chmod -R u+w ${runFingerprints}
+
     s6-rc-init -c ${database}/db -l ${live} ${scanDir}
     exec s6-rc -l ${live} -v2 -up change everything
     EOF
@@ -188,7 +280,13 @@ let
     cat > $out/rc.shutdown <<'EOF'
     #!${pkgs.runtimeShell} -e
     exec >/dev/console 2>&1
-    exec ${lib.getExe' s6rc "s6-rc"} -l ${live} -v2 -bDa change
+
+    # everything the database knows about, brought down in dependency order first - so the
+    # contract's shutdown side runs with the boot side already stopped, which is what the latch
+    # means. Not exec'd, because there is something to do afterwards.
+    ${lib.getExe' s6rc "s6-rc"} -l ${live} -v2 -bDa change
+
+    ${lib.optionalString (shutdownScript != null) shutdownScript}
     EOF
 
     # deliberately empty: everything is already down and unmounted by this point
@@ -307,19 +405,74 @@ in
 
     providers.services.switch = {
       list = pkgs.writeShellScript "s6-rc-list" ''
+        # s6-rc decides what is running; the fingerprint only says which definition it was
+        # started from, which the supervisor cannot be asked. A missing record therefore does
+        # not remove the unit from the list - one brought up by hand has none, and omitting it
+        # would leave the engine unable to see, and so unable to stop, something that is
+        # running. `unknown` cannot equal a real fingerprint, so such a unit is reconciled.
+        ${reportUnmanaged}
+        known=" ${lib.concatStringsSep " " (lib.attrNames atomic)} "
+
         ${lib.getExe' s6rc "s6-rc"} -l ${live} -a list 2>/dev/null | while read -r unit; do
-          fp="/etc/s6-rc-fingerprints/$unit"
-          [ -e "$fp" ] && printf '%s\t%s\n' "$unit" "$(cat "$fp")"
+          # s6-rc's own internals are in the live state too - `s6rc-oneshot-runner` most of
+          # all - and they are not units. Reporting one puts it in a list the engine reconciles
+          # against the incoming tree, where it can never appear, so the engine would stop it
+          # and take s6-rc's ability to run a oneshot with it.
+          case "$known" in
+            *" $unit "*) ;;
+            *) continue ;;
+          esac
+
+          fp="${runFingerprints}/$unit"
+          if [ -e "$fp" ]; then
+            printf '%s\t%s\n' "$unit" "$(cat "$fp")"
+          else
+            printf '%s\tunknown\n' "$unit"
+          fi
         done
       '';
 
       # `change` is bulk and atomic, which is what the engine hands it anyway
       activate = pkgs.writeShellScript "s6-rc-activate" ''
-        ${lib.getExe' s6rc "s6-rc"} -l ${live} -u change $(cat)
+        export PATH=${lib.makeBinPath [ pkgs.coreutils ]}:$PATH
+
+        ${knownFilter}
+        [ -n "$units" ] || exit 0
+
+        # the live database is the one compiled into the generation that booted, and s6-rc will
+        # not start a service it does not contain - so a unit which is new in this generation
+        # could never come up, however the engine asked. `s6-rc-update` migrates the live state
+        # onto the incoming database, keeping what is running running.
+        #
+        # In activate rather than deactivate: the engine stops before it starts, and a unit
+        # being removed exists only in the outgoing database. Updating first would take it out
+        # from under the stop.
+        ${lib.getExe' s6rc "s6-rc-update"} -v2 -t 30000 -l ${live} ${database}/db
+
+        ${lib.getExe' s6rc "s6-rc"} -v2 -t 30000 -l ${live} -u change $units
+
+        # what is now running, recorded where the next switch will look. After the change, so
+        # a unit which failed to come up is not claimed as this generation's.
+        mkdir -p ${runFingerprints}
+        for unit in $units; do
+          if [ -e ${fingerprintDir}/"$unit" ]; then
+            cp -f ${fingerprintDir}/"$unit" ${runFingerprints}/"$unit"
+          fi
+        done
       '';
 
       deactivate = pkgs.writeShellScript "s6-rc-deactivate" ''
-        ${lib.getExe' s6rc "s6-rc"} -l ${live} -d change $(cat)
+        export PATH=${lib.makeBinPath [ pkgs.coreutils ]}:$PATH
+
+        ${knownFilter}
+        [ -n "$units" ] || exit 0
+
+        ${lib.getExe' s6rc "s6-rc"} -v2 -t 30000 -l ${live} -d change $units
+
+        # no longer running, so no longer this generation's
+        for unit in $units; do
+          rm -f ${runFingerprints}/"$unit"
+        done
       '';
     };
 
@@ -348,8 +501,8 @@ in
       halt = "${initBase}/bin/halt";
     };
 
-    environment.etc = lib.mapAttrs' (
-      name: fp: lib.nameValuePair "s6-rc-fingerprints/${name}" { text = fp; }
-    ) cfg.switch.fingerprints;
+    # no fingerprints in /etc: see runFingerprints above. Activation replaces /etc before the
+    # engine is ever asked what is running, so /etc can only ever describe the generation being
+    # switched into.
   };
 }

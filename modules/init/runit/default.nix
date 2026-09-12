@@ -28,6 +28,32 @@ let
   readinessOf = unit: lib.head (lib.attrNames (variantOf unit).readiness);
 
   readinessLib = import ../../providers/services/readiness.nix { inherit pkgs lib; };
+  shutdownLib = import ../../providers/services/shutdown.nix { inherit pkgs lib; };
+
+  # runit has no runlevels and no notion of a unit which is not to start yet: every directory in
+  # the scan directory gets a runsv and is started at once. So a shutdown-side unit left in
+  # there does not wait for the latch - it runs during boot, which is not late, it is wrong.
+  #
+  # They are kept out of the scan directory entirely and run from stage 3 instead, which is the
+  # script runit executes as PID 1 on the way down.
+  bootSide = lib.filterAttrs (name: unit: !(shutdownLib.onShutdownSide cfg.trunk name unit)) enabled;
+  shutdownSide = lib.filterAttrs (name: unit: shutdownLib.onShutdownSide cfg.trunk name unit) enabled;
+
+  # the shutdown side is part of the generation but not part of the supervised set: it is not
+  # in the scan directory, because runit starts everything it finds there at boot.
+  #
+  # `list` reports it anyway, with the fingerprint this generation was built from. It is not
+  # running - it never is, until the machine goes down - but it is also not something the
+  # engine can start. Reporting nothing would leave it in the incoming tree and out of the
+  # current one, so every switch would resolve to "start the shutdown side", forever. Reported
+  # as already matching, the engine correctly finds nothing to do.
+  reportShutdownSide = lib.concatStrings (
+    lib.mapAttrsToList (
+      name: _: "printf '%s\\t%s\\n' ${name} ${lib.escapeShellArg cfg.switch.fingerprints.${name}}\n"
+    ) shutdownSide
+  );
+
+  shutdownScript = shutdownLib.scriptFor cfg;
 
   # runit has no dependency mechanism whatsoever. services are directories under a scan
   # directory, runsvdir starts a runsv for each, and they all come up in parallel - ordering is
@@ -130,7 +156,7 @@ let
         mkdir -p $out/${name}
         ln -s ${runScript name unit} $out/${name}/run
         printf '%s' ${lib.escapeShellArg cfg.switch.fingerprints.${name}} > $out/${name}/fingerprint
-      '') enabled
+      '') bootSide
     )}
   '';
 
@@ -255,20 +281,35 @@ in
 
       # stage 3. runit has already stopped the supervisor by the time this runs; the contract's
       # shutdown-side units are the graph's business, not runit's.
+      # stage 3, which runit runs as PID 1 once the supervisor is gone - so the boot-side
+      # services have already been stopped by the time this executes. That is the one point
+      # runit reaches on the way down, and so where the contract's shutdown side belongs; it is
+      # also why those units are excluded from the scan directory above, since anything left
+      # there would have been started at boot instead.
       "runit/3".source = pkgs.writeShellScript "runit-stage-3" ''
         export PATH=${lib.makeBinPath [ pkgs.coreutils ]}:$PATH
         echo "runit: shutting down"
+        ${lib.optionalString (shutdownScript != null) "${shutdownScript}"}
       '';
     };
 
     providers.services.switch = {
       list = pkgs.writeShellScript "runit-list" ''
+        ${reportShutdownSide}
         for dir in ${scanDir}/*; do
           [ -d "$dir" ] || continue
           unit=$(${lib.getExe' pkgs.coreutils "basename"} "$dir")
-          [ -e "$dir/fingerprint" ] || continue
           ${sv} status "$dir" 2>/dev/null | ${lib.getExe' pkgs.gnugrep "grep"} -q '^run:' || continue
-          printf '%s\t%s\n' "$unit" "$(cat "$dir/fingerprint")"
+
+          # runsv decides what is running; the fingerprint only says which definition it was
+          # started from. A service directory put here by hand has none, and skipping it would
+          # make it invisible to the engine - never stopped, however the incoming tree changes.
+          # `unknown` cannot equal a real fingerprint, so it is reconciled instead.
+          if [ -e "$dir/fingerprint" ]; then
+            printf '%s\t%s\n' "$unit" "$(cat "$dir/fingerprint")"
+          else
+            printf '%s\tunknown\n' "$unit"
+          fi
         done
       '';
 
@@ -284,6 +325,12 @@ in
           # Only the files this backend generates are replaced, never the whole directory:
           # `supervise` belongs to a running runsv, and removing it out from under one loses
           # the process it is supervising.
+          # a unit the engine names but this backend does not manage - the shutdown side, which
+          # is kept out of the scan directory because runit would otherwise start it at boot
+          if [ ! -d ${serviceDir}/"$unit" ] && [ ! -d ${scanDir}/"$unit" ]; then
+            continue
+          fi
+
           if [ -d ${serviceDir}/"$unit" ]; then
             mkdir -p ${scanDir}/"$unit"
 

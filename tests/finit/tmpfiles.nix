@@ -14,6 +14,9 @@
       # and the reader are still finit's, which is what this test is about
       providers.services.backend = "finit";
 
+      # the terminal finix asserts exists; on finit the module reduces to a finit tty stanza
+      services.getty.enable = true;
+
       # pre-create test tmpfiles.d configs for boot-time testing
       environment.etc."tmpfiles.d/test-boot.conf".text = ''
         d /run/tmpfiles-test/boot-created 0755 root root -

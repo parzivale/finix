@@ -60,17 +60,30 @@ let
   subDirTests = lib.mapAttrs (
     dirName: _:
     let
-      subDirContents = builtins.readDir (./. + "/${dirName}");
+      dir = ./. + "/${dirName}";
+
+      subDirContents = builtins.readDir dir;
       nixFiles = lib.filterAttrs (
         name: type: type == "regular" && lib.hasSuffix ".nix" name
       ) subDirContents;
     in
-    lib.recurseIntoAttrs (
-      lib.mapAttrs' (filename: _: {
-        name = lib.removeSuffix ".nix" filename;
-        value = runTest (./. + "/${dirName}/${filename}");
-      }) nixFiles
-    )
+    # a directory with a default.nix describes its own tests, rather than being one file one
+    # test. That is for a suite where the same test runs against several implementations: the
+    # file is a function of which one, so there is nothing for auto-discovery to import.
+    if subDirContents ? "default.nix" then
+      lib.recurseIntoAttrs (
+        import dir {
+          inherit lib pkgs runTest;
+          mkTest = testLib.mkTest;
+        }
+      )
+    else
+      lib.recurseIntoAttrs (
+        lib.mapAttrs' (filename: _: {
+          name = lib.removeSuffix ".nix" filename;
+          value = runTest (dir + "/${filename}");
+        }) nixFiles
+      )
   ) subDirs;
 in
 topLevelTests // subDirTests

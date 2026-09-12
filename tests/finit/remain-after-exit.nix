@@ -10,14 +10,22 @@
     {
       services.mdevd.enable = true;
 
+      # finit is PID 1 here: the contract needs a backend named before it can point boot.init
+      # at one. getty supplies the terminal finix asserts exists - on finit it reduces to a
+      # finit tty stanza, which is what a hand-written finit.ttys would have been.
+      providers.services.backend = "finit";
+      services.getty.enable = true;
+
       # test task with remain:yes that runs in runlevels S and 2
       finit.tasks.test-remain = {
         runlevels = "S2";
         command = pkgs.writeShellScript "test-remain-start" ''
+          ${pkgs.coreutils}/bin/mkdir -p /run/remain-test
           echo "remain task started" > /run/remain-test/started
           echo "setting up resources"
         '';
         post = pkgs.writeShellScript "test-remain-stop" ''
+          ${pkgs.coreutils}/bin/mkdir -p /run/remain-test
           echo "remain task stopped" > /run/remain-test/stopped
           echo "cleaning up resources"
         '';
@@ -29,9 +37,11 @@
       finit.tasks.multi-runlevel = {
         runlevels = "23";
         command = pkgs.writeShellScript "multi-rl-start" ''
+          ${pkgs.coreutils}/bin/mkdir -p /run/remain-test
           echo "multi-runlevel started in rl $(cat /run/finit/runlevel 2>/dev/null || echo unknown)" > /run/remain-test/multi-rl
         '';
         post = pkgs.writeShellScript "multi-rl-stop" ''
+          ${pkgs.coreutils}/bin/mkdir -p /run/remain-test
           echo "multi-runlevel cleanup" > /run/remain-test/multi-rl-cleanup
         '';
         remain = true;
@@ -43,6 +53,7 @@
         runlevels = "2";
         conditions = "task/test-remain/success";
         command = pkgs.writeShellScript "dependent-service" ''
+          ${pkgs.coreutils}/bin/mkdir -p /run/remain-test
           echo "dependent service started" > /run/remain-test/dependent
           exec sleep infinity
         '';
@@ -53,9 +64,11 @@
       finit.tasks.regular-task = {
         runlevels = "S2";
         command = pkgs.writeShellScript "regular-task" ''
+          ${pkgs.coreutils}/bin/mkdir -p /run/remain-test
           echo "regular task ran" > /run/remain-test/regular
         '';
         post = pkgs.writeShellScript "regular-post" ''
+          ${pkgs.coreutils}/bin/mkdir -p /run/remain-test
           echo "regular post ran" > /run/remain-test/regular-post
         '';
         description = "Regular task without remain";

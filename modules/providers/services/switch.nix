@@ -18,20 +18,35 @@ let
     unit:
     builtins.substring 0 16 (
       builtins.hashString "sha256" (
-        builtins.toJSON {
-          # `type` now carries the command and readiness of whichever kind this is, so it
-          # covers on its own what three separate fields used to
-          inherit (unit)
-            type
-            requires
-            user
-            group
-            environment
-            startTimeout
-            stopTimeout
-            ;
-          path = map toString unit.path;
-        }
+        builtins.toJSON (
+          {
+            # `type` now carries the command and readiness of whichever kind this is, so it
+            # covers on its own what three separate fields used to
+            inherit (unit)
+              type
+              user
+              group
+              environment
+              startTimeout
+              stopTimeout
+              ;
+            path = map toString unit.path;
+          }
+
+          # an anchor's edges are deliberately not part of what it is.
+          #
+          # A trunk level requires the level before it and everything attached to that level,
+          # so adding or removing any unit anywhere changes the `requires` of every level
+          # downstream of it. Were that in the fingerprint, one new unit would mark half the
+          # trunk as changed and the engine would stop and restart it - which accomplishes
+          # nothing, because an anchor has no process to restart, and on s6-rc is destructive:
+          # dependencies there are hard, so bringing a level down brings down everything above
+          # it, including the units the switch was supposed to leave alone.
+          #
+          # What an anchor is, is its existence. Added or removed it is started or stopped;
+          # otherwise there is nothing about it to change.
+          // lib.optionalAttrs (!(unit.type ? anchor)) { inherit (unit) requires; }
+        )
       )
     );
 

@@ -27,6 +27,22 @@ let
   readinessOf = unit: lib.head (lib.attrNames (variantOf unit).readiness);
 
   readinessLib = import ../../providers/services/readiness.nix { inherit pkgs lib; };
+  shutdownLib = import ../../providers/services/shutdown.nix { inherit pkgs lib; };
+
+  # where the running generation's fingerprints live, and the store copy /run is seeded from at
+  # boot. Not /etc: activation rewrites that before the engine is ever asked what is running.
+  runFingerprints = "/run/dinit-fingerprints";
+
+  fingerprintDir = pkgs.runCommand "dinit-fingerprints" { } (
+    ''
+      mkdir -p $out
+    ''
+    + lib.concatStrings (
+      lib.mapAttrsToList (
+        name: fp: "printf '%s' ${lib.escapeShellArg fp} > $out/${name}\n"
+      ) cfg.switch.fingerprints
+    )
+  );
 
   waitKindOf =
     unit:
@@ -104,6 +120,20 @@ let
     ) (lib.filterAttrs onShutdownSide enabled)
   );
 
+  # the whole shutdown side as one script, in trunk order.
+  #
+  # The chain below is correct on paper - each unit depends on the one after it, so stopping
+  # dependents first walks the trunk forwards - and dinit does not honour it during a full
+  # shutdown. With `then-down` attached to a later level than `first-down`, dinit ran
+  # `then-down`'s stop-command first, and it reported that the earlier step had not run.
+  #
+  # So ordering becomes the shell's job, which is a guarantee that does hold. This is the same
+  # conclusion the finit backend reached, for the same reason.
+  #
+  # It hangs off the latch, which is the one service guaranteed to stop after the boot side:
+  # the first trunk level depends on it, so everything reachable from the root stops first.
+  shutdownScript = shutdownLib.scriptFor cfg;
+
   successorOf =
     name:
     let
@@ -168,8 +198,13 @@ let
       # orphaned processes still holding filesystems open.
       options = lib.optionals (unit.name == latchName) [ "kill-all-on-stop" ];
     }
-    // lib.optionalAttrs (commandOf unit != null) { stop-command = commandOf unit; }
-    // lib.optionalAttrs (unit.user != null) { run-as = unit.user; }
+    # one stop-command for the whole shutdown side, on the latch. Per-unit stop-commands left
+    # the order to dinit, which does not keep it - see shutdownScript.
+    # and on the script existing: the levels at and after the latch are themselves shutdown-side
+    # units, so a machine whose shutdown side is only those anchors has nothing to run
+    // lib.optionalAttrs (unit.name == latchName && shutdownScript != null) {
+      stop-command = "${shutdownScript}";
+    }
     // lib.optionalAttrs (unit.stopTimeout != null) { stop-timeout = unit.stopTimeout; };
 
   # ---- the user role ----------------------------------------------------------------
@@ -281,6 +316,14 @@ in
         # description", which looks like a dinit problem and is not one
         ${cfg.activationScript}
 
+        # the generation about to be started, recorded as the running one. This is in the init
+        # rather than in activation because activation runs on every switch too, and rewriting
+        # these then would tell the next `list` that whatever is running was already what is
+        # being switched into.
+        ${lib.getExe' pkgs.coreutils "rm"} -rf ${runFingerprints}
+        ${lib.getExe' pkgs.coreutils "cp"} -rL ${fingerprintDir} ${runFingerprints}
+        ${lib.getExe' pkgs.coreutils "chmod"} -R u+w ${runFingerprints}
+
         exec ${config.dinit.package}/bin/dinit -p /run/dinitctl -d /etc/dinit.d boot
       '';
 
@@ -303,9 +346,13 @@ in
         // lib.mapAttrs' (
           name: unit:
           lib.nameValuePair (waitNameOf name) {
-            description = "${name} is ready";
+            # no description: a dinit service file has no such field, and dinit.services has no
+            # option for one
             type = "scripted";
-            command = readinessLib.scriptFor name (variantOf unit).readiness;
+            # interpolated, not passed through: a dinit service file is key/value text, so the
+            # command is a string. scriptFor hands back a derivation for every waitFor kind bar
+            # `check`, where it is the command the configuration supplied.
+            command = "${readinessLib.scriptFor name (variantOf unit).readiness}";
             depends-ms = [ name ];
             default = true;
           }
@@ -313,9 +360,12 @@ in
 
       # dinit's service files are a strict key/value format with no room for opaque metadata, so
       # each unit's fingerprint is written beside them instead. `list` reads them back.
-      environment.etc = lib.mapAttrs' (
-        name: fp: lib.nameValuePair "dinit-fingerprints/${name}" { text = fp; }
-      ) cfg.switch.fingerprints;
+      # nothing in /etc. A fingerprint has to say what the *running* generation was built from,
+      # and switch-to-configuration runs activation before it runs the engine - so by the time
+      # `list` is asked, /etc has already been replaced by the generation being switched into.
+      # A removed unit's file is gone, so `list` skipped it and the engine never learned it was
+      # running; a changed unit's file already held the new value, so it compared equal to
+      # itself and was never restarted. See fingerprintDir, which /run is seeded from at boot.
 
       # unlike finit, dinit does not reconcile from its own configuration - which is why this
       # branch carries a bespoke python reconciler at all. so it gives the engine a real `list`,
@@ -332,21 +382,42 @@ in
             while read -r unit; do
               case "$unit" in boot|default) continue ;; esac
 
-              fp="/etc/dinit-fingerprints/$unit"
-              [ -e "$fp" ] || continue
-
               ${lib.getExe' config.dinit.package "dinitctl"} status "$unit" 2>/dev/null |
                 ${lib.getExe' pkgs.gnugrep "grep"} -q 'State: STARTED' || continue
 
-              printf '%s\t%s\n' "$unit" "$(cat "$fp")"
+              # dinit decides what is running; the fingerprint only says which definition it
+              # was started from, which no supervisor can be asked - dinitctl reports state and
+              # pid, never the command line or dependencies behind them.
+              #
+              # So a missing record must not remove the unit from the list. One started by hand
+              # has none, and skipping it makes it invisible to the engine: never stopped when
+              # the incoming tree drops it, and "started" as a no-op when it does not. Reported
+              # as `unknown`, which cannot equal a real fingerprint, the pair differs and the
+              # unit is reconciled - stopped if it is gone, restarted if it remains.
+              fp="${runFingerprints}/$unit"
+              if [ -e "$fp" ]; then
+                printf '%s\t%s\n' "$unit" "$(cat "$fp")"
+              else
+                printf '%s\tunknown\n' "$unit"
+              fi
             done
         '';
 
         activate = pkgs.writeShellScript "dinit-activate" ''
+          export PATH=${lib.makeBinPath [ pkgs.coreutils ]}:$PATH
+
           while read -r unit; do
             # pick up a changed definition before starting; harmless when it is unchanged
             ${lib.getExe' config.dinit.package "dinitctl"} reload "$unit" >/dev/null 2>&1 || true
             ${lib.getExe' config.dinit.package "dinitctl"} start "$unit" || echo "start $unit failed" >&2
+
+            # what is now running, recorded where the next switch will look. Written after the
+            # start rather than before, so a unit which failed to start is not claimed as this
+            # generation's.
+            if [ -e ${fingerprintDir}/"$unit" ]; then
+              mkdir -p ${runFingerprints}
+              cp -f ${fingerprintDir}/"$unit" ${runFingerprints}/"$unit"
+            fi
           done
         '';
 
@@ -358,6 +429,9 @@ in
             ${lib.getExe' config.dinit.package "dinitctl"} stop "$unit" || echo "stop $unit failed" >&2
             ${lib.getExe' config.dinit.package "dinitctl"} unload "$unit" >/dev/null 2>&1 || true
             rm -f "/etc/dinit.d/boot.d/$unit" "/etc/dinit.d/default.d/$unit"
+
+            # no longer running, so no longer this generation's
+            rm -f ${runFingerprints}/"$unit"
           done
         '';
       };

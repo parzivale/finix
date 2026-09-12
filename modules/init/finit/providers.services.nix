@@ -103,6 +103,7 @@ let
     // lib.optionalAttrs (unit.group != null) { inherit (unit) group; };
 
   readinessLib = import ../../providers/services/readiness.nix { inherit pkgs lib; };
+  shutdownLib = import ../../providers/services/shutdown.nix { inherit pkgs lib; };
 
   readinessOf = unit: lib.head (lib.attrNames (variantOf unit).readiness);
   waitKindOf = unit: lib.head (lib.attrNames (variantOf unit).readiness.waitFor);
@@ -160,24 +161,9 @@ let
   # then unmounted and powered off without touching the rest. see tests/providers/services.nix.
   #
   # so finit is asked to execute exactly one thing, and the ordering of the steps within it
-  # becomes the shell's job, which is a guarantee that does hold.
-  shutdownScript = pkgs.writeShellScript "providers-services-shutdown" (
-    lib.concatMapStringsSep "\n"
-      (unit: ''
-        echo "shutdown: ${unit.description}" > /dev/kmsg 2>/dev/null || true
-        ${unit.command}
-      '')
-      (
-        lib.filter (unit: unit.command != null) (
-          map (u: u // { command = (variantOf u).command or null; }) ordered
-        )
-      )
-  );
-
-  # priority is no longer an ordering finit acts on - it only sorts the script's steps here
-  ordered = lib.sort (a: b: a.priority < b.priority) (
-    lib.mapAttrsToList (name: unit: unit // { priority = priorityFor name unit; }) shutdownSide
-  );
+  # becomes the shell's job. That script is the contract's, not this module's - every
+  # implementation needed the same one, for its own version of the same reason.
+  shutdownScript = shutdownLib.scriptFor cfg;
 
   # the companion latches a unit's readiness once, so that an edge means "this had started"
   # rather than "this is still running" - see the note above conditionOf.
@@ -323,13 +309,17 @@ in
           tmpfiles-finit.command = "${tmpfilesReader} --create ${tmpfilesRules}";
         };
 
-      finit.run = lib.mkIf (shutdownSide != { }) {
-        providers-services-shutdown = {
-          description = "shutdown sequence";
-          runlevels = shutdownRunlevels;
-          command = shutdownScript;
-        };
-      };
+      # the shutdown sequence as a hook script rather than a `run` stanza.
+      #
+      # `run` is documented as completing before the next *command*, which orders it against
+      # other commands and not against the power-off. With one shutdown command and little else
+      # to tear down, finit starts it and reaches "Powering down" before it has run at all -
+      # so whether the shutdown side executed came down to how long the rest of teardown
+      # happened to take.
+      #
+      # HOOK_SHUTDOWN is run-parts over this directory, forked and waited for, with a watchdog
+      # finit arms beforehand. It fires as the runlevel changes rather than after the services
+      # have stopped - which is where the `run` stanza effectively ran anyway.
 
       providers.scheduler.tasks = lib.mkIf config.finit.tmpfiles.clean.enable {
         tmpfiles-clean = {
@@ -343,12 +333,21 @@ in
       # does - even for a change finit's own stanza would not otherwise reflect. this is the same
       # trick the openssh and tlp modules use to carry reload triggers, and it is also what a
       # real `list` would read back were finit ever to stop reconciling on its own.
-      environment.etc = lib.mapAttrs' (
-        name: unit:
-        lib.nameValuePair "finit.d/${name}.conf" {
-          text = lib.mkAfter "\n# fingerprint: ${cfg.switch.fingerprints.${name}}\n";
-        }
-      ) bootSide;
+      environment.etc = lib.mkMerge [
+        (lib.mapAttrs' (
+          name: unit:
+          lib.nameValuePair "finit.d/${name}.conf" {
+            text = lib.mkAfter "\n# fingerprint: ${cfg.switch.fingerprints.${name}}\n";
+          }
+        ) bootSide)
+
+        # on the script rather than on shutdownSide being non-empty: the levels at and after the
+        # latch are themselves shutdown-side units, so that set is never empty, while a machine
+        # whose shutdown side is only those anchors has nothing to run and gets no script.
+        (lib.optionalAttrs (shutdownScript != null) {
+          "finit/hook/sys/shutdown/providers-services-shutdown".source = shutdownScript;
+        })
+      ];
 
       # finit reconciles by itself: `initctl reload` re-reads /etc/finit.d and starts, stops and
       # restarts stanzas to match what it finds there - tests/finit/remain-after-exit.nix pins

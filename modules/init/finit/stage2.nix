@@ -8,6 +8,11 @@ let
   cfg = config.finit;
   format = pkgs.formats.keyValue { };
 
+  # where finit looks for hook scripts. Compiled into the binary, so it is a constant here
+  # rather than something a configuration chooses - the plugin resolves a hook point to
+  # <this>/<point>, e.g. ${hookPath}/sys/shutdown.
+  hookPath = "/etc/finit/hook";
+
   # finix-setup plugin for early boot initialization
   finix-setup = pkgs.callPackage ../../../pkgs/finix-setup {
     extraPackages = lib.unique (
@@ -740,7 +745,23 @@ in
           plymouth = config.programs.plymouth.package;
         }).overrideAttrs
           (o: {
-            configureFlags = o.configureFlags ++ [ "--with-plugin-path=${finix-setup}/lib/finit/plugins" ];
+            configureFlags = o.configureFlags ++ [
+              "--with-plugin-path=${finix-setup}/lib/finit/plugins"
+
+              # the contract's shutdown-side units are one script, and it has to be run in a
+              # way that shutdown waits for. A `run` stanza is not that: finit documents `run`
+              # as completing before the next *command*, which orders it against other
+              # commands and not against the power-off - so with little else to tear down, the
+              # machine goes down before the script has executed at all.
+              #
+              # HOOK_SHUTDOWN is synchronous. finit arms a watchdog, calls the hook scripts,
+              # and only then changes runlevel, so the sequence cannot be outrun.
+              "--enable-hook-scripts-plugin=yes"
+
+              # not the default of $libexecdir/finit/hook, which is inside the store and so
+              # cannot be written into. /etc is where a generation puts its files.
+              "--with-hook-scripts-path=${hookPath}"
+            ];
           });
       description = ''
         The package to use for `finit`.
@@ -748,7 +769,8 @@ in
         ::: {.note}
         The specified package will have its `configureFlags` appended to with
         a finit plugin path (`--with-plugin-path`) set to the required
-        `finix-setup` plugin.
+        `finix-setup` plugin, and with the hook-scripts plugin enabled and
+        pointed at `${hookPath}`.
         :::
       '';
     };
