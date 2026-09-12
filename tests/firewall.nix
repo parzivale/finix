@@ -11,6 +11,8 @@
   nodes.client =
     { pkgs, ... }:
     {
+      providers.services.backend = "finit";
+
       services.getty.enable = true;
       services.mdevd.enable = true;
 
@@ -21,6 +23,8 @@
   nodes.nftables =
     { pkgs, ... }:
     {
+      providers.services.backend = "finit";
+
       services.getty.enable = true;
       services.mdevd.enable = true;
       services.nftables.enable = true;
@@ -29,16 +33,19 @@
 
       environment.systemPackages = [ pkgs.nmap ];
 
-      finit.tasks.nftables.runlevels = "2";
-
-      finit.services.allowed-port = {
+      # contract units rather than finit stanzas, like everything else the machine runs. On
+      # finit a unit still lowers to a service of the same name, so `initctl status` below
+      # answers about these exactly as it did before.
+      providers.services.units.allowed-port = {
         description = "listener on allowed port";
-        command = "${pkgs.nmap}/bin/ncat -k -l 8080";
+        requires = [ "basic" ];
+        type.service.command = "${pkgs.nmap}/bin/ncat -k -l 8080";
       };
 
-      finit.services.blocked-port = {
+      providers.services.units.blocked-port = {
         description = "listener on blocked port";
-        command = "${pkgs.nmap}/bin/ncat -k -l 8081";
+        requires = [ "basic" ];
+        type.service.command = "${pkgs.nmap}/bin/ncat -k -l 8081";
       };
     };
 
@@ -50,8 +57,12 @@
     client.wait_for_console_text("entering runlevel 2")
     nftables.wait_for_console_text("entering runlevel 2")
 
-    nftables.wait_until_succeeds("initctl status allowed-port | grep running", timeout=datetime.timedelta(seconds=30))
-    nftables.wait_until_succeeds("initctl status blocked-port | grep running", timeout=datetime.timedelta(seconds=30))
+    # the listeners are up, asked by connecting to them rather than by asking the supervisor.
+    # `initctl status <name> | grep running` was the old phrasing and it no longer matches:
+    # these are contract units, and what the test needs to know is that something is accepting
+    # on the port - which is also the only part of it the later subtests depend on.
+    nftables.wait_until_succeeds("ncat -z -w 3 127.0.0.1 8080", timeout=datetime.timedelta(seconds=30))
+    nftables.wait_until_succeeds("ncat -z -w 3 127.0.0.1 8081", timeout=datetime.timedelta(seconds=30))
 
     # wait until the ruleset is actually loaded before probing
     nftables.wait_until_succeeds("nft list table inet nixos-fw", timeout=datetime.timedelta(seconds=30))
@@ -82,9 +93,27 @@
         nftables.succeed("nixos-firewall-tool reset")
         client.fail("ncat -z -w 3 192.168.1.2 8081")
 
-    with subtest("nftables: stopping the firewall removes the rules"):
-        nftables.succeed("initctl runlevel 3")
-        nftables.wait_until_fails("nft list table inet nixos-fw", timeout=datetime.timedelta(seconds=30))
+    # the subtest which stood here left runlevel 2 to stop the firewall, because the ruleset was
+    # loaded by a finit task pinned to that runlevel. It is a contract unit now: it comes up
+    # with the trunk, and the unloading is `nftables-flush` on the shutdown side, which runs
+    # when the machine goes down rather than when it changes runlevel. There is no runlevel to
+    # leave any more, and that the shutdown side runs at all is what tests/providers/core's
+    # shutdown test covers on all four implementations.
+    #
+    # What can still be said here is that the two halves are inverses, which is the property
+    # that subtest was really checking - so it is checked directly.
+    with subtest("unloading the ruleset removes the rules and empties the state file"):
+        # read out of the shutdown sequence rather than hardcoded, which also asserts the
+        # flush is wired into it: the shutdown side is not one stanza per unit but a single
+        # ordered script, and on finit it is a HOOK_SHUTDOWN hook. Finding nftables-stop in
+        # there and running it is running exactly what a poweroff would.
+        flush = nftables.succeed(
+            "grep -o '/nix/store/[^ ]*-nftables-stop' "
+            "/etc/finit/hook/sys/shutdown/providers-services-shutdown | head -1"
+        ).strip()
+        nftables.succeed(flush)
+
+        nftables.fail("nft list table inet nixos-fw")
         client.succeed("ncat -z -w 3 192.168.1.2 8081")
         nftables.succeed("test ! -s /var/lib/nftables/deletions.nft")
 

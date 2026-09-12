@@ -91,6 +91,14 @@ in
       "boot.panic_on_fail"
     ];
 
+    # the test driver's requirement, not the system's. Every command the driver sends is run
+    # as `timeout <n> bash -c <command>` - it says so in the driver, and deliberately, so that
+    # it can drive distributions where /bin/sh is not bash. finix took bash off the system PATH,
+    # which is the right call for a machine and leaves every guest command failing with
+    # "timeout: failed to run command 'bash'". So the harness puts it back, for test machines
+    # only.
+    environment.systemPackages = [ pkgs.bashNonInteractive ];
+
     # a default rather than a decision: every test machine wants a logger, but a test of
     # something which *is* the logger - rsyslog - has to be able to be the one instead
     services.sysklogd.enable = lib.mkDefault true;
