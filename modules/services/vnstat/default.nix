@@ -10,6 +10,8 @@ let
   format = pkgs.formats.keyValue {
     mkKeyValue = lib.generators.mkKeyValueDefault { } " ";
   };
+
+  configFile = format.generate "vnstat.conf" cfg.settings;
 in
 {
   options.services.vnstat = {
@@ -130,7 +132,7 @@ in
     ++ lib.optionals cfg.debug [ "--debug" ];
 
     environment.systemPackages = [ cfg.package ];
-    environment.etc."vnstat.conf".source = format.generate "vnstat.conf" cfg.settings;
+    environment.etc."vnstat.conf".source = configFile;
 
     providers.services.tmpfiles.rules = lib.optionals (cfg.settings.DatabaseDir == "/var/lib/vnstat") [
       {
@@ -147,15 +149,20 @@ in
       description = "vnStat network traffic monitor";
       requires = [ "basic" ];
 
-      type.service.command = "${pkgs.vnstat}/bin/vnstatd " + lib.escapeShellArgs cfg.extraArgs;
+      type.service = {
+        # vnstatd reads /etc/vnstat.conf, but the unit names the file that was generated from,
+        # so a changed configuration is a changed unit. The `# reload trigger` this replaces
+        # was appended to finit.d/vnstat.conf, and so reached finit alone.
+        command = pkgs.writeShellScript "vnstatd" ''
+          # reload trigger: ${configFile}
+          exec ${pkgs.vnstat}/bin/vnstatd ${lib.escapeShellArgs cfg.extraArgs}
+        '';
+
+        # and it is a reload now rather than a restart: vnstatd rereads its configuration on
+        # SIGHUP, and restarting it drops whatever it has not yet written to the database
+        reload = "${lib.getExe' pkgs.procps "pkill"} -HUP -x vnstatd";
+      };
     };
-
-    # TODO: add finit.services.reloadTriggers option
-    environment.etc."finit.d/vnstat.conf".text = lib.mkAfter ''
-
-      # reload trigger
-      # ${config.environment.etc."vnstat.conf".source}
-    '';
 
     users.users = lib.optionalAttrs (cfg.user == "vnstatd") {
       vnstatd = {

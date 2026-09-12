@@ -283,7 +283,14 @@ in
       description = "nix daemon";
 
       type.service = {
-        command = "${cfg.package}/bin/nix-daemon --daemon";
+        # the daemon reads /etc/nix/nix.conf, but the unit names the file that was generated
+        # from, so a changed configuration is a changed unit and the daemon is restarted with
+        # it. The "standard nixos trick" this replaces was appended to finit.d/nix-daemon.conf
+        # - a trick only finit ever fell for.
+        command = pkgs.writeShellScript "nix-daemon" ''
+          # restart trigger: ${configFile}
+          exec ${cfg.package}/bin/nix-daemon --daemon
+        '';
         readiness = "fork";
       };
 
@@ -387,12 +394,5 @@ in
         "kvm"
       ];
     };
-
-    # TODO: add finit.services.restartTriggers option
-    environment.etc."finit.d/nix-daemon.conf".text = lib.mkAfter ''
-
-      # standard nixos trick to force a restart when something has changed
-      # ${config.environment.etc."nix/nix.conf".source}
-    '';
   };
 }

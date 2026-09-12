@@ -9,6 +9,24 @@ let
 
   mkKeyValue = lib.generators.mkKeyValueDefault { } " = ";
 
+  # in the `let` rather than inline in `environment.etc`, so the unit can name these files
+  # without reading them back out of `environment.etc` - which is where most implementations
+  # put the unit itself, making it a definition in terms of itself
+  configTree = lib.mapAttrs' (
+    name: keyboardOpts:
+    lib.nameValuePair "keyd/${name}.conf" {
+      source = pkgs.writeText "${name}.conf" ''
+        [ids]
+        ${lib.concatStringsSep "\n" keyboardOpts.ids}
+
+        ${lib.generators.toINI {
+          inherit mkKeyValue;
+        } keyboardOpts.settings}
+        ${keyboardOpts.extraConfig}
+      '';
+    }
+  ) cfg.keyboards;
+
   keyboardOpts = {
     options = {
       ids = lib.mkOption {
@@ -123,36 +141,7 @@ in
   config = lib.mkIf cfg.enable {
     hardware.uinput.enable = true;
 
-    environment.etc =
-      let
-        configTree = lib.mapAttrs' (
-          name: keyboardOpts:
-          lib.nameValuePair "keyd/${name}.conf" {
-            source = pkgs.writeText "${name}.conf" ''
-              [ids]
-              ${lib.concatStringsSep "\n" keyboardOpts.ids}
-
-              ${lib.generators.toINI {
-                inherit mkKeyValue;
-              } keyboardOpts.settings}
-              ${keyboardOpts.extraConfig}
-            '';
-          }
-        ) cfg.keyboards;
-
-        serviceFile = {
-          # TODO: add finit.services.reloadTriggers option
-          "finit.d/keyd.conf".text = lib.mkAfter ''
-
-            # force a reload on configuration change
-            ${lib.concatMapAttrsStringSep "\n" (k: v: "# " + v.source) configTree}
-          '';
-        };
-      in
-      lib.mkMerge [
-        configTree
-        serviceFile
-      ];
+    environment.etc = configTree;
 
     providers.services.units.keyd = {
       description = "keyd, a key remapping daemon";
@@ -161,10 +150,21 @@ in
       # there. syslogd is in that tier too and needs no naming.
       requires = [ "basic" ];
 
-      # `reload` is gone with the stanza: finit can be asked to re-read a service's
-      # configuration, and no other implementation has an equivalent. The switch engine
-      # restarts a unit whose definition changed, which is what reaches the same end here.
-      type.service.command = "${cfg.package}/bin/keyd";
+      type.service = {
+        # keyd reads /etc/keyd, but the unit names every file that tree was generated from, so
+        # a changed keymap is a changed unit. The same list used to be appended to
+        # finit.d/keyd.conf as `# force a reload on configuration change` - which reached
+        # finit and nothing else, so on any other init a new keymap needed a reboot.
+        command = pkgs.writeShellScript "keyd" ''
+          # reload triggers:
+          ${lib.concatMapAttrsStringSep "\n" (_: v: "# ${v.source}") configTree}
+          exec ${cfg.package}/bin/keyd
+        '';
+
+        # keyd is asked to re-read its own configuration, so a changed keymap no longer drops
+        # the grabs on every keyboard
+        reload = "${cfg.package}/bin/keyd reload";
+      };
 
       environment = lib.optionalAttrs cfg.debug { KEYD_DEBUG = "2"; };
     };

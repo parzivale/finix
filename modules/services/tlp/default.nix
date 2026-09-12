@@ -12,6 +12,8 @@ let
     mkKeyValue = lib.generators.mkKeyValueDefault { } "=";
     listToValue = l: "\"${toString l}\"";
   };
+
+  configFile = format.generate "tlp.conf" cfg.settings;
 in
 {
   options.services.tlp = {
@@ -43,7 +45,7 @@ in
   };
 
   config = lib.mkIf cfg.enable {
-    environment.etc."tlp.conf".source = format.generate "tlp.conf" cfg.settings;
+    environment.etc."tlp.conf".source = configFile;
 
     environment.systemPackages = [
       cfg.package
@@ -97,7 +99,11 @@ in
       # script, so a changed tlp.conf is a changed command, which is a changed unit, which a
       # switch re-runs. No second unit whose only job is to be restarted.
       type.oneshot.command = pkgs.writeShellScript "tlp-start" ''
-        # applied again whenever this changes: ${config.environment.etc."tlp.conf".source}
+        # named here so that a changed config is a changed command, and so a changed unit. The
+        # generated file directly, never `config.environment.etc.<...>.source`: most
+        # implementations lower a unit into /etc, so reading a unit's own command back out of
+        # `environment.etc` defines it in terms of itself and evaluates as infinite recursion.
+        # applied again whenever this changes: ${configFile}
         exec ${tlpExe} init start
       '';
     };

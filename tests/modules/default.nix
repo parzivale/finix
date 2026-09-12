@@ -116,6 +116,17 @@ let
   # place the name-based check above cannot see.
   tmpfilesRules = cfg: lib.length (cfg.finit.tmpfiles.rules or [ ]);
 
+  # and for the restart triggers, which hide in /etc rather than in an option.
+  #
+  # `environment.etc."finit.d/<name>.conf".text = lib.mkAfter "# <config path>"` is the trick
+  # for making finit notice that a daemon's configuration changed: the stanza file gains the
+  # path, so the stanza differs, so finit restarts it. It reaches finit alone - on any other
+  # implementation a changed config file leaves the daemon running with the old one, and
+  # nothing says so. The contract's own version of the trick is to name the path inside the
+  # unit's command, where every implementation's fingerprint will see it.
+  restartTriggers =
+    cfg: lib.filter (lib.hasPrefix "finit.d/") (lib.attrNames (cfg.environment.etc or { }));
+
   # a module is ported when turning it on adds contract units rather than finit stanzas.
   #
   # This is the check the per-backend one cannot make: an unported module is not *broken* on
@@ -135,6 +146,7 @@ let
           result = {
             stanzas = lib.subtractLists (stanzaNames baseline.dinit) (stanzaNames cfg);
             rules = tmpfilesRules cfg - tmpfilesRules baseline.dinit;
+            triggers = lib.subtractLists (restartTriggers baseline.dinit) (restartTriggers cfg);
           };
         in
         lib.deepSeq result result
@@ -147,7 +159,10 @@ let
         "adds finit stanzas rather than contract units, so it exists on finit and nowhere else: ${lib.concatStringsSep ", " attempt.value.stanzas}"
       ++
         lib.optional (attempt.value.rules > 0)
-          "adds ${toString attempt.value.rules} rules to finit.tmpfiles.rules rather than providers.services.tmpfiles.rules, so the paths it needs are created on finit and nowhere else";
+          "adds ${toString attempt.value.rules} rules to finit.tmpfiles.rules rather than providers.services.tmpfiles.rules, so the paths it needs are created on finit and nowhere else"
+      ++
+        lib.optional (attempt.value.triggers != [ ])
+          "writes a restart trigger into ${lib.concatStringsSep ", " attempt.value.triggers}, so a changed configuration restarts the daemon on finit and is ignored everywhere else - name the config path in the unit's own command instead";
 
   check =
     kind: name: backend:

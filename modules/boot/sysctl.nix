@@ -5,6 +5,14 @@
   ...
 }:
 let
+  sysctlConf = pkgs.writeText "60-finix.conf" (
+    lib.concatStrings (
+      lib.mapAttrsToList (
+        n: v: lib.optionalString (v != null) "${n}=${if v == false then "0" else toString v}\n"
+      ) config.boot.kernel.sysctl
+    )
+  );
+
   sysctlOption = lib.mkOptionType {
     name = "sysctl option value";
     check =
@@ -64,11 +72,7 @@ in
   };
 
   config = {
-    environment.etc."sysctl.d/60-finix.conf".text = lib.concatStrings (
-      lib.mapAttrsToList (
-        n: v: lib.optionalString (v != null) "${n}=${if v == false then "0" else toString v}\n"
-      ) config.boot.kernel.sysctl
-    );
+    environment.etc."sysctl.d/60-finix.conf".source = sysctlConf;
 
     # TODO: force reload of all kernel variables -> `command = "${pkgs.procps}/bin/sysctl --load --system";`
     #
@@ -81,9 +85,11 @@ in
       # the head of the trunk: anything started after this should see the values it sets
       requires = [ (lib.head config.providers.services.trunk.levels) ];
 
-      type.oneshot.command = "${pkgs.procps}/bin/sysctl -p ${
-        config.environment.etc."sysctl.d/60-finix.conf".source
-      }";
+      # the generated file directly, not `config.environment.etc.<...>.source`. Most
+      # implementations lower a unit into /etc, so a unit whose command reads back out of
+      # `environment.etc` is defined in terms of itself - which surfaces as infinite recursion
+      # rather than as anything a person could read.
+      type.oneshot.command = "${pkgs.procps}/bin/sysctl -p ${sysctlConf}";
     };
 
     # Hide kernel pointers (e.g. in /proc/modules) for unprivileged
