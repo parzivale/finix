@@ -64,12 +64,36 @@ in
       suspend = lib.mkDefault [ "/run/current-system/sw/bin/suspend" ];
     };
 
-    finit.services.sessiond = {
+    providers.services.units.sessiond = {
       description = "daemon for power management";
-      conditions = "service/dbus/ready";
-      command = "${lib.getExe' cfg.package "sessiond"} --config ${configFile} --log-target syslog";
-      notify = "systemd";
-      cgroup.delegate = true;
+
+      # attached to `basic`, so it is in the tier which completes `multi-user` and anything
+      # attached to that is after it. Without a tier a unit is in no level's dependants, so no
+      # level waits for it and the trunk says nothing about when it ran.
+      #
+      # `dbus-socket` on top, because the bus is attached to no tier either: what this needs is
+      # the socket answering, rather than the daemon merely being up, which is all the finit
+      # condition it replaces could say.
+      requires = [
+        "basic"
+        "dbus-socket"
+      ];
+
+      type.service = {
+        command = "${lib.getExe' cfg.package "sessiond"} --config ${configFile} --log-target syslog";
+
+        # sessiond speaks sd_notify, which only finit can observe here. Asking for it on a
+        # backend which cannot is refused outright by the contract, so where it cannot be
+        # observed the daemon is taken as ready once spawned - the same bargain mdevd makes.
+        readiness =
+          if lib.elem "notify" config.providers.services.supportedFeatures.readiness then
+            "notify"
+          else
+            "fork";
+      };
+
+      # `cgroup.delegate` is gone with the stanza: it is finit's own cgroup handling, which the
+      # contract does not model and no other implementation would honour.
       environment =
         if cfg.debug then
           {

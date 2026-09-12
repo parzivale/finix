@@ -89,13 +89,81 @@ let
     name:
     if kindOf cfg.units.${name} == "service" then "service/${name}/ready" else "task/${name}/success";
 
+  # finit keeps a service's condition list in a fixed-width field - MAX_COND_LEN in svc.h, 192
+  # bytes - and when the list does not fit it drops the whole thing with a warning rather than
+  # the excess. The ordering then quietly does not exist: the unit starts immediately and
+  # whatever it required is still coming up.
+  #
+  # A trunk level requires the level before it and everything attached to that level, so a tier
+  # of seven units exceeds this on its own - every entry costs `task/<name>-started/success`,
+  # twenty-two characters before the name.
+  #
+  # So a list which does not fit becomes a chain. Each link waits for a few of the conditions
+  # and for the link before it, and the unit waits only for the last - which means the same
+  # thing and fits, however wide the tier. A link is a task running `true` with `remain`, so its
+  # success holds for the rest of the runlevel, exactly as a companion's does.
+  condLimit = 192;
+
+  taskCondition = name: "task/${name}/success";
+
+  fitsCondition = conds: lib.stringLength (lib.concatStringsSep "," conds) <= condLimit;
+
+  linkName = name: i: "${name}-wait${toString i}";
+
+  # greedy: fill a link until the next condition would not fit, then start another
+  chunkConditions =
+    budget: conds:
+    lib.foldl (
+      acc: cond:
+      let
+        candidate = (if acc == [ ] then [ ] else lib.last acc) ++ [ cond ];
+      in
+      if acc != [ ] && lib.stringLength (lib.concatStringsSep "," candidate) <= budget then
+        lib.init acc ++ [ candidate ]
+      else
+        acc ++ [ [ cond ] ]
+    ) [ ] conds;
+
+  chainFor =
+    name: unit:
+    let
+      conds = map conditionOf unit.requires;
+
+      # every link but the first also waits for its predecessor, so the budget leaves room
+      budget = condLimit - (lib.stringLength (taskCondition (linkName name 99)) + 1);
+      chunks = chunkConditions budget conds;
+      last = lib.length chunks - 1;
+    in
+    if fitsCondition conds then
+      {
+        conditions = conds;
+        links = { };
+      }
+    else
+      {
+        conditions = [ (taskCondition (linkName name last)) ];
+
+        links = lib.listToAttrs (
+          lib.imap0 (
+            i: chunk:
+            lib.nameValuePair (linkName name i) {
+              description = "${name} prerequisites, part ${toString (i + 1)} of ${toString (last + 1)}";
+              runlevels = runlevelsFor name unit;
+              command = true';
+              remain = true;
+              conditions = chunk ++ lib.optional (i > 0) (taskCondition (linkName name (i - 1)));
+            }
+          ) chunks
+        );
+      };
+
   common =
     name: unit:
     {
       inherit (unit) description;
 
       runlevels = runlevelsFor name unit;
-      conditions = map conditionOf unit.requires;
+      conditions = (chainFor name unit).conditions;
       environment = unit.environment;
     }
     // lib.optionalAttrs (unit.path != [ ]) { inherit (unit) path; }
@@ -130,7 +198,15 @@ let
     in
     common name unit
     // {
-      inherit (svc) command;
+      # the descriptor is appended here rather than written into the unit, because which one
+      # it is belongs to the supervisor: finit substitutes `%n` for the descriptor it chose.
+      # The unit says only which option its daemon takes to be told.
+      command =
+        svc.command
+        + lib.optionalString (
+          ready == "s6" && svc.readiness.s6.flag != null
+        ) " ${svc.readiness.s6.flag} %n";
+
       notify = notify.${ready};
     }
     # a forking daemon is something finit observes for itself, so it is told rather than
@@ -302,6 +378,10 @@ in
       finit.tasks =
         lib.mapAttrs mkTask (lib.filterAttrs (n: u: !(isService n u)) bootSide)
         // lib.mapAttrs' (name: unit: lib.nameValuePair (companionOf name) (mkCompanion name unit)) bootSide
+
+        # the chain links, for any unit whose condition list finit would otherwise refuse. Most
+        # units have none; a wide trunk level has a few.
+        // lib.foldl (acc: name: acc // (chainFor name bootSide.${name}).links) { } (lib.attrNames bootSide)
         # the tmpfiles.d(5) rules only finit can read. Named apart from the contract's own
         # `tmpfiles-setup` unit, which finit also emits as a stanza - two stanzas of one name
         # is refused by the contract.

@@ -52,6 +52,20 @@ in
   };
 
   config = lib.mkIf cfg.enable {
+    # a session started here takes a seat, and one which cannot is not a working session. Two
+    # modules can provide one - seatd, and elogind, which is logind and so manages seats itself
+    # - so this is a requirement on the pair rather than on either. Ordering after whichever
+    # happened to be enabled, and running seatless when neither was, made it invisible.
+    assertions = [
+      {
+        assertion = config.services.seatd.enable || config.services.elogind.enable;
+        message = ''
+          services.autologin starts a session, which needs a seat manager. Enable
+          services.seatd or services.elogind.
+        '';
+      }
+    ];
+
     security.pam.services.autologin = {
       text = ''
         # Account management.
@@ -95,12 +109,20 @@ in
 
       # the session managers wait on their socket rather than on having forked, so that a
       # compositor started from here finds a seat to take
-      requires =
-        lib.optional config.services.sysklogd.enable "syslogd"
-        ++ lib.optional config.services.sessiond.enable "sessiond"
-        ++ lib.optional config.services.elogind.enable "elogind"
-        ++ lib.optional config.services.seatd.enable "seatd-socket"
-        ++ lib.optional config.services.udev.enable "udev-settle";
+      # `multi-user`, like any other login prompt: a session before the system is up is a
+      # session into a half-built machine.
+      #
+      # The tier supplies almost all of what this used to name one at a time. syslogd and the
+      # device manager's settle are in the head tier; elogind and sessiond attach to `basic`.
+      # Everything here is in the multi-user tier, so it is after all of them.
+      #
+      # seatd's socket is named because it is not in a tier, and the socket answering - rather
+      # than the daemon having forked - is what a compositor needs. elogind needs nothing here:
+      # it attaches to `basic`, so this tier is already after it.
+      requires = [
+        "multi-user"
+      ]
+      ++ lib.optional config.services.seatd.enable "seatd-socket";
     };
   };
 }

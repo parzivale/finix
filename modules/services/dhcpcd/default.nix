@@ -224,9 +224,12 @@ in
         readiness = "fork";
       };
 
-      requires =
-        lib.optional config.services.sysklogd.enable "syslogd"
-        ++ lib.optional config.services.udev.enable "udev-settle";
+      # `basic` puts it in the multi-user tier. Not the basic tier: nothing before multi-user
+      # needs the network, and gating `basic` on a DHCP lease would stall the whole trunk on a
+      # machine with no link. syslogd is in the head tier, so this is already after it.
+      # `basic` puts it in the multi-user tier, which is after the head tier the device
+      # manager settles in - so neither that nor syslogd is named here any more.
+      requires = [ "basic" ];
     };
 
     providers.services.tmpfiles.rules = [

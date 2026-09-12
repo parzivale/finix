@@ -105,6 +105,13 @@ in
         {
           description = "getty on ${device}";
           nowait = true;
+
+          # a tty stanza is finit's own, not a contract unit, so the trunk does not order it -
+          # it starts when its runlevel is entered, which says nothing about which units are
+          # up. The contract lowering below gets this from elogind's tier; here it has to be
+          # named. Stated in this module rather than elogind's, which would have to reach into
+          # finit.ttys from outside and could then only ever say it for finit.
+          conditions = lib.optional config.services.elogind.enable "service/elogind/ready";
         }
         // lib.optionalAttrs (cfg.package != null) {
           command = "${lib.getExe cfg.package} ${lib.escapeShellArgs cfg.extraArgs} ${device}";
@@ -122,7 +129,11 @@ in
           description = "login prompt on ${device}";
           type.service.command = gettyCommand device;
 
-          # late: a login prompt before the system is up is a prompt into a half-built machine
+          # late: a login prompt before the system is up is a prompt into a half-built machine.
+          #
+          # Nothing about the seat manager here: elogind attaches to `basic`, so `multi-user`
+          # already waits for it. A tier is the place to say "after everything of that kind",
+          # and saying it again as an edge would only be a second way to be wrong.
           requires = [ "multi-user" ];
         }
       )

@@ -251,7 +251,16 @@ in
     # backend has to be asked to reproduce.
     providers.services.units.udev-settle = {
       description = "trigger coldplug events and wait for udev to finish";
-      requires = [ "udevd" ];
+
+      # attached to the head of the trunk as well as to udevd, so `sysinit` waits for the
+      # device nodes to be there. Anything in a later tier then has them without naming this -
+      # which is what the optional `udev-settle` edges in other modules were doing.
+      #
+      # It needs no logging of its own: udevadm reports to its supervisor, not to /dev/log.
+      requires = [
+        (lib.head config.providers.services.trunk.levels)
+        "udevd"
+      ];
 
       type.oneshot.command = pkgs.writeShellScript "udev-coldplug" ''
         # udevd is "ready" as soon as it has forked, which is before its control socket

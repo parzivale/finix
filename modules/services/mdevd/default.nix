@@ -120,17 +120,6 @@ let
   # Use * prefix to run via /bin/sh on any action (add/remove).
   devDiskRule = "-SUBSYSTEM=block;.* 0:${gidOf "disk"} 660 *${devDiskScript}";
 
-  # mdevd reports readiness the s6 way: it writes a newline to a descriptor the supervisor
-  # hands it, named by `-D`. Which descriptor that is, is the one thing about this the contract
-  # does not express - finit substitutes `%n` into the command line, and s6 always uses 3 - so
-  # the daemon cannot be described without knowing which implementation is listening.
-  #
-  # dinit and runit cannot observe the protocol at all. There the daemon is taken as ready once
-  # spawned, which is a window: mdevd opens its netlink socket a moment after being forked, and
-  # coldplug triggering events into that window would lose them.
-  observable = lib.elem "s6" config.providers.services.supportedFeatures.readiness;
-  descriptor = if config.providers.services.backend == "finit" then "%n" else "3";
-
   # the rules as a store path, which is what the daemon is pointed at - not
   # `config.environment.etc."mdev.conf".source`, which is the same file reached the long way
   # round and cannot be asked for here.
@@ -227,13 +216,21 @@ in
 
       type.service = {
         command =
-          "${cfg.package}/bin/mdevd"
-          + lib.optionalString observable " -D ${descriptor}"
-          + " -F /run/current-system/firmware -f ${mdevConf}"
+          "${cfg.package}/bin/mdevd -F /run/current-system/firmware -f ${mdevConf}"
           + lib.optionalString (cfg.nlgroups != null) " -O ${toString cfg.nlgroups}"
           + lib.optionalString cfg.debug " -v 3";
 
-        readiness = if observable then "s6" else "fork";
+        # what the daemon can do, best first. The contract takes the best of these the
+        # implementation can observe; `fork` last is what makes that always resolvable.
+        #
+        # `-D` is all this needs to say about the s6 protocol - mdevd(8) takes `-D notif` - and
+        # the implementation appends the descriptor it chose. Which one that is differs between
+        # them and is none of mdevd's business: naming it here would describe a supervisor
+        # rather than a daemon.
+        readiness = [
+          { s6.flag = "-D"; }
+          "fork"
+        ];
       };
 
       # no `path`. The stanza this replaces carried one, with a note about hijacking `env` for
@@ -245,7 +242,14 @@ in
 
     providers.services.units.coldplug = {
       description = "cold plugging system";
-      requires = [ "mdevd" ];
+
+      # attached to the head of the trunk as well as to mdevd, so `sysinit` waits for the
+      # device nodes to be there and later tiers need not name this. mdevd-coldplug reports to
+      # its supervisor, so it wants no logging of its own.
+      requires = [
+        (lib.head config.providers.services.trunk.levels)
+        "mdevd"
+      ];
       type.oneshot.command = "${cfg.package}/bin/mdevd-coldplug" + lib.optionalString cfg.debug " -v 3";
     };
 

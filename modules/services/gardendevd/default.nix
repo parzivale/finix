@@ -21,6 +21,7 @@ let
       (lib.mesonEnable "uaccess" true)
     ];
   });
+
 in
 {
   options.services.gardendevd = {
@@ -148,38 +149,56 @@ in
           done
         '';
 
-    finit.services.gardendevd = {
-      inherit (cfg) path;
-
+    providers.services.units.gardendevd = {
       description = "device event daemon (gardendevd)";
-      command = "${cfg.package}/bin/gardendevd -D %n " + lib.escapeShellArgs cfg.extraArgs;
-      runlevels = "S12345789";
-      cgroup.name = "init";
-      notify = "s6";
-      log = true;
+
+      # the head tier, beside the other device managers, so `sysinit` waits for device events
+      requires = [ (lib.head config.providers.services.trunk.levels) ];
+
+      type.service = {
+        # the PATH goes in a wrapper rather than through the contract's `path`: dinit cannot
+        # give a unit one, and the rules gardendevd runs invoke helpers by name.
+        #
+        # `"$@"` because the implementation appends the readiness descriptor to the command it
+        # is given, and the command it is given is this wrapper - so the wrapper has to pass it
+        # on rather than swallow it.
+        command = pkgs.writeShellScript "gardendevd" ''
+          export PATH=${lib.makeBinPath cfg.path}:$PATH
+          exec ${cfg.package}/bin/gardendevd ${lib.escapeShellArgs cfg.extraArgs} "$@"
+        '';
+
+        # what the daemon can do, best first. The contract takes the best of these the
+        # implementation can observe; `fork` last is what makes that always resolvable.
+        #
+        # `gardendevd --help`: `-D <fd>  Readiness notification file descriptor`. Which
+        # descriptor is the implementation's business, and it appends it.
+        readiness = [
+          { s6.flag = "-D"; }
+          "fork"
+        ];
+      };
     };
 
-    finit.run =
-      let
-        defaults = {
-          runlevels = "S";
-          conditions = "service/gardendevd/ready";
-          log = true;
-          cgroup.name = "init";
+    # the two `run` stanzas become one oneshot. They were ordered against each other by finit
+    # priority, which no other implementation has - and the ordering is the whole point, since
+    # settling before the trigger settles nothing. In one script it is the shell's guarantee,
+    # the same conclusion the shutdown side reached.
+    #
+    # Named `gardendevd-settle`, beside udev's `udev-settle` and mdevd's `coldplug`: attached
+    # to the head tier, so `sysinit` waits for the device nodes to be there.
+    providers.services.units.gardendevd-settle = {
+      description = "trigger device events and wait for gardendevd to settle";
 
-          priority = 1;
-        };
-      in
-      {
-        "gardendevctl@1" = defaults // {
-          description = "requesting device events";
-          command = "${cfg.package}/bin/gardendevctl trigger -c add -t all";
-        };
-        "gardendevctl@2" = defaults // {
-          description = "waiting for gardendevd to settle";
-          command = "${cfg.package}/bin/gardendevctl settle -t 30";
-        };
-      };
+      requires = [
+        (lib.head config.providers.services.trunk.levels)
+        "gardendevd"
+      ];
+
+      type.oneshot.command = pkgs.writeShellScript "gardendevd-settle" ''
+        ${cfg.package}/bin/gardendevctl trigger -c add -t all
+        ${cfg.package}/bin/gardendevctl settle -t 30
+      '';
+    };
 
     # TODO: share between device managers
     system.activation.scripts.gardendevd = lib.mkIf config.boot.kernel.enable {

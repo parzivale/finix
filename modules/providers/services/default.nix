@@ -40,13 +40,14 @@ let
   # a unit's readiness kind, written the way supportedFeatures.readiness names it: the tag,
   # except that a waitFor is qualified by which of its kinds it is, since an implementation may
   # have a mechanism for one and nothing for another.
-  readinessNameOf =
-    unit:
+  readinessKindName =
+    variant:
     let
-      readiness = unit.type.service.readiness;
-      kind = lib.head (lib.attrNames readiness);
+      kind = lib.head (lib.attrNames variant);
     in
-    if kind == "waitFor" then "waitFor.${lib.head (lib.attrNames readiness.waitFor)}" else kind;
+    if kind == "waitFor" then "waitFor.${lib.head (lib.attrNames variant.waitFor)}" else kind;
+
+  readinessNameOf = unit: readinessKindName unit.type.service.readiness;
 
   unsupportedReadiness =
     unit: unit.type ? service && !(lib.elem (readinessNameOf unit) cfg.supportedFeatures.readiness);
@@ -330,10 +331,32 @@ in
                     };
 
                     readiness = lib.mkOption {
-                      default = {
-                        fork = { };
-                      };
-                      defaultText = lib.literalExpression "{ fork = { }; }";
+                      default = [ { fork = { }; } ];
+                      defaultText = lib.literalExpression ''[ "fork" ]'';
+
+                      # what the unit can do, best first; what it gets is the first of those
+                      # the implementation can observe. A single value is accepted and means a
+                      # list of one.
+                      #
+                      # This is why no service module asks what the backend supports. A daemon
+                      # which speaks a protocol says so once - `[ "s6" "fork" ]` - and every
+                      # implementation takes the best of that it can honour. Written as a
+                      # conditional in each module instead, the same sentence was repeated at
+                      # every call site and had to be kept in step with the backends by hand.
+                      #
+                      # Ending the list in `fork` is what makes it always resolvable: every
+                      # implementation observes a process being spawned. A list which does not
+                      # is a unit asking to be refused where its protocol is not available,
+                      # which is sometimes exactly right.
+                      apply =
+                        value:
+                        let
+                          list = if lib.isList value then value else [ value ];
+                          supported = variant: lib.elem (readinessKindName variant) cfg.supportedFeatures.readiness;
+                        in
+                        # the last is returned when nothing matches, so that the assertion
+                        # below has a kind to name rather than this failing anonymously here
+                        if lib.any supported list then lib.findFirst supported null list else lib.last list;
                       description = ''
                         How this unit reports that it has become ready, and so how units
                         requiring it learn they may start.
@@ -356,115 +379,146 @@ in
                         a lie for anything doing real startup work, and is worth reaching for
                         only when nothing appears that could be waited on.
                       '';
-                      type = lib.types.coercedTo lib.types.str (kind: { ${kind} = { }; }) (
-                        lib.types.attrTag {
-                          fork = lib.mkOption {
-                            type = lib.types.submodule { };
-                            description = "Ready as soon as it has been forked.";
-                          };
-                          notify = lib.mkOption {
-                            type = lib.types.submodule { };
-                            description = "Ready on an sd_notify-style READY=1.";
-                          };
-                          s6 = lib.mkOption {
-                            type = lib.types.submodule { };
-                            description = "Ready on an s6-style notification.";
-                          };
-
-                          waitFor = lib.mkOption {
-                            description = ''
-                              Ready once something appears and is live, for a daemon with no
-                              readiness protocol of its own - which is most of them.
-
-                              The tag says what is being waited for, and so what counts as
-                              live. An implementation reaches for a native mechanism where it
-                              has one for that kind, and polls otherwise. This is inference
-                              rather than assertion, which is why it is not `notify` or `s6`.
-                            '';
-
-                            type = lib.types.attrTag {
-                              socket = lib.mkOption {
-                                description = ''
-                                  Ready once connecting to the socket succeeds.
-
-                                  Not merely that the path is there: a unix socket exists from
-                                  `bind`, and `listen` comes afterwards, so a client arriving
-                                  in that window is refused by a socket which demonstrably
-                                  exists.
-                                '';
-                                type = lib.types.submodule {
-                                  options.path = lib.mkOption {
-                                    type = lib.types.str;
-                                    example = "/run/dbus/system_bus_socket";
-                                    description = "The socket this unit binds.";
-                                  };
-                                };
+                      type =
+                        let
+                          kind = lib.types.coercedTo lib.types.str (k: { ${k} = { }; }) (
+                            lib.types.attrTag {
+                              fork = lib.mkOption {
+                                type = lib.types.submodule { };
+                                description = "Ready as soon as it has been forked.";
                               };
-
-                              pidfile = lib.mkOption {
-                                description = ''
-                                  Ready once the file exists and the process it names is alive.
-
-                                  This also says the daemon forks into the background to write
-                                  it, which finit and dinit observe directly. A program which
-                                  stays in the foreground and happens to write a pid file is
-                                  not this - it is `path` - and an implementation waiting for a
-                                  fork which never comes will fail the unit on its start
-                                  timeout.
-                                '';
-                                type = lib.types.submodule {
-                                  options.file = lib.mkOption {
-                                    type = lib.types.str;
-                                    example = "/run/nginx.pid";
-                                    description = "The file the daemon writes its process ID to.";
-                                  };
-                                };
+                              notify = lib.mkOption {
+                                type = lib.types.submodule { };
+                                description = "Ready on an sd_notify-style READY=1.";
                               };
-
-                              path = lib.mkOption {
+                              s6 = lib.mkOption {
                                 description = ''
-                                  Ready once the path exists, which is all that can be known
-                                  about an arbitrary file.
+                                  Ready on an s6-style notification: a newline written to a
+                                  descriptor the supervisor provides.
                                 '';
                                 type = lib.types.submodule {
-                                  options.path = lib.mkOption {
-                                    type = lib.types.str;
-                                    example = "/run/something.ready";
-                                    description = "The path to wait for.";
-                                  };
-                                };
-                              };
+                                  options.flag = lib.mkOption {
+                                    type = with lib.types; nullOr str;
+                                    default = null;
+                                    example = "-D";
+                                    description = ''
+                                      The option this daemon takes to be told which descriptor
+                                      to write to, if it takes one. The implementation appends
+                                      it, followed by the descriptor it chose.
 
-                              check = lib.mkOption {
-                                description = ''
-                                  Ready once this command exits successfully.
+                                      Which descriptor that is belongs to the implementation
+                                      and differs between them - finit substitutes its own
+                                      into the command line, s6 always uses 3 - so a unit
+                                      which named it would be describing a supervisor rather
+                                      than itself, and would have to be kept in step with
+                                      every backend by hand.
 
-                                  The command does the waiting - it is run once, and returning
-                                  is what says the unit is up - so anything whose readiness only
-                                  it can answer belongs here: a database accepting queries, an
-                                  endpoint returning 200. The other kinds are the common cases
-                                  of this one, written out so they need no script.
-
-                                  A command which never returns stalls everything behind the
-                                  unit until {option}`startTimeout`, where the implementation
-                                  can bound it. It is the script's business to give up.
-                                '';
-                                type = lib.types.submodule {
-                                  options.command = lib.mkOption {
-                                    type = program;
-                                    example = lib.literalExpression ''
-                                      pkgs.writeShellScript "pg-ready" '''
-                                        until pg_isready -q; do sleep 0.1; done
-                                      '''
+                                      `null` for a daemon which takes the descriptor some
+                                      other way, or which has it fixed.
                                     '';
-                                    description = "The command whose successful exit means ready.";
                                   };
                                 };
                               };
-                            };
-                          };
-                        }
-                      );
+
+                              waitFor = lib.mkOption {
+                                description = ''
+                                  Ready once something appears and is live, for a daemon with no
+                                  readiness protocol of its own - which is most of them.
+
+                                  The tag says what is being waited for, and so what counts as
+                                  live. An implementation reaches for a native mechanism where it
+                                  has one for that kind, and polls otherwise. This is inference
+                                  rather than assertion, which is why it is not `notify` or `s6`.
+                                '';
+
+                                type = lib.types.attrTag {
+                                  socket = lib.mkOption {
+                                    description = ''
+                                      Ready once connecting to the socket succeeds.
+
+                                      Not merely that the path is there: a unix socket exists from
+                                      `bind`, and `listen` comes afterwards, so a client arriving
+                                      in that window is refused by a socket which demonstrably
+                                      exists.
+                                    '';
+                                    type = lib.types.submodule {
+                                      options.path = lib.mkOption {
+                                        type = lib.types.str;
+                                        example = "/run/dbus/system_bus_socket";
+                                        description = "The socket this unit binds.";
+                                      };
+                                    };
+                                  };
+
+                                  pidfile = lib.mkOption {
+                                    description = ''
+                                      Ready once the file exists and the process it names is alive.
+
+                                      This also says the daemon forks into the background to write
+                                      it, which finit and dinit observe directly. A program which
+                                      stays in the foreground and happens to write a pid file is
+                                      not this - it is `path` - and an implementation waiting for a
+                                      fork which never comes will fail the unit on its start
+                                      timeout.
+                                    '';
+                                    type = lib.types.submodule {
+                                      options.file = lib.mkOption {
+                                        type = lib.types.str;
+                                        example = "/run/nginx.pid";
+                                        description = "The file the daemon writes its process ID to.";
+                                      };
+                                    };
+                                  };
+
+                                  path = lib.mkOption {
+                                    description = ''
+                                      Ready once the path exists, which is all that can be known
+                                      about an arbitrary file.
+                                    '';
+                                    type = lib.types.submodule {
+                                      options.path = lib.mkOption {
+                                        type = lib.types.str;
+                                        example = "/run/something.ready";
+                                        description = "The path to wait for.";
+                                      };
+                                    };
+                                  };
+
+                                  check = lib.mkOption {
+                                    description = ''
+                                      Ready once this command exits successfully.
+
+                                      The command does the waiting - it is run once, and returning
+                                      is what says the unit is up - so anything whose readiness only
+                                      it can answer belongs here: a database accepting queries, an
+                                      endpoint returning 200. The other kinds are the common cases
+                                      of this one, written out so they need no script.
+
+                                      A command which never returns stalls everything behind the
+                                      unit until {option}`startTimeout`, where the implementation
+                                      can bound it. It is the script's business to give up.
+                                    '';
+                                    type = lib.types.submodule {
+                                      options.command = lib.mkOption {
+                                        type = program;
+                                        example = lib.literalExpression ''
+                                          pkgs.writeShellScript "pg-ready" '''
+                                            until pg_isready -q; do sleep 0.1; done
+                                          '''
+                                        '';
+                                        description = "The command whose successful exit means ready.";
+                                      };
+                                    };
+                                  };
+                                };
+                              };
+                            }
+                          );
+                        in
+                        # `either` rather than a coercion: a coercedTo may not take a type with
+                        # submodules as its source, and every variant here is one. The apply
+                        # below takes both shapes, so a single kind still means a list of one.
+                        lib.types.either kind (lib.types.listOf kind);
                     };
                   in
                   lib.types.coercedTo lib.types.str (kind: { ${kind} = { }; }) (

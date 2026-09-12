@@ -59,7 +59,11 @@ in
       # no runlevels: the trunk has no notion of a level a service is simply not considered
       # on, which is what `runlevels = "34"` meant here - and on a machine booting to 2 it
       # meant seatd never started, reported as "halted" rather than as anything being wrong.
-      requires = lib.optional config.services.sysklogd.enable "syslogd";
+      #
+      # `sysinit` puts it in the basic tier, so a seat exists before `basic` is reached and so
+      # before anything attached to it. syslogd is no longer named: it is in the head tier, and
+      # everything later is after it by the trunk rather than by each module saying so.
+      requires = [ "sysinit" ];
     };
 
     # seatd has forked before its socket exists, and a compositor which connects in that

@@ -289,7 +289,10 @@ in
 
       environment.CURL_CA_BUNDLE = config.security.pki.caBundle;
 
-      requires = lib.optional config.services.sysklogd.enable "syslogd";
+      # `basic` puts it in the multi-user tier: nothing earlier needs to build anything, and
+      # gating the basic tier on the daemon would hold the trunk for something no other
+      # service waits on. syslogd is in the head tier, so this is already after it.
+      requires = [ "basic" ];
     };
 
     # the socket the daemon listens on has to exist before a client looks for it, and a client

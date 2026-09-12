@@ -153,7 +153,12 @@ in
 
       environment = lib.optionalAttrs cfg.debug { DBUS_VERBOSE = "1"; };
 
-      requires = lib.optional config.services.sysklogd.enable "syslogd";
+      # attached to `sysinit`, so the bus is up in the basic tier - before `basic` is reached
+      # and so before anything attached to it, elogind and sessiond among them.
+      #
+      # syslogd is no longer named: it attaches to the head of the trunk, so everything in a
+      # later tier is after it by the trunk rather than by each module saying so.
+      requires = [ "sysinit" ];
     };
 
     # the bus has forked before it is listening, and a client which connects first simply

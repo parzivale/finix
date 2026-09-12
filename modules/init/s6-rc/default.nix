@@ -117,7 +117,16 @@ let
         ''
       }exec ${
         lib.optionalString (unit.user != null) "${lib.getExe' pkgs.s6 "s6-setuidgid"} ${unit.user} "
-      }${commandOf unit}
+      }${commandOf unit}${
+        # the descriptor is appended here rather than written into the unit: s6 always uses 3,
+        # finit substitutes its own, and which it is belongs to the supervisor. The unit says
+        # only which option its daemon takes to be told.
+        # guarded on the kind: this script is a oneshot's `up` as well as a longrun's `run`,
+        # and only a service has readiness at all
+        lib.optionalString (
+          kindOf unit == "service" && readinessOf unit == "s6" && (variantOf unit).readiness.s6.flag != null
+        ) " ${(variantOf unit).readiness.s6.flag} 3"
+      }
     '';
 
   # one directory per unit, in the source layout s6-rc-compile expects

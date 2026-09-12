@@ -84,16 +84,20 @@ in
         readiness = "fork";
       };
 
-      # the device manager first where there is one: /dev/log has to exist before anything can
-      # log to it, and on a machine with no device nodes yet there is nothing to listen on.
-      # udev is the only device manager with a contract unit to wait for. mdevd still emits
-      # finit stanzas, so on that path there is nothing here to require - /dev/log comes from
-      # the kernel either way, and what the device manager adds is everything else.
-      requires =
-        if config.services.udev.enable then
-          [ "udev-settle" ]
-        else
-          [ (lib.head config.providers.services.trunk.levels) ];
+      # attached to the head of the trunk, so logging is up before `sysinit` is reached and
+      # everything in a later tier can log. Nothing else should have to name syslogd to get
+      # that, which is what the optional `requires = [ "syslogd" ]` scattered through the other
+      # service modules is working around.
+      #
+      # The device manager comes first where there is one: /dev/log has to exist before
+      # anything can log to it, and on a machine with no device nodes yet there is nothing to
+      # listen on. Both managers have a unit which means "the device nodes are there" - udev's
+      # settle, mdevd's coldplug - and neither is attached to a tier, so both are named.
+      requires = [
+        (lib.head config.providers.services.trunk.levels)
+      ]
+      ++ lib.optional config.services.udev.enable "udev-settle"
+      ++ lib.optional config.services.mdevd.enable "coldplug";
     };
 
     environment.etc."syslog.d/nixos.conf".text = cfg.extraConfig;

@@ -103,15 +103,28 @@ in
           done
         '';
 
-    finit.services.keventd = {
-      inherit (cfg) path;
-
+    providers.services.units.keventd = {
       description = "device event daemon (keventd)";
-      command = "${config.finit.package}/libexec/finit/keventd " + lib.escapeShellArgs cfg.extraArgs;
-      runlevels = "S12345789";
-      cgroup.name = "init";
-      notify = "pid";
-      log = true;
+
+      # a device manager belongs in the head tier, beside udev and mdevd: `sysinit` then waits
+      # for it, and everything in a later tier has device events without asking.
+      requires = [ (lib.head config.providers.services.trunk.levels) ];
+
+      type.service = {
+        # the PATH is set in a wrapper rather than through the contract's `path`, because dinit
+        # cannot give a unit one - and keventd needs it, since the udev rules it runs invoke
+        # helpers by name. A unit which relies on a capability one backend lacks works there
+        # and quietly does not here; a wrapper works everywhere.
+        command = pkgs.writeShellScript "keventd" ''
+          export PATH=${lib.makeBinPath cfg.path}:$PATH
+          exec ${config.finit.package}/libexec/finit/keventd ${lib.escapeShellArgs cfg.extraArgs}
+        '';
+
+        # `notify = "pid"` is gone with the stanza: it asked finit to manage a pid file on the
+        # daemon's behalf, which says nothing about readiness and has no equivalent elsewhere.
+        # The process running is what any backend can observe, which is `fork`.
+        readiness = "fork";
+      };
     };
 
     # TODO: add finit.services.reloadTriggers option
