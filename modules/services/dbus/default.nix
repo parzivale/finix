@@ -140,15 +140,28 @@ in
     providers.services.units.dbus = {
       description = "d-bus message bus daemon";
 
-      # `notify = "systemd"` is gone - sd_notify readiness is something only finit and systemd
-      # observe here. The machine-id generation that was finit's `pre` moves into the command,
-      # which needs nothing from the implementation at all.
+      # the machine-id generation that was finit's `pre` moves into the command, which needs
+      # nothing from the implementation at all.
       type.service = {
         command = pkgs.writeShellScript "dbus-daemon" ''
           ${cfg.package}/bin/dbus-uuidgen --ensure
           exec ${cfg.package}/bin/dbus-daemon --nofork --system --syslog-only
         '';
-        readiness = "fork";
+
+        # the bus is running well before it is listening, and a client which connects in
+        # between simply fails - so neither kind here is `fork`, which would call it ready at
+        # the first of those moments rather than the second.
+        #
+        # `notify` first, which is what this module said before the port: dbus-daemon speaks
+        # sd_notify and sends READY=1 once it is listening, and finit observes that directly.
+        # Dropping it for a `waitFor` everywhere would have thrown away a better answer on the
+        # one implementation that can hear it - which is the mistake the list exists to
+        # prevent. Where it cannot be heard the socket says the same thing, a moment later and
+        # by inference.
+        readiness = [
+          "notify"
+          { waitFor.socket.path = "/run/dbus/system_bus_socket"; }
+        ];
       };
 
       environment = lib.optionalAttrs cfg.debug { DBUS_VERBOSE = "1"; };
@@ -156,36 +169,7 @@ in
       # the head tier, beside logging and the device managers. The bus is infrastructure in the
       # same sense they are: the seat and session managers want it, and everything above them
       # wants those - so putting it any later means every one of them naming it.
-      #
-      # Its socket gate is in this tier too, and must be: the gate waits for the daemon, so a
-      # gate one tier earlier than what it waits for is a cycle through the level between them.
       requires = [ (lib.head config.providers.services.trunk.levels) ];
-    };
-
-    # the bus has forked before it is listening, and a client which connects first simply
-    # fails. Anything needing the system bus requires this.
-    providers.services.units.dbus-socket = {
-      description = "wait for the system bus socket";
-
-      # in the same tier as the bus itself, so that everything in a later tier has a bus which
-      # answers without naming this. A gate which is in no tier is one every consumer has to
-      # name, which is how eight modules came to.
-      requires = [
-        (lib.head config.providers.services.trunk.levels)
-        "dbus"
-      ];
-
-      type.oneshot.command = pkgs.writeShellScript "dbus-wait" ''
-        for _ in $(${lib.getExe' pkgs.coreutils "seq"} 1 100); do
-          if [ -S /run/dbus/system_bus_socket ]; then
-            exit 0
-          fi
-          ${lib.getExe' pkgs.coreutils "sleep"} 0.1
-        done
-
-        echo "dbus-socket: /run/dbus/system_bus_socket never appeared" >&2
-        exit 1
-      '';
     };
   };
 }

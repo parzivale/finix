@@ -67,9 +67,10 @@ in
   # finit the ordering quietly did not exist.
 
   config = lib.mkIf cfg.enable {
-    # `service/dbus/ready` is gone with the stanza: dbus is a contract unit, and what this
-    # actually needed was not the daemon being up but its socket answering - which is what
-    # `dbus-socket` waits for. The finit condition could only ever say the former.
+    # `service/dbus/ready` is gone with the stanza: what this actually needed was not the bus
+    # daemon being up but its socket answering, and the finit condition could only say the
+    # former. The bus unit says the latter itself now - it is not ready until the socket is
+    # there - so being in a later tier than it is the whole of what this needs.
     providers.services.units.elogind = {
       description = "login manager";
 

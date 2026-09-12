@@ -48,12 +48,21 @@ in
       description = "seat management daemon";
 
       type.service = {
-        # `-n %n` is gone: that was seatd notifying finit over a descriptor finit picked, and
-        # only finit and s6 can observe that kind of readiness. Ready-on-fork plus the wait
-        # below says the same thing in a way every backend can express.
         command =
           "${pkgs.seatd.bin}/bin/seatd -u root -g ${cfg.group}" + lib.optionalString cfg.debug " -l debug";
-        readiness = "fork";
+
+        # best first. `-n <fd>` is seatd writing a newline to a descriptor the supervisor
+        # chose, which is the s6 protocol - finit and s6-rc observe it directly, and the flag
+        # is all they need to be told. dinit and runit cannot, and fall to the socket, which
+        # is the thing a compositor actually waits for anyway.
+        #
+        # Neither needs a unit. This replaces a `seatd-socket` gate whose body was a loop
+        # waiting for that same path - written out because the contract had no way to say it
+        # at the time, and it has had one since.
+        readiness = [
+          { s6.flag = "-n"; }
+          { waitFor.socket.path = "/run/seatd.sock"; }
+        ];
       };
 
       # no runlevels: the trunk has no notion of a level a service is simply not considered
@@ -66,30 +75,5 @@ in
       requires = [ "sysinit" ];
     };
 
-    # seatd has forked before its socket exists, and a compositor which connects in that
-    # window fails to take a seat. Anything needing seatd requires this instead.
-    providers.services.units.seatd-socket = {
-      description = "wait for the seat management socket";
-
-      # in the same tier as seatd, so anything later has a socket which answers without naming
-      # this - and it must be the same tier, since a gate earlier than what it waits for is a
-      # cycle through the level between them.
-      requires = [
-        "sysinit"
-        "seatd"
-      ];
-
-      type.oneshot.command = pkgs.writeShellScript "seatd-wait" ''
-        for _ in $(${lib.getExe' pkgs.coreutils "seq"} 1 100); do
-          if [ -S /run/seatd.sock ]; then
-            exit 0
-          fi
-          ${lib.getExe' pkgs.coreutils "sleep"} 0.1
-        done
-
-        echo "seatd-socket: /run/seatd.sock never appeared" >&2
-        exit 1
-      '';
-    };
   };
 }
