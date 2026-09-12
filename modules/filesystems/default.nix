@@ -163,6 +163,7 @@ in
     ./luks.nix
     ./lvm.nix
     ./ntfs3.nix
+    ./overlay.nix
     ./special.nix
     ./squashfs.nix
     ./tmpfs.nix

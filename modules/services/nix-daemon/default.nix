@@ -279,35 +279,82 @@ in
   config = lib.mkIf cfg.enable {
     environment.etc."nix/nix.conf".source = configFile;
 
-    finit.services.nix-daemon = {
+    providers.services.units.nix-daemon = {
       description = "nix daemon";
-      conditions = "service/syslogd/ready";
-      command = "${cfg.package}/bin/nix-daemon --daemon";
-      nohup = true;
+
+      type.service = {
+        command = "${cfg.package}/bin/nix-daemon --daemon";
+        readiness = "fork";
+      };
 
       environment.CURL_CA_BUNDLE = config.security.pki.caBundle;
 
-      # https://github.com/NixOS/nix/blob/81884c36a381737a438ddc5decb658446074d064/misc/systemd/nix-daemon.service.in#L12-L13
-      cgroup.settings."pids.max" = 1048576;
-      rlimits.nofile = 1048576;
+      requires = lib.optional config.services.sysklogd.enable "syslogd";
+    };
+
+    # the socket the daemon listens on has to exist before a client looks for it, and a client
+    # which does not find it reports "cannot connect to socket ... No such file or directory"
+    # rather than anything about the daemon
+    providers.services.units.nix-daemon-socket = {
+      description = "wait for the nix daemon socket";
+      requires = [ "nix-daemon" ];
+
+      type.oneshot.command = pkgs.writeShellScript "nix-daemon-wait" ''
+        for _ in $(${lib.getExe' pkgs.coreutils "seq"} 1 100); do
+          if [ -S /nix/var/nix/daemon-socket/socket ]; then
+            exit 0
+          fi
+          ${lib.getExe' pkgs.coreutils "sleep"} 0.1
+        done
+
+        echo "nix-daemon-socket: the daemon never started listening" >&2
+        exit 1
+      '';
     };
 
     environment.systemPackages = [
       cfg.package
     ];
 
-    finit.tmpfiles.rules = [
-      "d /nix/var/nix/daemon-socket 0755 root root - -"
+    # moved with the unit: left as finit.tmpfiles.rules these would not exist on any other
+    # backend, and the daemon would start with nowhere to put its socket
+    providers.services.tmpfiles.rules = [
+      {
+        type = "directory";
+        path = "/nix/var";
+        mode = "0755";
+      }
+      {
+        type = "directory";
+        path = "/nix/var/nix/daemon-socket";
+        mode = "0755";
+      }
+      {
+        type = "directory";
+        path = "/nix/var/nix/gcroots";
+      }
+      {
+        type = "remove";
+        path = "/nix/var/nix/gcroots/tmp";
+        recursive = true;
+      }
+      {
+        type = "remove";
+        path = "/nix/var/nix/temproots";
+        recursive = true;
+      }
 
-      "R! /nix/var/nix/gcroots/tmp           -    -    -    - -"
-      "R! /nix/var/nix/temproots             -    -    -    - -"
-
-      "d  /nix/var                           0755 root root - -"
-      "L+ /nix/var/nix/gcroots/booted-system 0755 root root - /run/booted-system"
-
-      # Prevent the current configuration from being garbage-collected.
-      "d /nix/var/nix/gcroots -"
-      "L+ /nix/var/nix/gcroots/current-system - - - - /run/current-system"
+      # so the running and booted systems are not garbage-collected out from under the machine
+      {
+        type = "symlink";
+        path = "/nix/var/nix/gcroots/booted-system";
+        argument = "/run/booted-system";
+      }
+      {
+        type = "symlink";
+        path = "/nix/var/nix/gcroots/current-system";
+        argument = "/run/current-system";
+      }
     ];
 
     users.users = lib.listToAttrs (

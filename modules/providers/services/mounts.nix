@@ -5,7 +5,7 @@
 # selected. So each of them had grown its own answer, or no answer:
 #
 #   finit   reads /etc/fstab natively, as part of being finit
-#   dinit   a bespoke `mount -a` service in modules/dinit
+#   dinit   a bespoke `mount -a` service in modules/init/dinit
 #   runit   nothing
 #   s6      nothing
 #
@@ -48,7 +48,7 @@ in
 
       # the head of the trunk, so that everything attached to any later level is behind the
       # filesystems it is going to want
-      requires = lib.optional cfg.trunk.enable (lib.head cfg.trunk.levels);
+      requires = [ (lib.head cfg.trunk.levels) ];
     };
   };
 }

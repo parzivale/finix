@@ -79,18 +79,28 @@ in
     # autologin is hardcoded to run on tty1
     finit.ttys.tty1.enable = lib.mkForce false;
 
-    finit.services.autologin = {
-      command = "${lib.getExe pkgs.autologin} ${cfg.user} ${cfg.command}";
-      conditions = [
-        "service/syslogd/ready"
-      ]
-      ++ lib.optionals config.services.sessiond.enable [ "service/sessiond/ready" ]
-      ++ lib.optionals config.services.elogind.enable [ "service/elogind/ready" ]
-      ++ lib.optionals config.services.seatd.enable [ "service/seatd/ready" ];
-      log = true;
-      nohup = true;
-      cgroup.name = "user";
-      tty = lib.mkForce "/dev/tty1";
+    providers.services.units.autologin = {
+      description = "autologin";
+
+      # finit's `tty` gave this a controlling terminal; the contract has no notion of one,
+      # because three of the four implementations have no notion of one either. So the unit
+      # takes tty1 for itself - which is what finit was arranging on its behalf.
+      type.service = {
+        command = pkgs.writeShellScript "autologin-tty1" ''
+          exec </dev/tty1 >/dev/tty1 2>&1
+          exec ${lib.getExe pkgs.autologin} ${cfg.user} ${cfg.command}
+        '';
+        readiness = "fork";
+      };
+
+      # the session managers wait on their socket rather than on having forked, so that a
+      # compositor started from here finds a seat to take
+      requires =
+        lib.optional config.services.sysklogd.enable "syslogd"
+        ++ lib.optional config.services.sessiond.enable "sessiond"
+        ++ lib.optional config.services.elogind.enable "elogind"
+        ++ lib.optional config.services.seatd.enable "seatd-socket"
+        ++ lib.optional config.services.udev.enable "udev-settle";
     };
   };
 }

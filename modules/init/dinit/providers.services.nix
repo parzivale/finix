@@ -8,26 +8,53 @@ let
   cfg = config.providers.services;
   trunk = cfg.trunk;
 
-  # dinit's own vocabulary is close enough to the contract that the boot side needs no
-  # emulation at all. `internal` is a process-less unit, so an anchor is one directly.
   # `depends-ms` is a milestone dependency - the named service must start successfully once,
   # and may stop afterwards without affecting this one - which is exactly an edge that gates
-  # starting and nothing else. the finit backend has to fake both.
+  # starting and nothing else. the finit backend has to fake it.
+  #
+  # An anchor is a scripted unit running `true` rather than dinit.s own process-less
+  # `internal`, which it could use. An anchor means the same thing on every backend and there
+  # is no reason for it to behave differently on this one: `internal` has its own rules about
+  # stopping and restarting, and a trunk level built out of it would not be the same object as
+  # the trunk level next door. The cost is one `true` per level, at the moment it is reached.
   type = {
-    anchor = "internal";
+    anchor = "scripted";
     oneshot = "scripted";
-    service = {
-      fork = "process";
-      pidfile = "bgprocess";
-    };
   };
 
   kindOf = unit: lib.head (lib.attrNames unit.type);
   variantOf = unit: unit.type.${kindOf unit};
   readinessOf = unit: lib.head (lib.attrNames (variantOf unit).readiness);
 
+  readinessLib = import ../../providers/services/readiness.nix { inherit pkgs lib; };
+
+  waitKindOf =
+    unit:
+    if kindOf unit == "service" && readinessOf unit == "waitFor" then
+      lib.head (lib.attrNames (variantOf unit).readiness.waitFor)
+    else
+      null;
+
+  # dinit observes a forking daemon itself, through bgprocess and the pid file it names. The
+  # other waitFor kinds it cannot observe at all - there is no "ready when this socket answers"
+  # in its vocabulary - so those get a scripted unit alongside which does the waiting, and the
+  # edges into them are pointed at that instead. Same shape as finit's companion, except finit
+  # already had one for every unit and this is only made where it is needed.
+  needsWaitUnit = unit: waitKindOf unit != null && waitKindOf unit != "pidfile";
+  waitNameOf = name: "${name}-ready";
+
+  # an edge naming a unit which has a wait unit means the wait, not the service: the service is
+  # up as soon as it is running, which is the thing the wait exists because it is not enough.
+  edgeTo = dep: if (enabled ? ${dep}) && needsWaitUnit enabled.${dep} then waitNameOf dep else dep;
+
   typeOf =
-    unit: if kindOf unit == "service" then type.service.${readinessOf unit} else type.${kindOf unit};
+    unit:
+    if kindOf unit != "service" then
+      type.${kindOf unit}
+    else if waitKindOf unit == "pidfile" then
+      "bgprocess"
+    else
+      "process";
 
   commandOf = unit: (variantOf unit).command or null;
 
@@ -35,7 +62,7 @@ let
     name:
     lib.findFirst (i: i != null) null (lib.imap0 (i: l: if l == name then i else null) trunk.levels);
 
-  latchIndex = if trunk.enable then indexOf trunk.latch else null;
+  latchIndex = indexOf trunk.latch;
 
   levelFor =
     name: unit:
@@ -99,7 +126,7 @@ let
     name: unit:
     {
       type = typeOf unit;
-      depends-ms = unit.requires;
+      depends-ms = map edgeTo unit.requires;
 
       # pulled in through `default` (waits-for) rather than `boot` (depends-on), so that a
       # unit which nothing else requires is still started without becoming a hard dependency
@@ -109,10 +136,15 @@ let
       default = true;
     }
     // lib.optionalAttrs (commandOf unit != null) { command = commandOf unit; }
+
+    # an anchor has no command of its own, and a scripted unit without one is not a unit. The
+    # `true` is the whole of it: reached, therefore started.
+    // lib.optionalAttrs (kindOf unit == "anchor") { command = true'; }
+
     // lib.optionalAttrs (unit.user != null) { run-as = unit.user; }
     // lib.optionalAttrs (unit.environment != { }) { environment = unit.environment; }
-    // lib.optionalAttrs (kindOf unit == "service" && readinessOf unit == "pidfile") {
-      pid-file = (variantOf unit).readiness.pidfile.file;
+    // lib.optionalAttrs (waitKindOf unit == "pidfile") {
+      pid-file = (variantOf unit).readiness.waitFor.pidfile.file;
     }
     // lib.optionalAttrs (unit.startTimeout != null) { start-timeout = unit.startTimeout; }
     // lib.optionalAttrs (unit.stopTimeout != null) { stop-timeout = unit.stopTimeout; }
@@ -211,18 +243,12 @@ in
         startTimeout = true;
         stopTimeout = true;
 
-        # both native: `internal` services and `depends-ms` respectively
-        nativeAnchors = true;
-        nativeStartOnlyEdges = true;
-
         # dinit does have a readiness protocol, through `readiness-notification`, but this
-        # backend does not use it yet - so `notify` and `s6` are refused rather than mapped
-        # onto a plain `process`, which would call a unit ready the moment it was spawned and
-        # start everything behind it too early.
-        readiness = [
-          "fork"
-          "pidfile"
-        ];
+        # backend does not use it yet - so both are refused rather than mapped onto a plain
+        # `process`, which would call a unit ready the moment it was spawned and start
+        # everything behind it too early. Every waitFor kind is available: `pidfile` through
+        # bgprocess, the rest through a wait unit.
+        readiness = [ ];
 
         user = true;
 
@@ -251,9 +277,32 @@ in
         exec ${config.dinit.package}/bin/dinit -p /run/dinitctl -d /etc/dinit.d boot
       '';
 
+      # dinit ships all three, and they reach it over the control socket - /run/dinitctl, which
+      # is both dinit's own default and what initExecutable above asks for, so they need no
+      # argument to find it.
+      providers.services.shutdownCommands = {
+        poweroff = "${config.dinit.package}/bin/poweroff";
+        reboot = "${config.dinit.package}/bin/reboot";
+        halt = "${config.dinit.package}/bin/halt";
+      };
+
       dinit.services =
         lib.mapAttrs mkBootSide (lib.filterAttrs (n: u: !(onShutdownSide n u)) enabled)
-        // lib.listToAttrs (map (unit: lib.nameValuePair unit.name (mkShutdownSide unit)) shutdownOrdered);
+        // lib.listToAttrs (map (unit: lib.nameValuePair unit.name (mkShutdownSide unit)) shutdownOrdered)
+
+        # one per unit whose readiness dinit cannot observe: a scripted unit which blocks until
+        # the thing is live and then completes, which is dinit's own way of saying "started".
+        # Edges into the service were pointed here by edgeTo.
+        // lib.mapAttrs' (
+          name: unit:
+          lib.nameValuePair (waitNameOf name) {
+            description = "${name} is ready";
+            type = "scripted";
+            command = readinessLib.scriptFor name (variantOf unit).readiness;
+            depends-ms = [ name ];
+            default = true;
+          }
+        ) (lib.filterAttrs (n: u: !(onShutdownSide n u) && needsWaitUnit u) enabled);
 
       # dinit's service files are a strict key/value format with no room for opaque metadata, so
       # each unit's fingerprint is written beside them instead. `list` reads them back.

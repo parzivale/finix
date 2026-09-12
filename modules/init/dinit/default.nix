@@ -15,7 +15,7 @@ let
 
   # the reconciler which used to live here - enumerate, diff, rm-dep/stop/unload, reload
   # changed, start new - is now providers.services.switch, which does the same work for every
-  # implementation rather than only this one. see modules/dinit/providers.services.nix for the
+  # implementation rather than only this one. see modules/init/dinit/providers.services.nix for the
   # three operations this module supplies to it.
 in
 {

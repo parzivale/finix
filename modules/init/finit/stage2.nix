@@ -9,7 +9,7 @@ let
   format = pkgs.formats.keyValue { };
 
   # finix-setup plugin for early boot initialization
-  finix-setup = pkgs.callPackage ../../pkgs/finix-setup {
+  finix-setup = pkgs.callPackage ../../../pkgs/finix-setup {
     extraPackages = lib.unique (
       lib.flatten (
         lib.concatMap (v: lib.optional v.enable (v.packages or [ ])) (

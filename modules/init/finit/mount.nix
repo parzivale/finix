@@ -105,7 +105,34 @@ in
           command =
             let
               targetRoot = "/sysroot";
-              opts = lib.concatStringsSep "," (fs.options ++ [ "X-mount.mkdir" ]);
+
+              # an overlay names its layers as directories, and the kernel resolves them when
+              # the mount happens - which here is in the initrd, where the real root is still
+              # under /sysroot. Left as written they resolve against the initrd's own root and
+              # the mount fails with "overlayfs: failed to resolve '...': -2". The mount keeps
+              # working across switch_root, because what it holds is the directories rather
+              # than the paths they were named by.
+              rebase =
+                opt:
+                let
+                  parts = lib.splitString "=" opt;
+                  key = lib.head parts;
+                  value = lib.concatStringsSep "=" (lib.tail parts);
+                in
+                if
+                  fs.fsType == "overlay"
+                  && lib.elem key [
+                    "lowerdir"
+                    "upperdir"
+                    "workdir"
+                  ]
+                then
+                  # lowerdir takes a colon-separated list
+                  "${key}=${lib.concatMapStringsSep ":" (dir: "${targetRoot}${dir}") (lib.splitString ":" value)}"
+                else
+                  opt;
+
+              opts = lib.concatStringsSep "," (map rebase fs.options ++ [ "X-mount.mkdir" ]);
             in
             if isBind fs then
               "mount -o ${opts} ${targetRoot}${fs.device} ${targetRoot}${fs.mountPoint}"

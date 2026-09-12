@@ -1,3 +1,21 @@
+# the trunk: a chain of process-less units which every other unit can rely on being present,
+# and which stands in for the runlevels of a traditional init system.
+#
+# A level is somewhere to attach, not a barrier. It gives a unit with no natural predecessor a
+# place in the tree, and it orders the tiers coarsely - units attached to one level start once
+# the units attached to the previous level are up. It does not promise that any particular
+# subsystem is working, because a level only waits for the units which named it, not for
+# whatever chains off those units. Anything which genuinely needs a subsystem must require that
+# subsystem's unit directly.
+#
+# Units attach by requiring exactly one level, and never by being named from the trunk, so the
+# chain's shape is fixed here and cannot drift as modules accumulate.
+#
+# There is no `enable`. The trunk is the contract's only ordering mechanism - without it every
+# unit starts at once and the shutdown side has nothing to hang on - so a machine without one
+# is not a machine anybody wants. It was optional, and every module which emitted a unit had to
+# ask whether ordering existed before it could attach to anything, which is not a question a
+# module should be able to ask.
 {
   config,
   lib,
@@ -22,7 +40,15 @@ let
   dependants =
     level:
     lib.attrNames (
-      lib.filterAttrs (name: unit: !(lib.elem name cfg.levels) && lib.elem level unit.requires) units
+      lib.filterAttrs (
+        name: unit:
+        # `enable` first: a disabled unit is not emitted by any backend, so a level which
+        # requires it waits for something that will never start. Nothing catches that - the
+        # unit is present in `units`, merely turned off, so the dangling-edge assertion is
+        # satisfied and the machine simply stops partway up. It shows up on a switch which
+        # disables a unit: the level around it is torn down and then cannot come back.
+        unit.enable && !(lib.elem name cfg.levels) && lib.elem level unit.requires
+      ) units
     );
 
   mkLevel =
@@ -42,26 +68,6 @@ let
 in
 {
   options.providers.services.trunk = {
-    enable = lib.mkOption {
-      type = lib.types.bool;
-      default = false;
-      description = ''
-        Whether to define the trunk: a chain of process-less units which every other unit can
-        rely on being present, and which stands in for the runlevels of a traditional init
-        system.
-
-        A level is somewhere to attach, not a barrier. It gives a unit with no natural
-        predecessor a place in the tree, and it orders the tiers coarsely - units attached to
-        one level start once the units attached to the previous level are up. It does not
-        promise that any particular subsystem is working, because a level only waits for the
-        units which named it, not for whatever chains off those units. Anything which genuinely
-        needs a subsystem must require that subsystem's unit directly.
-
-        Units attach by requiring exactly one level, and never by being named from the trunk,
-        so the chain's shape is fixed here and cannot drift as modules accumulate.
-      '';
-    };
-
     levels = lib.mkOption {
       type = with lib.types; listOf str;
       default = [
@@ -109,7 +115,7 @@ in
     };
   };
 
-  config = lib.mkIf cfg.enable {
+  config = {
     providers.services.units = lib.listToAttrs (
       lib.imap0 (i: level: lib.nameValuePair level (mkLevel i level)) cfg.levels
     );

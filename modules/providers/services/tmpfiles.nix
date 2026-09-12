@@ -140,6 +140,9 @@ let
       # to expand. An unmatched glob stays literal, which the existence check then discards -
       # so a pattern matching nothing does nothing rather than failing the unit.
       remove = ''
+        # SC2043: the loop is how a glob is handled, and a path with no glob in it is simply
+        # the one-iteration case rather than a mistake
+        # shellcheck disable=SC2043
         for candidate in ${rule.path}; do
           if [ -e "$candidate" ]; then
             rm -${lib.optionalString rule.recursive "r"}f -- "$candidate"
@@ -200,7 +203,7 @@ in
 
       # the earliest point in the trunk, so that every level after it - and so everything
       # attached to any of them - is behind the files it puts in place
-      requires = lib.optional cfg.trunk.enable (lib.head cfg.trunk.levels);
+      requires = [ (lib.head cfg.trunk.levels) ];
     };
   };
 }

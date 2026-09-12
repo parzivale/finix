@@ -210,19 +210,37 @@ in
       debug = cfg.debug;
     };
 
-    finit.services.dhcpcd = {
+    providers.services.units.dhcpcd = {
       description = "dhcp client";
-      command = "${lib.getExe cfg.package} " + lib.escapeShellArgs cfg.extraArgs;
-      conditions = "service/syslogd/ready";
 
-      path = lib.optionals config.programs.resolvconf.enable [
-        config.programs.resolvconf.package
-      ];
+      type.service = {
+        # PATH set in the command rather than asked for as a unit property: dinit has no
+        # per-unit PATH, and dhcpcd needs resolvconf on it to write /etc/resolv.conf.
+        command = pkgs.writeShellScript "dhcpcd" ''
+          ${lib.optionalString config.programs.resolvconf.enable "export PATH=${config.programs.resolvconf.package}/bin:$PATH"}
+          exec ${lib.getExe cfg.package} ${lib.escapeShellArgs cfg.extraArgs}
+        '';
+
+        readiness = "fork";
+      };
+
+      requires =
+        lib.optional config.services.sysklogd.enable "syslogd"
+        ++ lib.optional config.services.udev.enable "udev-settle";
     };
 
-    finit.tmpfiles.rules = [
-      "d /var/db/dhcpcd - dhcpcd"
-      "d /var/lib/dhcpcd - dhcpcd dhcpcd"
+    providers.services.tmpfiles.rules = [
+      {
+        type = "directory";
+        path = "/var/db/dhcpcd";
+        user = "dhcpcd";
+      }
+      {
+        type = "directory";
+        path = "/var/lib/dhcpcd";
+        user = "dhcpcd";
+        group = "dhcpcd";
+      }
     ];
 
     users.users = {

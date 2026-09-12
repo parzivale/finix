@@ -123,7 +123,7 @@ in
           type.service.command = gettyCommand device;
 
           # late: a login prompt before the system is up is a prompt into a half-built machine
-          requires = lib.optional config.providers.services.trunk.enable "multi-user";
+          requires = [ "multi-user" ];
         }
       )
     );

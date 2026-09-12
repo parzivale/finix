@@ -139,7 +139,6 @@ in
         [
           "/etc"
           "/run"
-          "/tmp"
           "/var"
           "/var/cache"
           "/var/db"
@@ -149,6 +148,15 @@ in
           "/var/spool"
         ]
       ++ [
+        # world-writable and sticky, which is the whole point of /tmp - left at the default
+        # 0755 root:root nothing unprivileged on the machine can write a temporary file, and
+        # what that looks like is a program failing on a path it had every reason to expect
+        {
+          type = "directory";
+          path = "/tmp";
+          mode = "1777";
+        }
+
         {
           type = "symlink";
           path = "/var/run";
@@ -206,7 +214,7 @@ in
             ${coreutils}/bin/ln -s ${config.boot.initrd.package}/initrd $out/initrd
           ''
           + ''
-            cp ${../../finit/switch-to-configuration.sh} $out/bin/switch-to-configuration
+            cp ${../../init/finit/switch-to-configuration.sh} $out/bin/switch-to-configuration
             substituteInPlace $out/bin/switch-to-configuration \
               --subst-var out \
               --subst-var-by bash ${pkgs.bash} \

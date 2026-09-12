@@ -28,35 +28,40 @@
 
       # one choice: what supervises the units is also what the kernel starts
       providers.services.backend = "runit";
-      providers.services.trunk.enable = true;
 
-      providers.services.units = {
-        # each records its name the moment it starts, so the file is a record of the order
-        # runit actually brought them up in
-        first = {
-          type.service.command = pkgs.writeShellScript "first" ''
-            echo first >> /run/svc-test/order
-            exec ${lib.getExe' pkgs.coreutils "sleep"} infinity
-          '';
-          requires = [ "sysinit" ];
-        };
+      providers.services.units =
+        let
+          # each records its name the moment it starts, so the file is a record of the order
+          # runit actually brought them up in.
+          #
+          # Everything is named absolutely, including the mkdir: a run script inherits whatever
+          # environment runsvdir was given, and these units set no `path`, so there is no PATH
+          # to resolve a bare command through. Nothing else creates the directory either - the
+          # append alone leaves the file missing and the order unobservable.
+          recorder =
+            name:
+            pkgs.writeShellScript name ''
+              ${lib.getExe' pkgs.coreutils "mkdir"} -p /run/svc-test
+              echo ${name} >> /run/svc-test/order
+              exec ${lib.getExe' pkgs.coreutils "sleep"} infinity
+            '';
+        in
+        {
+          first = {
+            type.service.command = recorder "first";
+            requires = [ "sysinit" ];
+          };
 
-        second = {
-          type.service.command = pkgs.writeShellScript "second" ''
-            echo second >> /run/svc-test/order
-            exec ${lib.getExe' pkgs.coreutils "sleep"} infinity
-          '';
-          requires = [ "first" ];
-        };
+          second = {
+            type.service.command = recorder "second";
+            requires = [ "first" ];
+          };
 
-        third = {
-          type.service.command = pkgs.writeShellScript "third" ''
-            echo third >> /run/svc-test/order
-            exec ${lib.getExe' pkgs.coreutils "sleep"} infinity
-          '';
-          requires = [ "second" ];
+          third = {
+            type.service.command = recorder "third";
+            requires = [ "second" ];
+          };
         };
-      };
 
       environment.etc."services-switch".source = config.system.build.servicesSwitch;
     };
@@ -67,9 +72,13 @@
         return out.strip().splitlines() if code == 0 else []
 
     machine.start()
-    machine.wait_for_console_text("entering runlevel 2")
 
-    with subtest("runsvdir came up under finit"):
+    # runit is PID 1 here, so there is no finit runlevel to wait for - `entering runlevel 2`
+    # is a finit message, and waiting for one on this machine blocks until the test times out.
+    # What follows gates on runit's own progress instead.
+    machine.wait_for_console_text("runit: enter stage: /etc/runit/2")
+
+    with subtest("runsvdir came up"):
         machine.wait_until_succeeds("test -d /run/service/first/supervise", timeout=60)
 
     with subtest("every unit reached its latch"):

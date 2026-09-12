@@ -111,9 +111,7 @@ in
       type.oneshot.command = "${lib.getExe' pkgs.nettools "hostname"} -F /etc/hostname";
 
       # early, so that anything logging or announcing itself later says the right name
-      requires = lib.optional config.providers.services.trunk.enable (
-        lib.head config.providers.services.trunk.levels
-      );
+      requires = [ (lib.head config.providers.services.trunk.levels) ];
     };
 
     environment.etc = {

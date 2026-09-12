@@ -133,6 +133,12 @@ in
       NIX_REMOTE = "daemon";
       NIX_XDG_DESKTOP_PORTAL_DIR = "/run/current-system/sw/share/xdg-desktop-portal/portals";
       PATH = [
+        # first, and before the system profile: the setuid copies live here, and the ones in
+        # the profile are not setuid. Found the wrong way round, sudo refuses with "must be
+        # owned by uid 0 and have the setuid bit set" and su with "must be setuid root" -
+        # which reads as the program being broken rather than as the wrong one being run.
+        "/run/wrappers/bin"
+
         "/etc/profiles/per-user/@{PAM_USER}/bin"
         "/run/current-system/sw/bin"
       ];

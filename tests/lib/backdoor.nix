@@ -25,8 +25,12 @@ let
   backdoorScript = pkgs.writeShellScript "backdoor" ''
     export USER=root
     export HOME=/root
-    # use the system path (same as /run/current-system/sw) to get all environment.systemPackages
-    export PATH=${lib.makeBinPath [ config.environment.path ]}
+    # through the symlink rather than the generation's own store path. Naming the store path
+    # puts it in this script, and so in the unit's fingerprint - which means adding a package
+    # anywhere changes the backdoor, the switch engine correctly restarts it, and the driver's
+    # shell dies in the middle of the very command doing the switching. The symlink is the
+    # same set of programs and does not move between generations.
+    export PATH=/run/wrappers/bin:/run/current-system/sw/bin
 
     # source profile if it exists
     if [[ -e /etc/profile ]]; then
@@ -104,7 +108,7 @@ in
 
       # late enough that a test seeing a shell can assume the system came up; the driver waits
       # for this to connect, so anything it looks at afterwards has had its chance to start
-      requires = lib.optional config.providers.services.trunk.enable "multi-user";
+      requires = [ "multi-user" ];
     };
   };
 }

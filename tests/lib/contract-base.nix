@@ -36,7 +36,6 @@
   };
 
   providers.services.backend = "finit";
-  providers.services.trunk.enable = true;
 
   providers.services.units = {
     # named device-events, not mdevd: a contract unit sharing a name with an existing finit

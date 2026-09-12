@@ -41,7 +41,12 @@ in
       ./boot
       ./environment
       ./filesystems
-      ./finit
+
+      # deliberately not sorted under ./init: this list's order is the order the modules are
+      # merged in, and list-valued options - environment.etc, PATH - keep it. Moving this entry
+      # to where it sorts changes those lists, and so every store path downstream of them.
+      ./init/finit
+
       ./fonts
       ./hardware
       ./i18n
@@ -79,10 +84,11 @@ in
 // serviceModules
 // {
   # alternative providers.services implementations, imported explicitly - a system selects one
-  # with providers.services.backend
-  dinit = ./dinit;
-  s6-rc = ./s6-rc;
-  runit = ./runit;
+  # with providers.services.backend. finit is the one in `default` above; the rest live beside
+  # it under ./init and are opted into.
+  dinit = ./init/dinit;
+  s6-rc = ./init/s6-rc;
+  runit = ./init/runit;
 
   # virtualisation
 

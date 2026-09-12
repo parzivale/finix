@@ -100,6 +100,12 @@ in
 {
   inherit testDriver pkgs lib;
 
+  # a node evaluated the way mkTest evaluates its own, for a test which needs a second system
+  # to switch into. Built through the same machinery as the running one, so the two differ by
+  # exactly what the test says and not by anything the harness adds - including the backdoor,
+  # without which switching into it would take the driver's own shell away.
+  evalNode = mkVm { };
+
   mkTest =
     {
       name,

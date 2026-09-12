@@ -11,7 +11,8 @@
 # shape as the companion task on finit, except there is no condition system to borrow from and
 # it has to be the filesystem.
 #
-# every supportedFeatures flag here is false. it is the furthest the contract stretches.
+# every supportedFeatures flag here that can be false is. it is the furthest the contract
+# stretches.
 {
   config,
   pkgs,
@@ -25,6 +26,8 @@ let
   kindOf = unit: lib.head (lib.attrNames unit.type);
   variantOf = unit: unit.type.${kindOf unit};
   readinessOf = unit: lib.head (lib.attrNames (variantOf unit).readiness);
+
+  readinessLib = import ../../providers/services/readiness.nix { inherit pkgs lib; };
 
   # runit has no dependency mechanism whatsoever. services are directories under a scan
   # directory, runsvdir starts a runsv for each, and they all come up in parallel - ordering is
@@ -98,18 +101,20 @@ let
             ${touch} ${latch name}
             ${park}
           ''
-        else if readinessOf unit == "pidfile" then
+        else if readinessOf unit == "waitFor" then
           ''
             # nothing to latch from once the daemon has been exec'd into, so the wait runs
-            # alongside it and latches when the pid file appears
-            ( while [ ! -s ${v.readiness.pidfile.file} ]; do ${sleep} 0.1; done
+            # alongside it and latches when whatever it is waiting for is live. runit observes
+            # nothing itself - not even a forking daemon - so every waitFor kind is this.
+            ( ${readinessLib.scriptFor name v.readiness}
               ${touch} ${latch name} ) &
             exec ${asUser unit}${v.command}
           ''
         else
           ''
             # `fork` readiness: up the moment it is running, which is what runit itself means
-            # by a service being up
+            # by a service being up. `notify` and `s6` never reach here - the contract refuses
+            # them against this backend.
             ${touch} ${latch name}
             exec ${asUser unit}${v.command}
           ''
@@ -168,17 +173,10 @@ in
       startTimeout = false;
       stopTimeout = false;
 
-      # a process-less unit has to park on `sleep infinity`, and an edge has to be synthesised
-      # out of latch files, because runit has no notion of either
-      nativeAnchors = false;
-      nativeStartOnlyEdges = false;
-
-      # runit knows only that a process is running, or that a pid file appeared. it has no
-      # readiness protocol, so the two it cannot see are refused by the contract.
-      readiness = [
-        "fork"
-        "pidfile"
-      ];
+      # runit speaks neither protocol - it knows only that a process is running - so both are
+      # refused by the contract rather than silently treated as `fork`. Every waitFor kind is
+      # available, polled from inside the run script.
+      readiness = [ ];
 
       # through `chpst`, which ships with runit
       user = true;
@@ -198,6 +196,31 @@ in
       ${cfg.activationScript}
       exec ${pkgs.runit}/bin/runit-init
     '';
+
+    # runit is the only backend which ships nothing under these names. `runit-init` is the
+    # whole interface: it writes /etc/runit/stopit, sets or clears the executable bit on
+    # /etc/runit/reboot, and sends SIGCONT to PID 1, which wakes runit into stage 3.
+    #
+    # That it writes into /etc/runit is why this works at all - setup-etc symlinks leaf files
+    # and makes the directories above them real, so the directory holding the stage scripts is
+    # writable even though every script in it is a store symlink.
+    #
+    # halt and poweroff are the same call because runit draws no distinction: after stage 3 it
+    # reads the bit on /etc/runit/reboot, and where that is clear it tries RB_POWER_OFF and
+    # only falls back to RB_HALT_SYSTEM. There is no way to ask it for one and not the other.
+    providers.services.shutdownCommands =
+      let
+        runitInit =
+          arg:
+          pkgs.writeShellScript "runit-${arg}" ''
+            exec ${pkgs.runit}/bin/runit-init ${arg}
+          '';
+      in
+      {
+        poweroff = runitInit "0";
+        halt = runitInit "0";
+        reboot = runitInit "6";
+      };
 
     environment.etc = {
       # stage 1. runsv creates `supervise` inside each service directory, so the generated tree
@@ -240,7 +263,35 @@ in
       '';
 
       activate = pkgs.writeShellScript "runit-activate" ''
+        export PATH=${lib.makeBinPath [ pkgs.coreutils ]}:$PATH
+
         while read -r unit; do
+          # the scan directory is a writable copy made once, at boot - runsv keeps its own
+          # state inside each service directory, so it cannot be scanned out of the store. A
+          # unit which is new in this generation is therefore not in it, and starting it would
+          # fail for want of anything to start. So the definition is brought across first.
+          #
+          # Only the files this backend generates are replaced, never the whole directory:
+          # `supervise` belongs to a running runsv, and removing it out from under one loses
+          # the process it is supervising.
+          if [ -d ${serviceDir}/"$unit" ]; then
+            mkdir -p ${scanDir}/"$unit"
+
+            cp -fL ${serviceDir}/"$unit"/run ${scanDir}/"$unit"/run
+            cp -fL ${serviceDir}/"$unit"/fingerprint ${scanDir}/"$unit"/fingerprint
+            chmod u+w ${scanDir}/"$unit"/run ${scanDir}/"$unit"/fingerprint
+
+            # runsvdir rescans on its own schedule - every five seconds - so a directory which
+            # has just appeared has no runsv behind it yet, and `sv start` on it fails rather
+            # than waiting. This waits for the supervisor to notice instead of racing it.
+            for _ in $(seq 1 100); do
+              if [ -e ${scanDir}/"$unit"/supervise/ok ]; then
+                break
+              fi
+              sleep 0.1
+            done
+          fi
+
           ${sv} start ${scanDir}/"$unit" || echo "start $unit failed" >&2
         done
       '';

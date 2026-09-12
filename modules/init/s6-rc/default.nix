@@ -37,6 +37,13 @@ let
   # start-only edge without any emulation, which only dinit has otherwise managed.
   dependencies = unit: lib.concatMapStrings (dep: "${dep}\n") unit.requires;
 
+  readinessLib = import ../../providers/services/readiness.nix { inherit pkgs lib; };
+
+  # null unless this unit is a service with a waitFor readiness
+  waitScript =
+    name: unit:
+    if kindOf unit == "service" then readinessLib.scriptFor name (variantOf unit).readiness else null;
+
   runScript =
     name: unit:
     pkgs.writeShellScript "${name}-run" ''
@@ -44,7 +51,17 @@ let
       ${lib.concatStringsSep "\n" (
         lib.mapAttrsToList (k: v: "export ${k}=${lib.escapeShellArg v}") unit.environment
       )}
-      exec ${
+      ${
+        lib.optionalString (waitScript name unit != null) ''
+          # s6 speaks one readiness protocol, so a waitFor is turned into it: the daemon starts
+          # here, the wait runs beside it, and the notification s6 is already listening for is
+          # written when whatever it waits on is live. Dependants then need nothing special.
+          (
+            ${waitScript name unit}
+            printf '\n' >&3
+          ) &
+        ''
+      }exec ${
         lib.optionalString (unit.user != null) "${lib.getExe' pkgs.s6 "s6-setuidgid"} ${unit.user} "
       }${commandOf unit}
     '';
@@ -69,10 +86,18 @@ let
         ''
           ln -s ${runScript name unit} $out/source/${name}/run
         ''
-        # readiness by `fork` means no notification at all: s6 calls it up once spawned
-        + lib.optionalString (readinessOf unit == "s6") ''
-          printf '3\n' > $out/source/${name}/notification-fd
-        ''
+        # `fork` means no notification at all: s6 calls it up once spawned. `s6` is the daemon
+        # notifying for itself, and `waitFor` is the wrapper in the run script notifying on its
+        # behalf - both arrive on the same descriptor, so both are declared the same way.
+        +
+          lib.optionalString
+            (lib.elem (readinessOf unit) [
+              "s6"
+              "waitFor"
+            ])
+            ''
+              printf '3\n' > $out/source/${name}/notification-fd
+            ''
       else if kind == "oneshot" then
         ''
           printf '%s\n' ${runScript name unit} > $out/source/${name}/up
@@ -259,17 +284,9 @@ in
       startTimeout = true;
       stopTimeout = true;
 
-      # no process-less kind, so an anchor is a oneshot running `true`
-      nativeAnchors = false;
-
-      # dependencies order change operations; a longrun which dies takes nothing with it
-      nativeStartOnlyEdges = true;
-
       # native s6 notification, and no notion of a pid file at all
-      readiness = [
-        "fork"
-        "s6"
-      ];
+      # s6 speaks its own protocol natively and has no notion of sd_notify
+      readiness = [ "s6" ];
 
       user = true;
       group = false;
@@ -308,6 +325,16 @@ in
     # on it, and only then runs rc.init - so the database is brought up against a scandir which
     # is already live, with no polling for a control fifo to appear.
     providers.services.initExecutable = initWrapper;
+
+    # s6-linux-init-maker generates these three beside the init it generates, each one talking
+    # to s6-linux-init-shutdownd over the fifo in the run-image. So they are named under the
+    # unpacked directory rather than in the store: the store copy is inside a tarball, because
+    # that fifo cannot be a store path, and ${initBase} is where initWrapper unpacks it.
+    providers.services.shutdownCommands = {
+      poweroff = "${initBase}/bin/poweroff";
+      reboot = "${initBase}/bin/reboot";
+      halt = "${initBase}/bin/halt";
+    };
 
     environment.etc = lib.mapAttrs' (
       name: fp: lib.nameValuePair "s6-rc-fingerprints/${name}" { text = fp; }

@@ -1,5 +1,6 @@
 {
   config,
+  pkgs,
   lib,
   ...
 }:
@@ -19,6 +20,22 @@ let
       description = "main program, path or command";
       descriptionClass = "conjunction";
     };
+
+  # `program` admits a command with arguments as well as a bare path - runit has no poweroff
+  # binary of its own and reaches its init as `runit-init 0` - so these are exec shims rather
+  # than symlinks, which could only name a file.
+  shutdownPackage = pkgs.runCommand "services-shutdown-commands" { } (
+    ''
+      mkdir -p $out/bin
+    ''
+    + lib.concatStrings (
+      lib.mapAttrsToList (name: command: ''
+        printf '#!%s\nexec %s "$@"\n' \
+          ${lib.escapeShellArg pkgs.runtimeShell} ${lib.escapeShellArg command} > $out/bin/${name}
+        chmod +x $out/bin/${name}
+      '') cfg.shutdownCommands
+    )
+  );
 
   # a name which resolves to nothing compiles to a dependency no backend can ever satisfy, so
   # the unit silently never starts. this is a local property - no traversal needed.
@@ -103,39 +120,31 @@ in
         '';
       };
 
-      nativeAnchors = lib.mkOption {
-        type = lib.types.bool;
-        description = ''
-          Whether the selected {option}`providers.services` implementation has a first-class
-          process-less unit, as opposed to one emulated with a no-op command.
-        '';
-      };
-
-      nativeStartOnlyEdges = lib.mkOption {
-        type = lib.types.bool;
-        description = ''
-          Whether the selected {option}`providers.services` implementation can express a
-          dependency which gates starting without also propagating stops, as opposed to one
-          emulated by latching the dependency's readiness behind a separate unit.
-        '';
-      };
-
+      # Nothing here describes how an implementation does something - only what it will refuse
+      # or fail to honour. `nativeAnchors` and `nativeStartOnlyEdges` used to sit here and did
+      # neither: an anchor and a start-only edge are part of the contract's vocabulary and are
+      # always available, natively on the implementations which have them and emulated on the
+      # ones which do not, with identical behaviour either way. A flag nothing reads, for a
+      # difference nothing can observe, is a worse thing to carry than the emulation.
       readiness = lib.mkOption {
         type = lib.types.listOf (
           lib.types.enum [
-            "fork"
-            "pidfile"
             "notify"
             "s6"
           ]
         );
         description = ''
-          The ways the selected {option}`providers.services` implementation can observe a unit
-          becoming ready.
+          The readiness protocols the selected {option}`providers.services` implementation can
+          observe, out of the two which need the daemon's cooperation.
 
           A kind absent from this list cannot be honoured, and asking for one is refused rather
           than quietly downgraded to `fork` - which would report a unit ready the moment it was
           spawned and start everything behind it too early.
+
+          `fork` and `waitFor` are not listed, because every implementation can do them:
+          forking is what a supervisor already watches, and waiting for something to appear is
+          polling where nothing better is available. They are part of the contract's vocabulary
+          rather than a capability, in the same way an anchor is.
         '';
       };
 
@@ -207,6 +216,34 @@ in
         supervises, and s6 needs `s6-linux-init` in front of `s6-svscan`.
       '';
     };
+
+    shutdownCommands =
+      let
+        mkCommand =
+          name: what:
+          lib.mkOption {
+            type = program;
+            internal = true;
+
+            # same reasoning as initExecutable: the module system's own error for an option with
+            # no value names the option rather than the configuration mistake behind it
+            default = throw ''
+              providers.services.backend is "${cfg.backend}", which declares no way to ${what}.
+
+              Bringing the machine down is PID 1's job, so the module selected as the backend is
+              expected to set providers.services.shutdownCommands.${name} to whichever of its
+              binaries does it. Either that module does not implement the whole contract yet, or
+              no backend was selected and this machine has nothing to bring down.
+            '';
+
+            description = "The command which asks PID 1 to ${what}.";
+          };
+      in
+      {
+        poweroff = mkCommand "poweroff" "power the machine off";
+        reboot = mkCommand "reboot" "reboot the machine";
+        halt = mkCommand "halt" "halt the machine";
+      };
 
     units = lib.mkOption {
       default = { };
@@ -282,12 +319,23 @@ in
                         How this unit reports that it has become ready, and so how units
                         requiring it learn they may start.
 
-                        `notify` waits for an `sd_notify`-style `READY=1` on the notification
-                        socket, and `s6` for an `s6`-style notification on a descriptor.
-                        `pidfile` waits for the daemon to background itself and write the file
-                        it names. `fork` treats the unit as ready the moment it has been forked,
-                        which is a lie for anything doing real startup work, but is the only
-                        option left for a daemon which cannot report readiness at all.
+                        There are two sorts here, and the difference is who decides.
+
+                        `notify` and `s6` are the daemon saying so - an `sd_notify` `READY=1`
+                        on the notification socket, or an `s6` notification on a descriptor.
+                        Both need the program's cooperation, so an implementation may not be
+                        able to observe them and will refuse them rather than downgrade.
+
+                        `waitFor` is the supervisor inferring it from something appearing: a
+                        pid file, a socket, any path. That works with a program which cannot
+                        report anything, which is most of them, and every implementation can
+                        do it - by its own mechanism where it has one, by polling otherwise.
+                        It is inference rather than assertion: a unix socket's path exists
+                        from `bind`, which is fractionally before `listen`.
+
+                        `fork` treats the unit as ready the moment it has been forked. That is
+                        a lie for anything doing real startup work, and is worth reaching for
+                        only when nothing appears that could be waited on.
                       '';
                       type = lib.types.coercedTo lib.types.str (kind: { ${kind} = { }; }) (
                         lib.types.attrTag {
@@ -304,15 +352,95 @@ in
                             description = "Ready on an s6-style notification.";
                           };
 
-                          pidfile = lib.mkOption {
-                            description = "Ready once it has backgrounded itself and written its pid.";
-                            type = lib.types.submodule {
-                              options.file = lib.mkOption {
-                                type = lib.types.str;
-                                example = "/run/nginx.pid";
+                          waitFor = lib.mkOption {
+                            description = ''
+                              Ready once something appears and is live, for a daemon with no
+                              readiness protocol of its own - which is most of them.
+
+                              The tag says what is being waited for, and so what counts as
+                              live. An implementation reaches for a native mechanism where it
+                              has one for that kind, and polls otherwise. This is inference
+                              rather than assertion, which is why it is not `notify` or `s6`.
+                            '';
+
+                            type = lib.types.attrTag {
+                              socket = lib.mkOption {
                                 description = ''
-                                  The file this unit writes its process ID to.
+                                  Ready once connecting to the socket succeeds.
+
+                                  Not merely that the path is there: a unix socket exists from
+                                  `bind`, and `listen` comes afterwards, so a client arriving
+                                  in that window is refused by a socket which demonstrably
+                                  exists.
                                 '';
+                                type = lib.types.submodule {
+                                  options.path = lib.mkOption {
+                                    type = lib.types.str;
+                                    example = "/run/dbus/system_bus_socket";
+                                    description = "The socket this unit binds.";
+                                  };
+                                };
+                              };
+
+                              pidfile = lib.mkOption {
+                                description = ''
+                                  Ready once the file exists and the process it names is alive.
+
+                                  This also says the daemon forks into the background to write
+                                  it, which finit and dinit observe directly. A program which
+                                  stays in the foreground and happens to write a pid file is
+                                  not this - it is `path` - and an implementation waiting for a
+                                  fork which never comes will fail the unit on its start
+                                  timeout.
+                                '';
+                                type = lib.types.submodule {
+                                  options.file = lib.mkOption {
+                                    type = lib.types.str;
+                                    example = "/run/nginx.pid";
+                                    description = "The file the daemon writes its process ID to.";
+                                  };
+                                };
+                              };
+
+                              path = lib.mkOption {
+                                description = ''
+                                  Ready once the path exists, which is all that can be known
+                                  about an arbitrary file.
+                                '';
+                                type = lib.types.submodule {
+                                  options.path = lib.mkOption {
+                                    type = lib.types.str;
+                                    example = "/run/something.ready";
+                                    description = "The path to wait for.";
+                                  };
+                                };
+                              };
+
+                              check = lib.mkOption {
+                                description = ''
+                                  Ready once this command exits successfully.
+
+                                  The command does the waiting - it is run once, and returning
+                                  is what says the unit is up - so anything whose readiness only
+                                  it can answer belongs here: a database accepting queries, an
+                                  endpoint returning 200. The other kinds are the common cases
+                                  of this one, written out so they need no script.
+
+                                  A command which never returns stalls everything behind the
+                                  unit until {option}`startTimeout`, where the implementation
+                                  can bound it. It is the script's business to give up.
+                                '';
+                                type = lib.types.submodule {
+                                  options.command = lib.mkOption {
+                                    type = program;
+                                    example = lib.literalExpression ''
+                                      pkgs.writeShellScript "pg-ready" '''
+                                        until pg_isready -q; do sleep 0.1; done
+                                      '''
+                                    '';
+                                    description = "The command whose successful exit means ready.";
+                                  };
+                                };
                               };
                             };
                           };
@@ -349,9 +477,10 @@ in
 
               requires = lib.mkOption {
                 type = with lib.types; listOf str;
-                default = lib.optional (cfg.trunk.enable && !(lib.elem name cfg.trunk.levels)) (
-                  lib.head cfg.trunk.levels
-                );
+                # the trunk's own levels are excluded: a level derives its own requires from
+                # the chain, and defaulting it to the head would make the first level require
+                # itself
+                default = lib.optional (!(lib.elem name cfg.trunk.levels)) (lib.head cfg.trunk.levels);
                 defaultText = lib.literalExpression "[ (lib.head config.providers.services.trunk.levels) ]";
                 description = ''
                   The units which must be ready before this one starts. Losing one afterwards
@@ -445,6 +574,16 @@ in
     # a machine whose backend declares no PID 1 has no business booting.
     boot.init = cfg.initExecutable;
 
+    # the other half of being PID 1. Every implementation ships binaries under these names, and
+    # each one talks only to its own init - finit's poweroff asks finit, over finit's socket -
+    # so on a machine running any other backend the wrong one is a command which reports a
+    # failure and leaves the machine running.
+    #
+    # Which one a bare `poweroff` reaches is otherwise a question of which package buildEnv
+    # happens to walk first, because environment.path ignores collisions. hiPrio settles it on
+    # the selected backend's, rather than on whichever module was imported first.
+    environment.systemPackages = [ (lib.hiPrio shutdownPackage) ];
+
     warnings =
       lib.optionals (cfg.units != { } && cfg.backend == "none") [
         ''
@@ -480,12 +619,15 @@ in
       #
       # `user` is the one to watch: unhonoured, the unit runs as root rather than as whoever was
       # named, which is more privilege than was asked for rather than less.
+      # a unit asking for a readiness protocol the implementation cannot observe. Only `notify`
+      # and `s6` can be asked for and not got: `fork` needs nothing observed, and every waitFor
+      # kind is available everywhere - by a native mechanism or by the backend waiting itself.
       ++ lib.optionals (cfg.backend != "none") (
         lib.mapAttrsToList
           (
             name: unit:
             let
-              ready = lib.head (lib.attrNames (unit.type.service or { }).readiness or { fork = { }; });
+              ready = lib.head (lib.attrNames unit.type.service.readiness);
             in
             "providers.services.units.${name} reports readiness by ${ready}, which the "
             + "${cfg.backend} implementation cannot observe (it observes "
@@ -495,8 +637,14 @@ in
           (
             lib.filterAttrs (
               _: u:
-              u.type ? service
-              && !(lib.elem (lib.head (lib.attrNames u.type.service.readiness)) cfg.supportedFeatures.readiness)
+              let
+                ready = if u.type ? service then lib.head (lib.attrNames u.type.service.readiness) else null;
+              in
+              lib.elem ready [
+                "notify"
+                "s6"
+              ]
+              && !(lib.elem ready cfg.supportedFeatures.readiness)
             ) cfg.units
           )
         ++ lib.optionals (!cfg.supportedFeatures.user) (

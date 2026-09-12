@@ -30,7 +30,7 @@ let
     name:
     lib.findFirst (i: i != null) null (lib.imap0 (i: l: if l == name then i else null) trunk.levels);
 
-  latchIndex = if trunk.enable then indexOf trunk.latch else null;
+  latchIndex = indexOf trunk.latch;
 
   # a unit is on the shutdown side if it is a trunk level at or after the latch, or if it
   # attached itself to one. attaching to more than one level is refused by the contract, so
@@ -102,11 +102,23 @@ let
     // lib.optionalAttrs (unit.user != null) { inherit (unit) user; }
     // lib.optionalAttrs (unit.group != null) { inherit (unit) group; };
 
+  readinessLib = import ../../providers/services/readiness.nix { inherit pkgs lib; };
+
+  readinessOf = unit: lib.head (lib.attrNames (variantOf unit).readiness);
+  waitKindOf = unit: lib.head (lib.attrNames (variantOf unit).readiness.waitFor);
+
+  # the same, but safe to ask of any unit: null where readiness is not a waitFor at all
+  waitKindOf' =
+    unit: if kindOf unit == "service" && readinessOf unit == "waitFor" then waitKindOf unit else null;
+
   notify = {
     fork = "none";
-    pidfile = "pid";
     notify = "systemd";
     s6 = "s6";
+
+    # finit observes a forking daemon itself; everything else under waitFor is waited for by
+    # the companion below, so the service itself is up as soon as it is running.
+    waitFor = "none";
   };
 
   mkService =
@@ -120,9 +132,14 @@ let
       inherit (svc) command;
       notify = notify.${ready};
     }
-    // lib.optionalAttrs (ready == "pidfile") {
+    # a forking daemon is something finit observes for itself, so it is told rather than
+    # waited for. The `!` matters: without it finit *manages* the pid file - creating it when
+    # it starts the service and removing it when it stops - which would assert the condition
+    # immediately and make the readiness meaningless. With it, the daemon writes the file and
+    # finit watches for it, which is what was asked for.
+    // lib.optionalAttrs (ready == "waitFor" && waitKindOf unit == "pidfile") {
       type = "forking";
-      pid = svc.readiness.pidfile.file;
+      pid = "!${svc.readiness.waitFor.pidfile.file}";
     }
     // lib.optionalAttrs (unit.stopTimeout != null) { kill = unit.stopTimeout; };
 
@@ -162,14 +179,28 @@ let
     lib.mapAttrsToList (name: unit: unit // { priority = priorityFor name unit; }) shutdownSide
   );
 
-  mkCompanion = name: unit: {
-    description = "${name} has started";
+  # the companion latches a unit's readiness once, so that an edge means "this had started"
+  # rather than "this is still running" - see the note above conditionOf.
+  #
+  # It is also where the waiting happens for the `waitFor` kinds finit cannot observe itself.
+  # The service is up as soon as it is running; the companion then blocks until the socket
+  # answers or the path appears, and only then does its condition assert. Since dependants
+  # condition on the companion rather than the service, that is exactly the gate wanted -
+  # and it costs nothing for the kinds which need no waiting, where the command is `true`.
+  mkCompanion =
+    name: unit:
+    let
+      wait =
+        if kindOf unit == "service" then readinessLib.scriptFor name (variantOf unit).readiness else null;
+    in
+    {
+      description = "${name} has started";
 
-    runlevels = runlevelsFor name unit;
-    conditions = [ (readyConditionOf name) ];
-    command = true';
-    remain = true;
-  };
+      runlevels = runlevelsFor name unit;
+      conditions = [ (readyConditionOf name) ];
+      command = if wait == null || waitKindOf' unit == "pidfile" then true' else wait;
+      remain = true;
+    };
 
   isService = _: unit: kindOf unit == "service";
 
@@ -241,20 +272,24 @@ in
       # Wiring it to boot.init is the contract's job, not this one's.
       providers.services.initExecutable = "${config.finit.package}/bin/finit";
 
+      # finit ships all three, and they reach it over its own socket. They are on PATH anyway
+      # through finit.package being in systemPackages - naming them here is what stops that
+      # from being the reason they work, and so what stops them winning on a machine running
+      # some other backend.
+      providers.services.shutdownCommands = {
+        poweroff = "${config.finit.package}/bin/poweroff";
+        reboot = "${config.finit.package}/bin/reboot";
+        halt = "${config.finit.package}/bin/halt";
+      };
+
       providers.services.supportedFeatures = {
         # finit can bound how long a unit takes to die - `kill`, the SIGTERM to SIGKILL delay -
         # but has nothing to bound how long one takes to become ready
         startTimeout = false;
         stopTimeout = true;
 
-        # both emulated above, with a task running `true`
-        nativeAnchors = false;
-        nativeStartOnlyEdges = false;
-
-        # finit observes all four, through `notify`
+        # finit speaks both protocols
         readiness = [
-          "fork"
-          "pidfile"
           "notify"
           "s6"
         ];

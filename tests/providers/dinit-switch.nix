@@ -37,7 +37,6 @@
       # one choice, and it is the whole of the configuration's opinion about init: dinit
       # supervises the units and dinit is what the kernel starts.
       providers.services.backend = "dinit";
-      providers.services.trunk.enable = true;
       providers.services.trunk.levels = [
         "start"
         "sysinit"
@@ -67,7 +66,9 @@
         return out.strip().splitlines() if code == 0 else []
 
     machine.start()
-    machine.wait_for_console_text("entering runlevel 2")
+    # no finit runlevel to wait for - dinit is PID 1 here, and `entering runlevel 2` is a
+    # finit message which never arrives, so waiting for it blocks until the test times out.
+    # dinit reaching its boot service is the same gate and is what this asks for instead.
     machine.wait_until_succeeds("dinitctl status boot | grep -q STARTED", timeout=120)
 
     engine = "/etc/services-switch"

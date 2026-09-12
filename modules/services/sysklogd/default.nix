@@ -67,30 +67,39 @@ in
       cfg.package
     ];
 
-    finit.services.syslogd = {
+    providers.services.units.syslogd = {
       description = "system logging daemon";
-      runlevels = "S0123456789";
-      conditions =
-        lib.optionals config.services.gardendevd.enable [ "run/gardendevctl:2/success" ]
-        ++ lib.optionals config.services.keventd.enable [ "pid/keventd" ]
-        ++ lib.optionals config.services.udev.enable [ "run/udevadm:5/success" ]
-        ++ lib.optionals config.services.mdevd.enable [ "run/coldplug/success" ];
-      command = "${cfg.package}/bin/syslogd -F";
-      notify = "pid";
+
+      type.service = {
+        command = "${cfg.package}/bin/syslogd -F";
+
+        # `-F` is foreground, so ready-on-fork is the only honest answer: the process running
+        # is the whole of what any backend can observe here.
+        #
+        # Not pidfile readiness, which is what finit's `notify = "pid"` translated to and what
+        # this port first used. finit merely watches for the file, but dinit reads pidfile
+        # readiness as `bgprocess` - a process which forks into the background and writes its
+        # pid - and a foreground daemon never does, so dinit waits out its start timeout and
+        # fails it, taking down everything behind syslogd with it.
+        readiness = "fork";
+      };
+
+      # the device manager first where there is one: /dev/log has to exist before anything can
+      # log to it, and on a machine with no device nodes yet there is nothing to listen on.
+      # udev is the only device manager with a contract unit to wait for. mdevd still emits
+      # finit stanzas, so on that path there is nothing here to require - /dev/log comes from
+      # the kernel either way, and what the device manager adds is everything else.
+      requires =
+        if config.services.udev.enable then
+          [ "udev-settle" ]
+        else
+          [ (lib.head config.providers.services.trunk.levels) ];
     };
 
     environment.etc."syslog.d/nixos.conf".text = cfg.extraConfig;
     environment.etc."syslog.conf".source =
       lib.mkDefault "${cfg.package}/share/doc/sysklogd/syslog.conf";
 
-    # TODO: add finit.services.reloadTriggers option
-    environment.etc."finit.d/syslogd.conf".text = lib.mkAfter ''
-
-      # reload trigger
-      # ${config.environment.etc."syslog.d/nixos.conf".source}
-      # ${config.environment.etc."syslog.conf".source}
-    '';
-
-    system.switch.inhibitors.syslogd = config.finit.services.syslogd.command;
+    system.switch.inhibitors.syslogd = config.providers.services.units.syslogd.type.service.command;
   };
 }

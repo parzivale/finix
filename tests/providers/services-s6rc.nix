@@ -44,7 +44,6 @@
 
       # one choice: what supervises the units is also what the kernel starts
       providers.services.backend = "s6-rc";
-      providers.services.trunk.enable = true;
 
       providers.services.units = {
         alpha = {

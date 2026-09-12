@@ -87,14 +87,31 @@ in
       };
     };
 
-    finit.tmpfiles.rules = [
-      "d /run/dbus 0755 messagebus messagebus"
-      "d /run/lock/subsys 0755 messagebus messagebus"
-      "d /var/lib/dbus 0755 messagebus messagebus"
-      "d /tmp/dbus 0755 messagebus messagebus"
-
-      "L /etc/machine-id - - - - /var/lib/dbus/machine-id"
-    ];
+    # the contract's rules, not finit's: the unit below moved, and the directories it needs
+    # have to move with it. Left behind, dbus starts on any other init and immediately fails
+    # to bind a socket in a directory nobody created.
+    providers.services.tmpfiles.rules =
+      map
+        (path: {
+          type = "directory";
+          inherit path;
+          mode = "0755";
+          user = "messagebus";
+          group = "messagebus";
+        })
+        [
+          "/run/dbus"
+          "/run/lock/subsys"
+          "/var/lib/dbus"
+          "/tmp/dbus"
+        ]
+      ++ [
+        {
+          type = "symlink";
+          path = "/etc/machine-id";
+          argument = "/var/lib/dbus/machine-id";
+        }
+      ];
 
     # users.groups.messagebus.gid = config.ids.gids.messagebus;
     users.groups = {
@@ -120,26 +137,42 @@ in
       permissions = "u+rx,g+rx,o-rx";
     };
 
-    finit.services.dbus = {
+    providers.services.units.dbus = {
       description = "d-bus message bus daemon";
-      runlevels = "S123456789";
-      conditions = "service/syslogd/ready";
-      command = "${cfg.package}/bin/dbus-daemon --nofork --system --syslog-only";
-      notify = "systemd";
-      cgroup.name = "system";
-      log = mkIf cfg.debug true;
 
-      pre = pkgs.writeShellScript "dbus-pre.sh" "${cfg.package}/bin/dbus-uuidgen --ensure";
-      environment = {
-        DBUS_VERBOSE = lib.mkIf cfg.debug 1;
+      # `notify = "systemd"` is gone - sd_notify readiness is something only finit and systemd
+      # observe here. The machine-id generation that was finit's `pre` moves into the command,
+      # which needs nothing from the implementation at all.
+      type.service = {
+        command = pkgs.writeShellScript "dbus-daemon" ''
+          ${cfg.package}/bin/dbus-uuidgen --ensure
+          exec ${cfg.package}/bin/dbus-daemon --nofork --system --syslog-only
+        '';
+        readiness = "fork";
       };
+
+      environment = lib.optionalAttrs cfg.debug { DBUS_VERBOSE = "1"; };
+
+      requires = lib.optional config.services.sysklogd.enable "syslogd";
     };
 
-    # TODO: add finit.services.reloadTriggers option
-    environment.etc."finit.d/dbus.conf".text = lib.mkAfter ''
+    # the bus has forked before it is listening, and a client which connects first simply
+    # fails. Anything needing the system bus requires this.
+    providers.services.units.dbus-socket = {
+      description = "wait for the system bus socket";
+      requires = [ "dbus" ];
 
-      # reload trigger
-      # ${config.environment.etc."dbus-1".source}
-    '';
+      type.oneshot.command = pkgs.writeShellScript "dbus-wait" ''
+        for _ in $(${lib.getExe' pkgs.coreutils "seq"} 1 100); do
+          if [ -S /run/dbus/system_bus_socket ]; then
+            exit 0
+          fi
+          ${lib.getExe' pkgs.coreutils "sleep"} 0.1
+        done
+
+        echo "dbus-socket: /run/dbus/system_bus_socket never appeared" >&2
+        exit 1
+      '';
+    };
   };
 }
