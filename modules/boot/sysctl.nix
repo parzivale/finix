@@ -71,10 +71,19 @@ in
     );
 
     # TODO: force reload of all kernel variables -> `command = "${pkgs.procps}/bin/sysctl --load --system";`
-    finit.tasks.sysctl = {
+    #
+    # a contract unit rather than a finit task: kernel variables are not finit's business, and
+    # written as a stanza they were applied on finit and nowhere else - a machine booting any
+    # other init ran with the kernel's defaults for every one of these.
+    providers.services.units.sysctl = {
       description = "apply kernel variables";
-      runlevels = "12345";
-      command = "${pkgs.procps}/bin/sysctl -p ${config.environment.etc."sysctl.d/60-finix.conf".source}";
+
+      # the head of the trunk: anything started after this should see the values it sets
+      requires = [ (lib.head config.providers.services.trunk.levels) ];
+
+      type.oneshot.command = "${pkgs.procps}/bin/sysctl -p ${
+        config.environment.etc."sysctl.d/60-finix.conf".source
+      }";
     };
 
     # Hide kernel pointers (e.g. in /proc/modules) for unprivileged

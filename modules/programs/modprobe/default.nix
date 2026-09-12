@@ -79,12 +79,18 @@ in
       pkgs.kmod
     ];
 
-    finit.tasks.modprobe = {
-      command = pkgs.writeShellScript "load-kernel-modules" ''
+    # a contract unit rather than a finit task: which modules a machine loads at boot is not
+    # finit's business, and written as a stanza they were loaded on finit and on nothing else
+    providers.services.units.modprobe = {
+      description = "load the configured kernel modules";
+
+      # the head of the trunk: a driver anything later needs should be in the kernel by the
+      # time that thing starts
+      requires = [ (lib.head config.providers.services.trunk.levels) ];
+
+      type.oneshot.command = pkgs.writeShellScript "load-kernel-modules" ''
         ${lib.getExe' pkgs.kmod "modprobe"} -a ${lib.escapeShellArgs config.boot.kernelModules}
       '';
-      runlevels = "S12345789";
-      remain = true;
     };
 
     # TODO: can this be converted to a `finit.run` stanza to run in runlevel S? is that early enough?

@@ -81,6 +81,10 @@ let
   latchDir = "/run/providers-services";
   latch = name: "${latchDir}/${name}.ready";
 
+  # ten times a second, and it shows: each hop of the trunk costs one poll interval, so this is
+  # most of what a runit boot spends between tiers. It is also one `exec` of `sleep` per waiting
+  # unit per iteration, which is the cheapest thing available - runit has no way to be told that
+  # a file appeared.
   waitFor =
     unit:
     lib.concatMapStrings (dep: ''

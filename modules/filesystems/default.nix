@@ -129,8 +129,12 @@ let
         in
         {
           description = "Encrypted swap device on ${sw.device}";
-          runlevels = "S";
-          command = toString (
+
+          # `runlevels = "S"` was finit's earliest; here that is the tier after the device
+          # managers, which is what has to have run before there is a device to encrypt
+          requires = [ "sysinit" ];
+
+          type.oneshot.command = toString (
             pkgs.writeShellScript name ''
               set -eu
               ${pkgs.cryptsetup}/bin/cryptsetup plainOpen \
@@ -197,7 +201,7 @@ in
       )
       ++ lib.optional (encryptedSwapDevices != [ ]) pkgs.cryptsetup;
 
-    finit.tasks = lib.listToAttrs (lib.map makeEncryptedSwapTask encryptedSwapDevices);
+    providers.services.units = lib.listToAttrs (lib.map makeEncryptedSwapTask encryptedSwapDevices);
 
     environment.etc.fstab.text = ''
       # This is a generated file.  Do not edit!

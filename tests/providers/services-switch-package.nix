@@ -77,9 +77,15 @@ in
         assert after != before, "/run/current-system did not move"
 
     with subtest("the machine is still running, not just reconfigured"):
-        # asked without the backend's own tooling - the latch files and PID 1 answer it
-        machine.succeed("test -e /run/providers-services/running.ready")
-        machine.succeed("test -e /run/providers-services/multi-user.ready")
+        # asked without the backend's own tooling - the latch files and PID 1 answer it.
+        #
+        # waited for rather than asserted outright: this is a question about whether the machine
+        # is alive, not about how quickly it got there, and the trunk can still be finishing when
+        # a switch is run this early. Asserted instantly, a boot which was merely slow - thirty
+        # seconds behind a `network-online` with no route to find - read exactly like one which
+        # had died.
+        machine.wait_for_file("/run/providers-services/running.ready", timeout=120)
+        machine.wait_for_file("/run/providers-services/multi-user.ready", timeout=120)
 
         pid1 = machine.succeed("ps -p 1 -o comm=").strip()
         print(f"pid 1: {pid1}")

@@ -43,13 +43,19 @@ in
   };
 
   config = lib.mkIf (cfg.enable && config.programs.xorg.enable) {
-    finit.tmpfiles.rules = [
+    providers.services.tmpfiles.rules = [
       # Remove the following log message:
       #    (WW) NVIDIA: Failed to bind sideband socket to
       #    (WW) NVIDIA:     '/var/run/nvidia-xdriver-b4f69129' Permission denied
       #
       # https://bbs.archlinux.org/viewtopic.php?pid=1909115#p1909115
-      "d /run/nvidia-xdriver 0770 root users"
+      {
+        type = "directory";
+        path = "/run/nvidia-xdriver";
+        mode = "0770";
+        user = "root";
+        group = "users";
+      }
     ];
 
     environment.etc."X11/xorg.conf.d/00-nvidia.conf".source = pkgs.writeText "00-nvidia.conf" ''

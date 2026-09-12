@@ -125,19 +125,27 @@ in
     # and the boot carried on, but a unit is something its dependants wait for. A machine with
     # no network would otherwise hold them for as long as it stayed up, where before it simply
     # ran without them.
+    #
+    # Bounded at five seconds and not thirty, which is what it was first written as. Nothing in
+    # the trunk is exempt from being waited for: this attaches to `sysinit`, so `basic` waits
+    # for it, and so does every level above - which meant that on a machine with no default
+    # route, and that includes every test VM, the console appeared half a minute after the
+    # machine was otherwise up. Five seconds covers a DHCP lease on a network which is there;
+    # a daemon whose network arrives later has to cope with that anyway, since nothing
+    # guarantees the route stays up once it has been seen.
     providers.services.units.network-online = {
       description = "wait for a default route";
       requires = [ "sysinit" ];
 
       type.oneshot.command = pkgs.writeShellScript "network-online" ''
-        for _ in $(${lib.getExe' pkgs.coreutils "seq"} 1 300); do
+        for _ in $(${lib.getExe' pkgs.coreutils "seq"} 1 50); do
           if [ -s /proc/net/route ] && ${lib.getExe' pkgs.gnugrep "grep"} -qE '^[^	]+	00000000	' /proc/net/route; then
             exit 0
           fi
           ${lib.getExe' pkgs.coreutils "sleep"} 0.1
         done
 
-        echo "network-online: no default route after 30s, continuing" >&2
+        echo "network-online: no default route after 5s, continuing" >&2
       '';
     };
 

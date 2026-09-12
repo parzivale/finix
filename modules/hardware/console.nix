@@ -72,18 +72,34 @@ in
     # Console node ownership and mode; mdevd has no defaults for this.
     services.mdevd.coldplugRules = "-console 0:${toString config.ids.gids.tty} 600";
 
-    finit.tasks.loadkmap = loadkmapTask;
-
+    # the initrd stays finit's, and keeps the stanza; stage 2 is the contract's, so the same
+    # command becomes a unit there. Written as a stanza it loaded the keymap on finit and left
+    # every other init with a us layout whatever was configured.
     boot.initrd.finit.tasks.loadkmap = loadkmapTask;
 
-    finit.tasks.setvesablank =
+    providers.services.units.loadkmap = {
+      description = "load console keymap";
+
+      # `conditions = "dev/console"` was finit waiting for the device node. The device manager
+      # is what puts it there, and it is in the head tier, so this sits in the tier after it.
+      requires = [ "sysinit" ];
+
+      type.oneshot.command = pkgs.writeShellScript "loadkmap" ''
+        exec ${pkgs.busybox}/bin/loadkmap < ${cfg.binaryKeyMap}
+      '';
+    };
+
+    providers.services.units.setvesablank =
       let
         value = if cfg.setvesablank then "on" else "off";
       in
       {
         description = "turn vesa screen blanking ${value}";
-        command = "${pkgs.kbd}/bin/setvesablank ${value}";
-        conditions = "service/syslogd/ready";
+
+        # the logger is in the head tier, which `sysinit` is already behind
+        requires = [ "sysinit" ];
+
+        type.oneshot.command = "${pkgs.kbd}/bin/setvesablank ${value}";
       };
   };
 
