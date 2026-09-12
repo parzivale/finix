@@ -44,8 +44,6 @@
           ]
         }:$PATH
 
-        set -e
-
         # Make /nix/store a read-only bind mount to enforce immutability of
         # the Nix store.  Note that we can't use "chown root:nixbld" here
         # because users/groups might not exist yet.
@@ -57,8 +55,16 @@
         # `grep` rather than `[[ =~ ]]`: everything the machine runs at boot is POSIX, and a
         # bash-only test in a script an implementation may hand to any shell is a trap
         if ! findmnt --noheadings --output OPTIONS /nix/store | grep -qE '(^|,)ro(,|$)'; then
-          mount --bind /nix/store /nix/store
-          mount -o remount,ro,bind /nix/store
+          # not under `set -e`, and the exit status is deliberately not this unit's.
+          #
+          # Hardening the store is worth attempting and not worth refusing to boot over - a
+          # store which cannot be bind-mounted read-only, which is any store on a filesystem
+          # that will not take one, is a machine that should come up and say so. As a finit
+          # task this was the behaviour by default, because nothing waited on a task; as a
+          # unit everything above it in the trunk does, so the whole boot stopped here.
+          if ! mount --bind /nix/store /nix/store || ! mount -o remount,ro,bind /nix/store; then
+            echo "remount-nix-store: could not make /nix/store read-only; continuing" >&2
+          fi
         fi
       '';
     };
