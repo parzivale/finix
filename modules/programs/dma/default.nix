@@ -54,10 +54,21 @@ in
       cfg.package
     ];
 
-    finit.tmpfiles.rules = [
-      "d /var/mail 2775 root mail - -"
-      "d /var/spool/dma 2775 root mail - -"
-    ];
+    providers.services.tmpfiles.rules =
+      map
+        (path: {
+          type = "directory";
+          inherit path;
+
+          # setgid mail, so a message dropped in one is group-owned by mail whoever wrote it
+          mode = "2775";
+          user = "root";
+          group = "mail";
+        })
+        [
+          "/var/mail"
+          "/var/spool/dma"
+        ];
 
     providers.scheduler.tasks.dma = {
       interval = "hourly";

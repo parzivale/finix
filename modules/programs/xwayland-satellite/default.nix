@@ -30,18 +30,38 @@ in
   config = lib.mkIf cfg.enable {
     environment.systemPackages = [ cfg.package ];
 
-    finit.tmpfiles.rules = [
-      "D! /tmp/.X11-unix  1777 root root"
-      "D! /tmp/.ICE-unix  1777 root root"
-      "D! /tmp/.XIM-unix  1777 root root"
-      "D! /tmp/.font-unix 1777 root root"
-
-      "z  /tmp/.X11-unix"
-      "z  /tmp/.ICE-unix"
-      "z  /tmp/.XIM-unix"
-      "z  /tmp/.font-unix"
-
-      "r! /tmp/.X[0-9]*-lock"
-    ];
+    # `D!` was create-and-empty-at-boot, which is two rules here: the sockets a previous boot
+    # left behind are removed, and the directory is then created with the mode it needs. The
+    # `z` rules which followed each `D!` only reasserted that mode, so they are gone with it.
+    #
+    # These rules run once, from `tmpfiles-setup`, which is what the `!` in `D!` and `r!` asked
+    # for - there is no periodic cleaner here to tell "boot only".
+    providers.services.tmpfiles.rules =
+      lib.concatMap
+        (path: [
+          {
+            type = "remove";
+            inherit path;
+            recursive = true;
+          }
+          {
+            type = "directory";
+            inherit path;
+            mode = "1777";
+          }
+        ])
+        [
+          "/tmp/.X11-unix"
+          "/tmp/.ICE-unix"
+          "/tmp/.XIM-unix"
+          "/tmp/.font-unix"
+        ]
+      ++ [
+        # a lock naming a server which is no longer running
+        {
+          type = "remove";
+          path = "/tmp/.X[0-9]*-lock";
+        }
+      ];
   };
 }

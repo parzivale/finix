@@ -129,8 +129,12 @@ in
       '';
     };
 
-    finit.tmpfiles.rules = [
-      "d /var/spool/anacron 0755"
+    providers.services.tmpfiles.rules = [
+      {
+        type = "directory";
+        path = "/var/spool/anacron";
+        mode = "0755";
+      }
     ];
 
     # this module supplies an implementation for `providers.scheduler`

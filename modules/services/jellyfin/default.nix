@@ -79,14 +79,22 @@ in
       type.service.command = "${lib.getExe cfg.package} --datadir ${cfg.dataDir} --configdir ${cfg.dataDir}/config --cachedir /var/cache/jellyfin --logdir /var/log/jellyfin";
     };
 
-    finit.tmpfiles.rules = [
-      "d /var/cache/jellyfin 0700 ${cfg.user} ${cfg.group}"
-      "d /var/log/jellyfin 0750 ${cfg.user} ${cfg.group}"
-    ]
-    ++ lib.optionals (cfg.dataDir == "/var/lib/jellyfin") [
-      "d ${cfg.dataDir} 0700 ${cfg.user} ${cfg.group}"
-      "d ${cfg.dataDir}/config 0700 ${cfg.user} ${cfg.group}"
-    ];
+    providers.services.tmpfiles.rules =
+      let
+        owned = mode: path: {
+          type = "directory";
+          inherit path mode;
+          inherit (cfg) user group;
+        };
+      in
+      [
+        (owned "0700" "/var/cache/jellyfin")
+        (owned "0750" "/var/log/jellyfin")
+      ]
+      ++ lib.optionals (cfg.dataDir == "/var/lib/jellyfin") [
+        (owned "0700" cfg.dataDir)
+        (owned "0700" "${cfg.dataDir}/config")
+      ];
 
     users.users = lib.optionalAttrs (cfg.user == "jellyfin") {
       jellyfin = {

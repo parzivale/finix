@@ -159,16 +159,24 @@ in
     ]
     ++ lib.optionals cfg.debug [ "--log-level=debug" ];
 
-    finit.tmpfiles.rules =
-      lib.optionals (cfg.settings.configuration.persist_logs.logs_directory == "/var/log/ytdl-sub") [
-        "d /var/log/ytdl-sub 0750 ${cfg.user} ${cfg.group}"
-      ]
-      ++ lib.optionals (cfg.settings.configuration.working_directory == "/run/ytdl-sub") [
-        "d /run/ytdl-sub 0750 ${cfg.user} ${cfg.group}"
-      ]
-      ++ lib.optionals (cfg.settings.configuration.lock_directory == "/run/lock/ytdl-sub") [
-        "d /run/lock/ytdl-sub 0750 ${cfg.user} ${cfg.group}"
-      ];
+    providers.services.tmpfiles.rules =
+      let
+        owned = path: {
+          type = "directory";
+          inherit path;
+          mode = "0750";
+          inherit (cfg) user group;
+        };
+      in
+      lib.optional (cfg.settings.configuration.persist_logs.logs_directory == "/var/log/ytdl-sub") (
+        owned "/var/log/ytdl-sub"
+      )
+      ++ lib.optional (cfg.settings.configuration.working_directory == "/run/ytdl-sub") (
+        owned "/run/ytdl-sub"
+      )
+      ++ lib.optional (cfg.settings.configuration.lock_directory == "/run/lock/ytdl-sub") (
+        owned "/run/lock/ytdl-sub"
+      );
 
     providers.scheduler.tasks = {
       ytdl-sub = {

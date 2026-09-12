@@ -144,8 +144,13 @@ in
   };
 
   config = lib.mkIf cfg.enable {
-    finit.tmpfiles.rules = lib.optionals (cfg.dataDir == "/var/lib/radarr") [
-      "d ${cfg.dataDir} 0700 ${cfg.user} ${cfg.group}"
+    providers.services.tmpfiles.rules = lib.optionals (cfg.dataDir == "/var/lib/radarr") [
+      {
+        type = "directory";
+        path = cfg.dataDir;
+        mode = "0700";
+        inherit (cfg) user group;
+      }
     ];
 
     providers.services.units.radarr = {

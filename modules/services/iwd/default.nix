@@ -64,8 +64,12 @@ in
 
     services.dbus.packages = [ cfg.package ];
 
-    finit.tmpfiles.rules = [
-      "d /var/lib/iwd 0700"
+    providers.services.tmpfiles.rules = [
+      {
+        type = "directory";
+        path = "/var/lib/iwd";
+        mode = "0700";
+      }
     ];
 
     providers.services.units.iwd = {

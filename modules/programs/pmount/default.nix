@@ -42,8 +42,11 @@ in
       pumount = mkSetuidWrapper cfg.package "pumount";
     };
 
-    finit.tmpfiles.rules = [
-      "d /media - root root - -"
+    providers.services.tmpfiles.rules = [
+      {
+        type = "directory";
+        path = "/media";
+      }
     ];
   };
 }

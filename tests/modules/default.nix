@@ -109,6 +109,13 @@ let
       "run"
     ];
 
+  # the same question for tmpfiles, which are a list and so have no names to subtract.
+  #
+  # `finit.tmpfiles.rules` is finit's own tmpfiles.d(5) reader, and a module writing rules
+  # there gets its directories on finit and on nothing else - the same bug as a stanza, in a
+  # place the name-based check above cannot see.
+  tmpfilesRules = cfg: lib.length (cfg.finit.tmpfiles.rules or [ ]);
+
   # a module is ported when turning it on adds contract units rather than finit stanzas.
   #
   # This is the check the per-backend one cannot make: an unported module is not *broken* on
@@ -121,19 +128,26 @@ let
       attempt = builtins.tryEval (
         let
           cfg = (testLib.evalNode "machine" (nodeFor kind name "dinit")).config;
-          added = lib.subtractLists (stanzaNames baseline.dinit) (stanzaNames cfg);
+
+          # the names and the count, and nothing else. `deepSeq` on `cfg.finit` itself would
+          # force every stanza's command - which is a package, whose own attributes are
+          # packages - and run the evaluator out of stack before it got to the question.
+          result = {
+            stanzas = lib.subtractLists (stanzaNames baseline.dinit) (stanzaNames cfg);
+            rules = tmpfilesRules cfg - tmpfilesRules baseline.dinit;
+          };
         in
-        lib.deepSeq added added
+        lib.deepSeq result result
       );
     in
     if !attempt.success then
       [ ] # whatever is wrong with it, the per-backend checks will say so
-    else if attempt.value == [ ] then
-      [ ]
     else
-      [
-        "adds finit stanzas rather than contract units, so it exists on finit and nowhere else: ${lib.concatStringsSep ", " attempt.value}"
-      ];
+      lib.optional (attempt.value.stanzas != [ ])
+        "adds finit stanzas rather than contract units, so it exists on finit and nowhere else: ${lib.concatStringsSep ", " attempt.value.stanzas}"
+      ++
+        lib.optional (attempt.value.rules > 0)
+          "adds ${toString attempt.value.rules} rules to finit.tmpfiles.rules rather than providers.services.tmpfiles.rules, so the paths it needs are created on finit and nowhere else";
 
   check =
     kind: name: backend:

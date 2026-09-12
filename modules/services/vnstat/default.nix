@@ -132,8 +132,13 @@ in
     environment.systemPackages = [ cfg.package ];
     environment.etc."vnstat.conf".source = format.generate "vnstat.conf" cfg.settings;
 
-    finit.tmpfiles.rules = lib.optionals (cfg.settings.DatabaseDir == "/var/lib/vnstat") [
-      "d ${cfg.settings.DatabaseDir} 0750 ${cfg.user} ${cfg.group}"
+    providers.services.tmpfiles.rules = lib.optionals (cfg.settings.DatabaseDir == "/var/lib/vnstat") [
+      {
+        type = "directory";
+        path = cfg.settings.DatabaseDir;
+        mode = "0750";
+        inherit (cfg) user group;
+      }
     ];
 
     providers.services.units.vnstat = {
