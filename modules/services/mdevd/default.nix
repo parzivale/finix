@@ -53,8 +53,20 @@ let
   #
   # Note: The by-id symlinks just use the device name as a placeholder.
   # Real unique IDs would require querying device serial numbers, etc.
+  # mdevd hands this to /bin/sh with whatever environment mdevd itself was given, so it names
+  # every command absolutely rather than relying on one. `path` is a contract capability dinit
+  # does not have, and a unit which cannot be given a PATH must not need one - otherwise this
+  # works on finit and quietly does nothing on the backend that cannot.
   devDiskScript = pkgs.writeScript "mdevd-disk.sh" ''
     #!/bin/sh
+    PATH=${
+      lib.makeBinPath [
+        pkgs.coreutils
+        pkgs.util-linux
+      ]
+    }:$PATH
+    export PATH
+
     case "$ACTION" in
       add)
         # Create by-id symlink (using device name as placeholder ID)
@@ -107,6 +119,27 @@ let
 
   # Use * prefix to run via /bin/sh on any action (add/remove).
   devDiskRule = "-SUBSYSTEM=block;.* 0:${gidOf "disk"} 660 *${devDiskScript}";
+
+  # mdevd reports readiness the s6 way: it writes a newline to a descriptor the supervisor
+  # hands it, named by `-D`. Which descriptor that is, is the one thing about this the contract
+  # does not express - finit substitutes `%n` into the command line, and s6 always uses 3 - so
+  # the daemon cannot be described without knowing which implementation is listening.
+  #
+  # dinit and runit cannot observe the protocol at all. There the daemon is taken as ready once
+  # spawned, which is a window: mdevd opens its netlink socket a moment after being forked, and
+  # coldplug triggering events into that window would lose them.
+  observable = lib.elem "s6" config.providers.services.supportedFeatures.readiness;
+  descriptor = if config.providers.services.backend == "finit" then "%n" else "3";
+
+  # the rules as a store path, which is what the daemon is pointed at - not
+  # `config.environment.etc."mdev.conf".source`, which is the same file reached the long way
+  # round and cannot be asked for here.
+  #
+  # dinit and s6-rc write their unit fingerprints into /etc. So on those two, asking for an
+  # entry of environment.etc from inside a unit's command is a cycle: etc needs the
+  # fingerprints, the fingerprints need every command, and this command needed etc. finit keeps
+  # its fingerprints elsewhere, which is the only reason this was ever expressible.
+  mdevConf = pkgs.writeText "mdev.conf" config.services.mdevd.hotplugRules;
 in
 {
   options.services.mdevd = {
@@ -182,36 +215,38 @@ in
       ];
     };
 
-    environment.etc."mdev.conf".text = config.services.mdevd.hotplugRules;
+    environment.etc."mdev.conf".source = mdevConf;
 
-    finit.services.mdevd = {
+    # the device manager as contract units rather than finit stanzas. Written as stanzas it
+    # existed only on finit: a machine running any other backend enabled this module, got
+    # nothing, and booted with no device manager at all.
+    providers.services.units.mdevd = {
       description = "device event daemon (mdevd)";
-      command =
-        "${cfg.package}/bin/mdevd -D %n -F /run/current-system/firmware -f ${
-          config.environment.etc."mdev.conf".source
-        }"
-        + lib.optionalString (cfg.nlgroups != null) " -O ${toString cfg.nlgroups}"
-        + lib.optionalString cfg.debug " -v 3";
-      runlevels = "S12345789";
-      cgroup.name = "init";
-      notify = "s6";
-      log = true;
 
-      # TODO: now we're hijacking `env` and no one else can use it...
-      path = [
-        config.programs.coreutils.package
-        pkgs.execline
-        pkgs.util-linux
-      ];
+      requires = [ (lib.head config.providers.services.trunk.levels) ];
+
+      type.service = {
+        command =
+          "${cfg.package}/bin/mdevd"
+          + lib.optionalString observable " -D ${descriptor}"
+          + " -F /run/current-system/firmware -f ${mdevConf}"
+          + lib.optionalString (cfg.nlgroups != null) " -O ${toString cfg.nlgroups}"
+          + lib.optionalString cfg.debug " -v 3";
+
+        readiness = if observable then "s6" else "fork";
+      };
+
+      # no `path`. The stanza this replaces carried one, with a note about hijacking `env` for
+      # it - but dinit cannot give a unit a PATH at all, so anything relying on one worked on
+      # finit and silently did not there. Everything reachable from here names itself
+      # absolutely instead: the daemon above, the modprobe in the modalias rule, and the disk
+      # script, which sets its own.
     };
 
-    finit.run.coldplug = {
+    providers.services.units.coldplug = {
       description = "cold plugging system";
-      command = "${cfg.package}/bin/mdevd-coldplug" + lib.optionalString cfg.debug " -v 3";
-      runlevels = "S";
-      conditions = "service/mdevd/ready";
-      cgroup.name = "init";
-      log = true;
+      requires = [ "mdevd" ];
+      type.oneshot.command = "${cfg.package}/bin/mdevd-coldplug" + lib.optionalString cfg.debug " -v 3";
     };
 
     # TODO: share between udev and mdevd

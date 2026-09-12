@@ -50,11 +50,10 @@
         machine.wait_until_succeeds("test -f /run/svc-test/marker.ran", timeout=120)
 
     with subtest("mdevd runs as a contract unit, with s6 readiness"):
-        # note the unit is named device-events, not mdevd: a contract unit sharing a name
-        # with an existing finit stanza silently merges with it, so the `enable = false`
-        # above would have disabled this unit too
-        assert status("device-events") == "running", f"device-events is {status('device-events')}"
-        machine.succeed("test -f /run/finit/cond/task/device-events-started/success")
+        # the module emits this, rather than the test declaring it: the daemon used to be a
+        # finit stanza, and so existed on finit and nowhere else
+        assert status("mdevd") == "running", f"mdevd is {status('mdevd')}"
+        machine.succeed("test -f /run/finit/cond/task/mdevd-started/success")
         assert status("coldplug") == "done", f"coldplug is {status('coldplug')}"
 
     with subtest("the terminal is plain finit config, not a unit"):
@@ -70,7 +69,7 @@
         }
         contract = {
             "start", "sysinit", "basic", "multi-user", "running", "stopped", "shutdown",
-            "device-events", "device-events-started", "coldplug", "marker",
+            "mdevd", "mdevd-started", "coldplug", "marker",
             "providers-services-shutdown",
             # emitted by the contract now, not by finit: putting volatile files in place and
             # installing the setuid wrappers are part of bringing a machine up, so every
