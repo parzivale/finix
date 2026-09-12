@@ -161,6 +161,10 @@ let
     # `user` and `command` have no default, and it asserts that a seat manager exists - all
     # three correctly, which is why turning it on alone cannot work
     autologin = "a user, a command, and a seat manager";
+
+    # `package` has no default: which major version a cluster is created with is not something
+    # to pick on somebody's behalf, since moving between them means a dump and a restore
+    postgresql = "package, the major version to run";
   };
 
   # a module with no `enable` is one a machine always has - coreutils, modprobe, the shell -

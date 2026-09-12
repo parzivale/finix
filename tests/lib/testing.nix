@@ -91,7 +91,9 @@ in
       "boot.panic_on_fail"
     ];
 
-    services.sysklogd.enable = true;
+    # a default rather than a decision: every test machine wants a logger, but a test of
+    # something which *is* the logger - rsyslog - has to be able to be the one instead
+    services.sysklogd.enable = lib.mkDefault true;
 
     environment.etc."syslog.conf".source = pkgs.writeText "syslog.conf" ''
       # log *all* messages to console so they're visible in tests

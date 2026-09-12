@@ -68,10 +68,19 @@ in
   };
 
   config = lib.mkIf cfg.enable {
-    finit.services.sessiond-uaccess = {
+    # this watches sessiond's sessions over the bus and does nothing without it, so it turns
+    # it on rather than ordering after a daemon which may not be there - the same thing
+    # sessiond itself does with polkit
+    services.sessiond.enable = true;
+
+    providers.services.units.sessiond-uaccess = {
       description = "grant device access to active local sessions";
-      conditions = "service/sessiond/ready";
-      command =
+
+      # sessiond itself, by name: this watches that daemon's sessions, so it is one of the
+      # few edges which is genuinely about a particular service rather than about a tier
+      requires = [ "sessiond" ];
+
+      type.service.command =
         "${lib.getExe cfg.package} --log-target syslog --rules-dirs ${cfg.package}/share/sessiond-uaccess/rules "
         + lib.optionalString (cfg.extraConfig != "") "--rules-dirs ${configFile}";
       environment =

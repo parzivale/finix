@@ -135,41 +135,71 @@ in
     environment.etc."postgresql/${cfg.package.psqlSchema}/postgresql.conf".source =
       format.generate "postgresql.conf" cfg.settings;
 
-    # TODO: add finit.services.reloadTriggers option
-    environment.etc."finit.d/postgresql.conf".text = lib.mkAfter ''
+    # `pre` was finit running this as part of starting the service; the contract has no
+    # such step, and a database which has to be created before it can be served is a unit of
+    # its own anyway - it runs as the postgres user, exactly as the `pre` did.
+    providers.services.units.postgresql-initdb = lib.mkIf cfg.initdb.enable {
+      description = "create the postgresql cluster";
 
-      # reload trigger
-      # ${config.environment.etc."postgresql/${cfg.package.psqlSchema}/postgresql.conf".source}
-      # ${config.environment.etc."postgresql/${cfg.package.psqlSchema}/pg_hba.conf".source}
-      # ${config.environment.etc."postgresql/${cfg.package.psqlSchema}/pg_ident.conf".source}
-    '';
-
-    finit.services.postgresql = {
       inherit (cfg) user group;
+      requires = [ "sysinit" ];
 
-      command = "${lib.getExe' cfg.package "postgres"} " + lib.escapeShellArgs cfg.extraArgs;
-      path = [ cfg.package ];
-      conditions = [
-        "service/syslogd/ready"
-        "net/lo/up"
-      ];
-      kill = 120;
-    }
-    // lib.optionalAttrs cfg.initdb.enable {
-      pre = pkgs.writeShellScript "pre.sh" ''
+      type.oneshot.command = pkgs.writeShellScript "postgresql-initdb.sh" ''
         if [ ! -f "${cfg.dataDir}/PG_VERSION" ]; then
           ${lib.getExe' cfg.package "initdb"} ${lib.escapeShellArgs cfg.initdb.extraArgs} ${cfg.dataDir}
         fi
       '';
     };
 
-    finit.tmpfiles.rules = [
-      "d /run/postgresql - ${cfg.user} ${cfg.group}"
+    providers.services.units.postgresql = {
+      description = "postgresql database service";
+
+      inherit (cfg) user group;
+
+      # the logger and loopback are both behind the tier which completes `basic`
+      requires = [
+        "basic"
+      ]
+      ++ lib.optional cfg.initdb.enable "postgresql-initdb";
+
+      # `kill = 120` was finit's; a database is the case the option was written for. A
+      # checkpoint on shutdown can take minutes on a large cluster, and being killed part way
+      # through one is how a cluster comes back needing recovery.
+      stopTimeout = 120;
+
+      type.service = {
+        command = "${lib.getExe' cfg.package "postgres"} " + lib.escapeShellArgs cfg.extraArgs;
+
+        # postgres rereads postgresql.conf, pg_hba.conf and pg_ident.conf on SIGHUP, which is
+        # what the commented-out "reload trigger" in the generated finit stanza was reaching
+        # for. Signalled directly rather than through `pg_ctl reload`, which refuses to run as
+        # root, and a reload command is run by whatever is doing the switch.
+        reload = "${lib.getExe' pkgs.coreutils "kill"} -HUP \"$(${lib.getExe' pkgs.coreutils "head"} -n1 ${cfg.dataDir}/postmaster.pid)\"";
+      };
+
+      path = [ cfg.package ];
+    };
+
+    providers.services.tmpfiles.rules = [
+      {
+        type = "directory";
+        path = "/run/postgresql";
+        inherit (cfg) user group;
+      }
     ]
-    ++ lib.optionals (cfg.dataDir == "/var/lib/postgresql/${cfg.package.psqlSchema}") [
-      "d /var/lib/postgresql 0750 ${cfg.user} ${cfg.group}"
-      "d /var/lib/postgresql/${cfg.package.psqlSchema} 0750 ${cfg.user} ${cfg.group}"
-    ];
+    ++ lib.optionals (cfg.dataDir == "/var/lib/postgresql/${cfg.package.psqlSchema}") (
+      map
+        (path: {
+          type = "directory";
+          inherit path;
+          mode = "0750";
+          inherit (cfg) user group;
+        })
+        [
+          "/var/lib/postgresql"
+          "/var/lib/postgresql/${cfg.package.psqlSchema}"
+        ]
+    );
 
     users.users.${cfg.user} = {
       name = cfg.user;

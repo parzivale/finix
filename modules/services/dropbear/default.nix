@@ -119,10 +119,13 @@ in
       cfg.package
     ];
 
-    finit.tasks.dropbear-keygen = {
+    providers.services.units.dropbear-keygen = {
       description = "generate ssh host keys";
-      log = true;
-      command =
+
+      # before anything can serve with them, and before the tier which completes `basic`
+      requires = [ "sysinit" ];
+
+      type.oneshot.command =
         let
           script = lib.concatMapStringsSep "\n" (key: ''
             if ! [ -s "${key.path}" ]; then
@@ -135,17 +138,19 @@ in
         pkgs.writeShellScript "ssh-keygen.sh" script;
     };
 
-    finit.services.dropbear = {
+    providers.services.units.dropbear = {
       description = "dropbear ssh daemon";
-      conditions = [
-        "net/lo/up"
-        "service/syslogd/ready"
-        "task/dropbear-keygen/success"
+
+      # `basic`, where the rest of the network daemons are. `net/lo/up` and
+      # `service/syslogd/ready` are both behind it - loopback and the logger come up in the
+      # tier which completes `basic` - so only the keys still need naming, and they are named
+      # because a daemon serving before they exist offers a host identity it then changes.
+      requires = [
+        "basic"
+        "dropbear-keygen"
       ];
-      command = "${cfg.package}/bin/dropbear -F " + lib.escapeShellArgs cfg.extraArgs;
-      cgroup.name = "user";
-      log = true;
-      nohup = true;
+
+      type.service.command = "${cfg.package}/bin/dropbear -F " + lib.escapeShellArgs cfg.extraArgs;
 
       # TODO: dropbear doesn't use PAM so we need to keep these variables in sync with security.pam.environment!
       # NOTE: dropbear will only respect PATH and LD_LIBRARY_PATH
@@ -155,8 +160,12 @@ in
       ];
     };
 
-    finit.tmpfiles.rules = [
-      "d ${stateDir} 0755"
+    providers.services.tmpfiles.rules = [
+      {
+        type = "directory";
+        path = stateDir;
+        mode = "0755";
+      }
     ];
   };
 }

@@ -114,13 +114,16 @@ in
       mariadb = { };
     };
 
-    finit.tasks.mariadb-init = {
+    providers.services.units.mariadb-init = {
       inherit (cfg) user group;
 
       description = "mariadb database init";
-      log = true;
 
-      command = pkgs.writeShellApplication {
+      # before the tier which completes `basic`, so the database it creates is there for the
+      # daemon which serves it
+      requires = [ "sysinit" ];
+
+      type.oneshot.command = pkgs.writeShellApplication {
         name = "mariadb-init.sh";
         runtimeInputs = [
           config.programs.coreutils.package
@@ -136,17 +139,30 @@ in
       };
     };
 
-    finit.services.mariadb = {
+    providers.services.units.mariadb = {
       inherit (cfg) user group;
 
       description = "mariadb database service";
-      conditions = [
-        "service/syslogd/ready"
-        "task/mariadb-init/success"
+
+      # the logger is behind the tier which completes `basic`; the init is not, so it is named
+      requires = [
+        "basic"
+        "mariadb-init"
       ];
-      command = "${cfg.package}/bin/mysqld --defaults-file=/etc/my.cnf ${mysqldOptions}";
-      notify = "systemd";
-      log = true;
+
+      # a database flushing its buffer pool on the way out is the case this option exists for
+      stopTimeout = 120;
+
+      type.service = {
+        command = "${cfg.package}/bin/mysqld --defaults-file=/etc/my.cnf ${mysqldOptions}";
+
+        # mysqld speaks sd_notify, which only finit can observe here; elsewhere it is taken as
+        # ready once spawned
+        readiness = [
+          "notify"
+          "fork"
+        ];
+      };
     };
 
     environment.systemPackages = [
@@ -155,12 +171,35 @@ in
 
     environment.etc."my.cnf".source = configFile;
 
-    # FIXME: finit doesn't implement Z recursively...
-    finit.tmpfiles.rules = [
-      "d ${cfg.dataDir} 0700 ${cfg.user} ${cfg.group}"
-      "Z ${cfg.dataDir} 0700 ${cfg.user} ${cfg.group}"
-      "d /run/mysqld 0755 ${cfg.user} ${cfg.group}"
-      "Z /run/mysqld 0755 ${cfg.user} ${cfg.group}"
-    ];
+    # the `d` rule creates it, the `permissions` rule fixes up what is already inside it -
+    # which is what the `Z` lines were for, and is recursive here rather than the FIXME it was
+    providers.services.tmpfiles.rules =
+      lib.concatMap
+        (
+          { path, mode }:
+          [
+            {
+              type = "directory";
+              inherit path mode;
+              inherit (cfg) user group;
+            }
+            {
+              type = "permissions";
+              inherit path mode;
+              inherit (cfg) user group;
+              recursive = true;
+            }
+          ]
+        )
+        [
+          {
+            path = cfg.dataDir;
+            mode = "0700";
+          }
+          {
+            path = "/run/mysqld";
+            mode = "0755";
+          }
+        ];
   };
 }

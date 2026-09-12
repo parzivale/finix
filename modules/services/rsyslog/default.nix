@@ -48,16 +48,37 @@ in
   };
 
   config = lib.mkIf cfg.enable {
-    finit.services.syslogd = {
+    # the two are alternatives under one name, so this one being on means the other is off.
+    # Plain `false` rather than `mkForce`: it overrides a default, and a machine which asks
+    # for sysklogd outright as well gets a conflict, which is what enabling two syslog daemons
+    # deserves.
+    services.sysklogd.enable = false;
+
+    providers.services.units.syslogd = {
       description = "system logging daemon";
-      runlevels = "S0123456789";
-      conditions =
-        lib.optionals config.services.gardendevd.enable [ "run/gardendevctl:2/success" ]
-        ++ lib.optionals config.services.keventd.enable [ "pid/keventd" ]
-        ++ lib.optionals config.services.udev.enable [ "run/udevadm:5/success" ]
-        ++ lib.optionals config.services.mdevd.enable [ "run/coldplug/success" ];
-      command = "${pkgs.rsyslog-light}/bin/rsyslogd -n -d -f ${configFile}";
+
+      type.service = {
+        command = "${pkgs.rsyslog-light}/bin/rsyslogd -n -d -f ${configFile}";
+
+        # `-n` is foreground, so ready-on-fork is the only honest answer here - the same
+        # bargain sysklogd makes, and for the same reason
+        readiness = "fork";
+      };
+
+      # the head of the trunk, so logging is up before `sysinit` and everything in a later
+      # tier can log without naming it. The device manager comes first where there is one:
+      # /dev/log has to exist before anything can log to it. This is the same shape as
+      # sysklogd's unit, deliberately - the two are alternatives under one name, and a
+      # machine enabling both is one definition of `syslogd` colliding with another, which
+      # is exactly the error it should be.
+      requires = [
+        (lib.head config.providers.services.trunk.levels)
+      ]
+      ++ lib.optional config.services.udev.enable "udev-settle"
+      ++ lib.optional config.services.mdevd.enable "coldplug";
     };
+
+    system.switch.inhibitors.syslogd = config.providers.services.units.syslogd.type.service.command;
 
     services.logrotate.rules.rsyslog = {
       text = ''
