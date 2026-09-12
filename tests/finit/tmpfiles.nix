@@ -8,7 +8,6 @@
   nodes.machine =
     { pkgs, ... }:
     {
-      services.getty.enable = true;
       services.mdevd.enable = true;
 
       # tmpfiles is part of being an init now, so it is reached by selecting one - the rules

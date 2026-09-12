@@ -8,7 +8,6 @@
   nodes.server =
     { pkgs, ... }:
     {
-      services.getty.enable = true;
       services.mdevd.enable = true;
 
       # finit is PID 1 here: the contract needs a backend named before it can point boot.init
@@ -31,7 +30,6 @@
   nodes.client =
     { lib, ... }:
     {
-      services.getty.enable = true;
       services.mdevd.enable = true;
 
       # finit is PID 1 here: the contract needs a backend named before it can point boot.init
