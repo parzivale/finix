@@ -124,12 +124,13 @@ let
 
       # a unit whose definition changed appears on both sides - its old name/fingerprint pair
       # only in current, its new pair only in incoming.
-      comm -13 "$work/incoming" "$work/current" | cut -f1 > "$work/gone"
+      comm -13 "$work/incoming" "$work/current" | cut -f1 | sort > "$work/gone"
       comm -23 "$work/incoming" "$work/current" | cut -f1 | sort > "$work/arrived"
 
       # which of those are the same unit changed, rather than one removed and another added:
-      # the name is on both sides.
-      comm -12 "$work/gone" <(sort "$work/arrived") | sort > "$work/changed"
+      # the name is on both sides. Both sides are sorted on the way into their files rather
+      # than here - `<(sort ...)` is bash's, and this has to be a script any shell can run.
+      comm -12 "$work/gone" "$work/arrived" > "$work/changed"
 
       # a changed unit which says it can re-read its own configuration is reloaded rather than
       # stopped and started. Whether that is enough is the unit's claim, not something which

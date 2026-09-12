@@ -40,11 +40,17 @@ in
       cfg.package
     ];
 
-    finit.services.incusd = {
+    providers.services.units.incusd = {
       description = "incus container hypervisor";
-      conditions = "service/syslogd/ready";
 
-      command = pkgs.writeShellApplication {
+      # the logger is behind the tier which completes `basic`
+      requires = [ "basic" ];
+
+      # a hypervisor being asked to stop has guests to stop first, and 30 seconds was finit's
+      # figure for it
+      stopTimeout = 30;
+
+      type.service.command = pkgs.writeShellApplication {
         name = "incusd";
         runtimeEnv = {
           INCUS_USBIDS_PATH = "${pkgs.hwdata}/share/hwdata/usb.ids";
@@ -97,19 +103,20 @@ in
           zfs
         ];
 
-        text =
-          "exec ${cfg.package}/bin/incusd --group incus-admin --syslog"
-          + lib.optionalString cfg.debug " --debug";
-      };
+        # the resource limits were `rlimits` on the finit stanza; the contract does not model
+        # them, because setting them is `ulimit` in the shell which is already starting this
+        # and needs nothing from an implementation.
+        #
+        # `cgroup.settings."pids.max"` is not carried over: it is finit's own cgroup handling,
+        # and the limit it lifts is one finit imposed in the first place.
+        # https://github.com/NixOS/nixpkgs/blob/92e1950ebadc72d89e7da09dd54f815c454cec0e/nixos/modules/virtualisation/incus.nix#L404-L407
+        text = ''
+          ulimit -l unlimited
+          ulimit -n 1048576
+          ulimit -u unlimited
 
-      kill = 30;
-
-      # https://github.com/NixOS/nixpkgs/blob/92e1950ebadc72d89e7da09dd54f815c454cec0e/nixos/modules/virtualisation/incus.nix#L404-L407
-      cgroup.settings."pids.max" = "max";
-      rlimits = {
-        memlock = "unlimited";
-        nofile = 1048576;
-        nproc = "unlimited";
+          exec ${cfg.package}/bin/incusd --group incus-admin --syslog${lib.optionalString cfg.debug " --debug"}
+        '';
       };
     };
 

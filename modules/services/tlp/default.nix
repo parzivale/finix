@@ -49,8 +49,11 @@ in
       cfg.package
     ];
 
-    finit.tmpfiles.rules = [
-      "d /var/lib/tlp"
+    providers.services.tmpfiles.rules = [
+      {
+        type = "directory";
+        path = "/var/lib/tlp";
+      }
     ];
 
     providers.resumeAndSuspend.hooks = {
@@ -79,33 +82,34 @@ in
       # -SUBSYSTEM=block;DEVTYPE=disk;.* root:root 0600 +${cfg.package}/lib/udev/tlp-usb-udev disk /sys/$DEVPATH
     '';
 
-    finit.tasks = {
-      "tlp@start" = {
-        description = "tlp system startup";
-        command = "${tlpExe} init start";
-        conditions = "service/syslogd/ready";
-        runlevels = "S";
-      };
+    providers.services.units.tlp-start = {
+      description = "tlp system startup";
 
-      "tlp@reload" = {
-        description = "tlp system reload";
-        command = "${tlpExe} start";
-        conditions = "service/syslogd/ready";
-      };
+      # early, like the runlevel S this used to sit in: the power policy should be in place
+      # before the machine has much running to spend power on
+      requires = [ "sysinit" ];
 
-      "tlp@stop" = {
-        description = "tlp system shutdown";
-        command = "${tlpExe} init stop";
-        conditions = "service/syslogd/ready";
-        runlevels = "06";
-      };
+      # three finit stanzas reduce to this one. `tlp@reload` ran `tlp start` and existed only
+      # so that a changed tlp.conf would be applied - which the stanza arranged by mentioning
+      # the config's store path in a comment, so that finit saw a changed stanza and re-ran it.
+      #
+      # The same trick, in the place the contract looks: the config path is named inside the
+      # script, so a changed tlp.conf is a changed command, which is a changed unit, which a
+      # switch re-runs. No second unit whose only job is to be restarted.
+      type.oneshot.command = pkgs.writeShellScript "tlp-start" ''
+        # applied again whenever this changes: ${config.environment.etc."tlp.conf".source}
+        exec ${tlpExe} init start
+      '';
     };
 
-    # TODO: add finit.services.restartTriggers option
-    environment.etc."finit.d/tlp@reload.conf".text = lib.mkAfter ''
+    providers.services.units.tlp-stop = {
+      description = "tlp system shutdown";
 
-      # standard nixos trick to force a restart when something has changed
-      # ${config.environment.etc."tlp.conf".source}
-    '';
+      # `runlevels = "06"` was finit's way of saying "on the way down", and the shutdown side
+      # of the trunk is what means that on every implementation
+      requires = [ "stopped" ];
+
+      type.oneshot.command = "${tlpExe} init stop";
+    };
   };
 }

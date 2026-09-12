@@ -78,21 +78,26 @@ in
     environment.etc."NetworkManager/conf.d/00-nixos.conf".source =
       format.generate "00-nixos.conf" cfg.settings;
 
-    # TODO: add finit.services.reloadTriggers option
-    environment.etc."finit.d/network-manager.conf".text = lib.mkAfter ''
-
-      # reload trigger
-      # ${config.environment.etc."NetworkManager/conf.d/00-nixos.conf".source}
-    '';
-
     services.dbus.enable = true;
     services.dbus.packages = packages;
     services.udev.packages = packages;
 
-    finit.services.network-manager = {
+    providers.services.units.network-manager = {
       description = "network manager service";
-      conditions = "service/dbus/ready";
-      command = "${cfg.package}/bin/NetworkManager -n";
+
+      # the bus and its socket gate are in the head tier, so `service/dbus/ready` is behind
+      # this without being named
+      requires = [ "basic" ];
+
+      type.service = {
+        command = "${cfg.package}/bin/NetworkManager -n";
+
+        # NetworkManager rereads its configuration on SIGHUP, which is what the commented-out
+        # "reload trigger" in the generated finit stanza was reaching for. A switch which only
+        # changed 00-nixos.conf now keeps the interfaces up instead of taking the network down
+        # and bringing it back.
+        reload = "${lib.getExe' pkgs.procps "pkill"} -HUP -x NetworkManager";
+      };
     };
 
     users.groups = {

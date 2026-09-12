@@ -133,9 +133,10 @@ in
       };
     };
 
-    finit.services.greetd.conditions = [
-      "service/accounts-daemon/ready"
-    ];
+    # regreet reads the user list over the bus, so the greeter it configures has to wait for
+    # the daemon which answers that - an edge added to greetd's own unit rather than declared
+    # there, because it is this greeter which needs it and not greetd
+    providers.services.units.greetd.requires = [ "accounts-daemon" ];
 
     programs.regreet.settings = {
       commands =
@@ -180,9 +181,18 @@ in
       }
     ];
 
-    finit.tmpfiles.rules = [
-      "d /var/log/regreet 0755 greeter greeter - -"
-      "d /var/lib/regreet 0755 greeter greeter - -"
-    ];
+    providers.services.tmpfiles.rules =
+      map
+        (path: {
+          type = "directory";
+          inherit path;
+          mode = "0755";
+          user = "greeter";
+          group = "greeter";
+        })
+        [
+          "/var/log/regreet"
+          "/var/lib/regreet"
+        ];
   };
 }

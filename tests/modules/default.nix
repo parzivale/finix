@@ -165,6 +165,15 @@ let
     # `package` has no default: which major version a cluster is created with is not something
     # to pick on somebody's behalf, since moving between them means a dump and a restore
     postgresql = "package, the major version to run";
+
+    # each drives a driver rather than installing one, and each asserts as much
+    nvidia-settings = "hardware.nvidia.enable, the driver it configures";
+    nvidia-persistenced = "hardware.nvidia.enable, the driver it keeps loaded";
+    nvidia-powerd = "hardware.nvidia.enable, the driver it manages power for";
+
+    # keventd is finit's own device event daemon, and the version of it this module drives has
+    # not been released yet - the assertion is the module's, and it is right
+    keventd = "a finit of at least 5.0, which nixpkgs does not have yet";
   };
 
   # a module with no `enable` is one a machine always has - coreutils, modprobe, the shell -
