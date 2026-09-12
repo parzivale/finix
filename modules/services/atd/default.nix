@@ -54,11 +54,18 @@ in
       text = lib.concatStringsSep "\n" cfg.deny;
     };
 
-    finit.services.atd = {
+    providers.services.units.atd = {
       description = "deferred execution scheduler";
-      conditions = "service/syslogd/ready";
-      command = "${pkgs.at}/bin/atd -f " + lib.escapeShellArgs cfg.extraArgs;
-      notify = "pid";
+      requires = [ "basic" ];
+
+      type.service = {
+        # `-f` is foreground, so ready-on-fork is the only honest answer. `notify = "pid"`
+        # asked finit to manage a pid file on the daemon's behalf, which says nothing about
+        # readiness and would be read by dinit as a daemon which forks and exits - which a
+        # foreground process never does.
+        command = "${pkgs.at}/bin/atd -f " + lib.escapeShellArgs cfg.extraArgs;
+        readiness = "fork";
+      };
     };
 
     users.users = {
@@ -80,10 +87,28 @@ in
       setgid = true;
     });
 
-    finit.tmpfiles.rules = [
-      "d /var/spool/atjobs 1770 atd atd"
-      "f /var/spool/atjobs/.SEQ 0600 atd atd"
-      "d /var/spool/atspool 1770 atd atd"
+    providers.services.tmpfiles.rules = [
+      {
+        type = "directory";
+        path = "/var/spool/atjobs";
+        mode = "1770";
+        user = "atd";
+        group = "atd";
+      }
+      {
+        type = "file";
+        path = "/var/spool/atjobs/.SEQ";
+        mode = "0600";
+        user = "atd";
+        group = "atd";
+      }
+      {
+        type = "directory";
+        path = "/var/spool/atspool";
+        mode = "1770";
+        user = "atd";
+        group = "atd";
+      }
     ];
 
     security.pam.services.atd = {

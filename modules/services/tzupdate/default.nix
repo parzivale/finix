@@ -38,15 +38,18 @@ in
   config = lib.mkIf cfg.enable {
     time.timeZone = null;
 
-    finit.tasks.tzupdate = {
+    providers.services.units.tzupdate = {
       description = "timezone update service";
-      command = "${cfg.package}/bin/tzupdate -z ${pkgs.tzdata}/share/zoneinfo -d /dev/null";
-      conditions = [
-        "service/syslogd/ready"
-        "net/route/default"
+
+      # it asks the network where it is, so it waits for one. syslogd is in the head tier and
+      # needs no naming.
+      requires = [
+        "basic"
+        "network-online"
       ];
 
-      # TODO: now we're hijacking `env` and no one else can use it...
+      type.oneshot.command = "${cfg.package}/bin/tzupdate -z ${pkgs.tzdata}/share/zoneinfo -d /dev/null";
+
       environment = {
         RUST_LOG = lib.mkIf cfg.debug "debug";
       };

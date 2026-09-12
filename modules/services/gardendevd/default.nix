@@ -155,17 +155,12 @@ in
       # the head tier, beside the other device managers, so `sysinit` waits for device events
       requires = [ (lib.head config.providers.services.trunk.levels) ];
 
+      # the rules gardendevd runs invoke helpers by name. Every implementation gives a unit a
+      # PATH now, dinit's is scripted in by its backend, so this says what it wants and no more.
+      inherit (cfg) path;
+
       type.service = {
-        # the PATH goes in a wrapper rather than through the contract's `path`: dinit cannot
-        # give a unit one, and the rules gardendevd runs invoke helpers by name.
-        #
-        # `"$@"` because the implementation appends the readiness descriptor to the command it
-        # is given, and the command it is given is this wrapper - so the wrapper has to pass it
-        # on rather than swallow it.
-        command = pkgs.writeShellScript "gardendevd" ''
-          export PATH=${lib.makeBinPath cfg.path}:$PATH
-          exec ${cfg.package}/bin/gardendevd ${lib.escapeShellArgs cfg.extraArgs} "$@"
-        '';
+        command = "${cfg.package}/bin/gardendevd " + lib.escapeShellArgs cfg.extraArgs;
 
         # what the daemon can do, best first. The contract takes the best of these the
         # implementation can observe; `fork` last is what makes that always resolvable.

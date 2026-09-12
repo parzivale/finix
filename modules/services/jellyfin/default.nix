@@ -70,13 +70,13 @@ in
   };
 
   config = lib.mkIf cfg.enable {
-    finit.services.jellyfin = {
+    providers.services.units.jellyfin = {
       inherit (cfg) user group;
 
       description = "jellyfin media server";
-      conditions = "service/syslogd/ready";
-      command = "${lib.getExe cfg.package} --datadir ${cfg.dataDir} --configdir ${cfg.dataDir}/config --cachedir /var/cache/jellyfin --logdir /var/log/jellyfin";
-      nohup = true;
+      requires = [ "basic" ];
+
+      type.service.command = "${lib.getExe cfg.package} --datadir ${cfg.dataDir} --configdir ${cfg.dataDir}/config --cachedir /var/cache/jellyfin --logdir /var/log/jellyfin";
     };
 
     finit.tmpfiles.rules = [

@@ -194,13 +194,28 @@ in
       cfg.package
     ];
 
-    finit.tmpfiles.rules = [
-      "d /var/cron 0710"
-      "d /var/spool 0755 - - -"
-      "d /var/spool/cron 0755 - - -"
+    providers.services.tmpfiles.rules = [
+      {
+        type = "directory";
+        path = "/var/cron";
+        mode = "0710";
+      }
+      {
+        type = "directory";
+        path = "/var/spool";
+        mode = "0755";
+      }
+      {
+        type = "directory";
+        path = "/var/spool/cron";
+        mode = "0755";
+      }
 
       # ensure this directory exists - cronie complains if it doesn't
-      "d /etc/cron.d"
+      {
+        type = "directory";
+        path = "/etc/cron.d";
+      }
     ];
 
     security.wrappers.crontab = {
@@ -210,11 +225,16 @@ in
       source = "${cfg.package}/bin/crontab";
     };
 
-    finit.services.cron = {
+    providers.services.units.cron = {
       description = "cron daemon";
-      conditions = "service/syslogd/ready";
-      command = "${lib.getExe cfg.package} -n " + lib.escapeShellArgs cfg.extraArgs;
-      notify = "pid";
+      requires = [ "basic" ];
+
+      type.service = {
+        # `-n` is foreground, so ready-on-fork is the only honest answer - see atd for why
+        # `notify = "pid"` does not carry over.
+        command = "${lib.getExe cfg.package} -n " + lib.escapeShellArgs cfg.extraArgs;
+        readiness = "fork";
+      };
     };
 
     # TODO: add finit.services.restartTriggers option

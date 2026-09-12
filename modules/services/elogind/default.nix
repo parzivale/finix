@@ -39,12 +39,16 @@ in
     providers.services.units.elogind = {
       description = "login manager";
 
-      # attached to `basic`, so it runs in the tier which completes `multi-user` - and anything
-      # attached to `multi-user`, a login prompt among them, is after it by the trunk rather
-      # than by naming elogind. `dbus-socket` is the one edge the tier cannot supply: the bus
-      # is not attached to a level, so being in a later tier says nothing about it.
+      # `sysinit`, beside seatd and the bus: seat and session management is infrastructure that
+      # the tier above is entitled to assume, in the same way it assumes logging and device
+      # nodes. Anything in a later tier - a login prompt, polkit - is then after it by the
+      # trunk rather than by naming it, and naming it would have meant an optional edge, which
+      # hides a requirement rather than stating it.
+      #
+      # `dbus-socket` is still named: the bus is a sibling here, and a tier says nothing about
+      # its own members. What this needs is the socket answering, not the daemon having forked.
       requires = [
-        "basic"
+        "sysinit"
         "dbus-socket"
       ];
 

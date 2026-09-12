@@ -62,14 +62,22 @@ in
       });
     '';
 
-    finit.services.power-profiles-daemon = {
+    providers.services.units.power-profiles-daemon = {
       description = "power profiles daemon";
-      conditions = "service/dbus/ready";
-      command = "${cfg.package}/libexec/power-profiles-daemon";
+
+      requires = [
+        "basic"
+        "dbus-socket"
+      ];
+
+      type.service.command = "${cfg.package}/libexec/power-profiles-daemon";
     };
 
-    finit.tmpfiles.rules = [
-      "d /var/lib/power-profiles-daemon"
+    providers.services.tmpfiles.rules = [
+      {
+        type = "directory";
+        path = "/var/lib/power-profiles-daemon";
+      }
     ];
   };
 }

@@ -114,6 +114,33 @@ in
       requires = [ (lib.head config.providers.services.trunk.levels) ];
     };
 
+    # "the machine can reach the network", as a unit rather than as a condition.
+    #
+    # `net/route/default` is a finit netlink condition, and seven modules were waiting on one.
+    # Nothing else has netlink conditions, so the portable form of the same question is a unit
+    # which does not complete until the kernel has a default route - anything which needs the
+    # network requires this, on every implementation.
+    #
+    # Bounded, and deliberately: an unsatisfied finit condition meant the service never started
+    # and the boot carried on, but a unit is something its dependants wait for. A machine with
+    # no network would otherwise hold them for as long as it stayed up, where before it simply
+    # ran without them.
+    providers.services.units.network-online = {
+      description = "wait for a default route";
+      requires = [ "sysinit" ];
+
+      type.oneshot.command = pkgs.writeShellScript "network-online" ''
+        for _ in $(${lib.getExe' pkgs.coreutils "seq"} 1 300); do
+          if [ -s /proc/net/route ] && ${lib.getExe' pkgs.gnugrep "grep"} -qE '^[^	]+	00000000	' /proc/net/route; then
+            exit 0
+          fi
+          ${lib.getExe' pkgs.coreutils "sleep"} 0.1
+        done
+
+        echo "network-online: no default route after 30s, continuing" >&2
+      '';
+    };
+
     environment.etc = {
       hostname.text = cfg.hostName + "\n";
 

@@ -68,16 +68,14 @@ in
       "d /var/lib/iwd 0700"
     ];
 
-    finit.services.iwd = {
+    providers.services.units.iwd = {
       description = "wireless service";
-      conditions = "service/syslogd/ready";
-      command = "${cfg.package}/libexec/iwd" + lib.optionalString cfg.debug " -d";
-      nohup = true;
-      log = true;
+      requires = [ "basic" ];
 
-      path = lib.optionals config.programs.resolvconf.enable [
-        config.programs.resolvconf.package
-      ];
+      # iwd runs resolvconf by name when it has one
+      path = lib.optional config.programs.resolvconf.enable config.programs.resolvconf.package;
+
+      type.service.command = "${cfg.package}/libexec/iwd" + lib.optionalString cfg.debug " -d";
     };
 
     # TODO: add finit.services.restartTriggers option

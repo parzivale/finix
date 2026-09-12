@@ -34,10 +34,15 @@ in
       pkgs.ddccontrol
     ];
 
-    finit.services.ddccontrol = {
+    providers.services.units.ddccontrol = {
       description = "control monitor parameters, like brightness, contrast, and other...";
-      command = "${pkgs.ddccontrol}/libexec/ddccontrol/ddccontrol_service";
-      conditions = "service/dbus/ready";
+
+      requires = [
+        "basic"
+        "dbus-socket"
+      ];
+
+      type.service.command = "${pkgs.ddccontrol}/libexec/ddccontrol/ddccontrol_service";
     };
   };
 }

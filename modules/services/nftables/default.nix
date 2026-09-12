@@ -51,14 +51,24 @@ in
 
     environment.systemPackages = [ cfg.package ];
 
-    finit.tasks.nftables = {
-      conditions = "service/syslogd/ready";
-      command = "${lib.getExe cfg.package} -f ${cfg.configFile}";
-      post = pkgs.writeShellScript "nftables.sh" ''
+    providers.services.units.nftables = {
+      description = "load the firewall ruleset";
+
+      # `sysinit`, so the ruleset is in place before the basic tier - a machine should not be
+      # reachable before its firewall is. syslogd is in the head tier and needs no naming.
+      requires = [ "sysinit" ];
+
+      type.oneshot.command = "${lib.getExe cfg.package} -f ${cfg.configFile}";
+    };
+
+    # `post` was finit's stop action, which is the shutdown side now
+    providers.services.units.nftables-flush = {
+      description = "flush the firewall ruleset";
+      requires = [ "stopped" ];
+
+      type.oneshot.command = pkgs.writeShellScript "nftables-flush" ''
         ${lib.getExe cfg.package} flush ruleset
       '';
-      log = true;
-      remain = true;
     };
   };
 }

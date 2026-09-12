@@ -41,12 +41,17 @@ in
     services.dbus.enable = true;
     services.dbus.packages = [ cfg.package ];
 
-    finit.services.accounts-daemon = {
+    providers.services.units.accounts-daemon = {
       description = "accounts service";
-      conditions = "service/dbus/ready";
-      command = "${cfg.package}/libexec/accounts-daemon" + lib.optionalString cfg.debug " --debug";
-      nohup = true;
-      log = true;
+
+      requires = [
+        "basic"
+        "dbus-socket"
+      ];
+
+      type.service.command =
+        "${cfg.package}/libexec/accounts-daemon" + lib.optionalString cfg.debug " --debug";
+
       environment = {
         GVFS_DISABLE_FUSE = 1;
         GIO_USE_VFS = "local";
@@ -62,8 +67,12 @@ in
           };
     };
 
-    finit.tmpfiles.rules = [
-      "d /var/lib/AccountsService 0775"
+    providers.services.tmpfiles.rules = [
+      {
+        type = "directory";
+        path = "/var/lib/AccountsService";
+        mode = "0775";
+      }
     ];
   };
 }

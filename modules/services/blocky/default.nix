@@ -85,18 +85,25 @@ in
       queryLog.type = lib.mkDefault "none";
     };
 
-    finit.services.blocky = {
+    providers.services.units.blocky = {
       inherit (cfg) user group;
 
       description = "a dns proxy and ad-blocker for the local network";
-      conditions = [
-        "service/syslogd/ready"
-        "net/route/default"
+
+      requires = [
+        "basic"
+        "network-online"
       ];
-      command = "${lib.getExe cfg.package} --config ${configFile}";
-      caps = [ "^cap_net_bind_service" ];
-      log = true;
-      nohup = true;
+
+      # `caps = [ "^cap_net_bind_service" ]` was finit's own capability handling, which the
+      # contract does not model - and this needs it, since it binds port 53 as a non-root user.
+      # `setpriv` carries the capability into the process instead, which works on every
+      # implementation rather than on the one with a `caps` stanza.
+      type.service.command = pkgs.writeShellScript "blocky" ''
+        exec ${lib.getExe' pkgs.util-linux "setpriv"} \
+          --ambient-caps +cap_net_bind_service \
+          -- ${lib.getExe cfg.package} --config ${configFile} "$@"
+      '';
     };
 
     users.users = lib.mkIf (cfg.user == "blocky") {

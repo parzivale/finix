@@ -65,11 +65,18 @@ in
     services.dbus.packages = [ cfg.package ];
     services.udev.packages = [ cfg.package ];
 
-    finit.services.udisks2 = {
+    providers.services.units.udisks2 = {
       description = "disk manager";
-      command = "${cfg.package}/libexec/udisks2/udisksd" + lib.optionalString cfg.debug " --debug";
-      conditions = "service/dbus/ready";
-      log = true;
+
+      requires = [
+        "basic"
+        "dbus-socket"
+      ];
+
+      # `log` is gone with the stanza: finit's own logging, which the contract does not model -
+      # every implementation gives a unit's output to its supervisor.
+      type.service.command =
+        "${cfg.package}/libexec/udisks2/udisksd" + lib.optionalString cfg.debug " --debug";
     };
   };
 }

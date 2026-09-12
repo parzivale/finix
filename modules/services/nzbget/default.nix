@@ -114,7 +114,7 @@ in
       UpdateCheck = "none";
     };
 
-    finit.services.nzbget =
+    providers.services.units.nzbget =
       let
         configOpts = lib.concatStringsSep " " (
           lib.mapAttrsToList (name: value: "-o ${name}=${lib.escapeShellArg (toStr value)}") cfg.settings
@@ -138,24 +138,35 @@ in
         inherit (cfg) user group;
 
         description = "nzbget daemon";
-        conditions = "service/syslogd/ready";
-        command = "${script} --server";
-        stop = "${script} --quit";
-        reload = "${script} --reload";
+        requires = [ "basic" ];
 
-        pre = pkgs.writeShellScript "nzbget-pre.sh" ''
+        # `pre` was finit's own start action, and `stop`/`reload` its own verbs - none of which
+        # the contract models. The seeding `pre` did is folded into the command, which is the
+        # one place every implementation runs: it has to happen before the server starts and
+        # nothing else waits on it, so it needs no unit of its own.
+        type.service.command = pkgs.writeShellScript "nzbget-server" ''
           if [ ! -f ${configFile} ]; then
             ${lib.getExe' config.programs.coreutils "install"} -o ${cfg.user} -g ${cfg.group} -m 0700 ${cfg.package}/share/nzbget/nzbget.conf ${configFile}
           fi
+
+          exec ${script} --server
         '';
       };
 
-    finit.tmpfiles.rules = [
-      "d ${logDir} 0750 ${cfg.user} ${cfg.group}"
+    providers.services.tmpfiles.rules = [
+      {
+        type = "directory";
+        path = logDir;
+        mode = "0750";
+        inherit (cfg) user group;
+      }
     ]
-    ++ lib.optionals (cfg.stateDir == "/var/lib/nzbget") [
-      "d ${cfg.stateDir} 0750 ${cfg.user} ${cfg.group}"
-    ];
+    ++ lib.optional (cfg.stateDir == "/var/lib/nzbget") {
+      type = "directory";
+      path = cfg.stateDir;
+      mode = "0750";
+      inherit (cfg) user group;
+    };
 
     users.users = lib.mkIf (cfg.user == "nzbget") {
       nzbget = {

@@ -81,6 +81,28 @@ let
 
   enabled = lib.filterAttrs (_: u: u.enable) cfg.units;
 
+  # the units which said they can re-read their own configuration, and the commands which make
+  # them do it. Two files rather than one, because the engine wants the names sorted for
+  # `comm` and the commands addressed by name.
+  reloadable = lib.filterAttrs (_: u: (u.type.service.reload or null) != null) enabled;
+
+  reloadableNames = pkgs.writeText "services-reloadable" (
+    lib.concatMapStringsSep "\n" (n: n) (lib.sort (a: b: a < b) (lib.attrNames reloadable)) + "\n"
+  );
+
+  reloadCommands = pkgs.runCommand "services-reload-commands" { } (
+    ''
+      mkdir -p $out
+    ''
+    + lib.concatStrings (
+      lib.mapAttrsToList (name: unit: ''
+        printf '#!%s\nexec %s\n' \
+          ${lib.escapeShellArg pkgs.runtimeShell} ${lib.escapeShellArg unit.type.service.reload} > $out/${name}
+        chmod +x $out/${name}
+      '') reloadable
+    )
+  );
+
   sw = cfg.switch;
 
   engine = pkgs.writeShellApplication {
@@ -101,10 +123,23 @@ let
       ${sw.list} | sort > "$work/current"
 
       # a unit whose definition changed appears on both sides - its old name/fingerprint pair
-      # only in current, its new pair only in incoming - so it is stopped and started again
-      # without needing a category of its own.
-      comm -13 "$work/incoming" "$work/current" | cut -f1 > "$work/stop"
-      comm -23 "$work/incoming" "$work/current" | cut -f1 | sort > "$work/start-set"
+      # only in current, its new pair only in incoming.
+      comm -13 "$work/incoming" "$work/current" | cut -f1 > "$work/gone"
+      comm -23 "$work/incoming" "$work/current" | cut -f1 | sort > "$work/arrived"
+
+      # which of those are the same unit changed, rather than one removed and another added:
+      # the name is on both sides.
+      comm -12 "$work/gone" <(sort "$work/arrived") | sort > "$work/changed"
+
+      # a changed unit which says it can re-read its own configuration is reloaded rather than
+      # stopped and started. Whether that is enough is the unit's claim, not something which
+      # can be worked out from here - see the `reload` option.
+      comm -12 "$work/changed" "${reloadableNames}" > "$work/reload"
+
+      # everything else moves the usual way. A reloaded unit is in neither list: it is not
+      # stopped, so it keeps its pid, which is the whole point of reloading it.
+      comm -23 "$work/gone" "$work/reload" > "$work/stop"
+      comm -23 "$work/arrived" "$work/reload" > "$work/start-set"
 
       # `incoming` is in dependency order, so filtering it rather than the sorted set keeps
       # activations ordered after whatever they require. done via a file rather than a pipe:
@@ -123,6 +158,18 @@ let
       if [ -s "$work/start" ]; then
         echo "starting: $(tr '\n' ' ' < "$work/start")"
         ${sw.activate} < "$work/start" || echo "  activation reported a failure" >&2
+      fi
+
+      # last, and not through the implementation: a reload is the unit's own command, run
+      # against a process which is already there. Nothing about it is the supervisor's
+      # business, which is why this needs no fourth operation from the backends.
+      if [ -s "$work/reload" ]; then
+        echo "reloading: $(tr '\n' ' ' < "$work/reload")"
+        while read -r unit; do
+          if ! "${reloadCommands}/$unit"; then
+            echo "  reload of $unit failed" >&2
+          fi
+        done < "$work/reload"
       fi
     '';
   };

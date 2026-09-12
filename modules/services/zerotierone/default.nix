@@ -50,13 +50,17 @@ in
       cfg.package
     ];
 
-    finit.services.zerotierone = {
+    providers.services.units.zerotierone = {
       description = "zerotier one";
-      conditions = [
-        "service/syslogd/ready"
-        "net/route/default"
+
+      # syslogd is in the head tier and needs no naming; `net/route/default` was a finit
+      # netlink condition, and `network-online` is the portable unit which means the same
+      requires = [
+        "basic"
+        "network-online"
       ];
-      command = "${cfg.package}/bin/zerotier-one ${cfg.stateDir}";
+
+      type.service.command = "${cfg.package}/bin/zerotier-one ${cfg.stateDir}";
     };
 
     finit.tmpfiles.rules = lib.optionals (cfg.stateDir == "/var/lib/zerotier-one") [

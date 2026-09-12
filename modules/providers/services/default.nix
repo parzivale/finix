@@ -330,6 +330,29 @@ in
                       '';
                     };
 
+                    reload = lib.mkOption {
+                      type = with lib.types; nullOr program;
+                      default = null;
+                      example = lib.literalExpression ''"''${pkgs.keyd}/bin/keyd reload"'';
+                      description = ''
+                        A command which makes this daemon re-read its configuration, if it can.
+
+                        Setting it declares the unit reloadable, and a switch then reloads it
+                        where it would otherwise have stopped and started it. That is the
+                        module author's judgement, not something which can be worked out here:
+                        it says this daemon picks up everything about its own definition that
+                        is allowed to change without being restarted.
+
+                        The command is run directly rather than asked of the supervisor. Most
+                        are self-contained - `keyd reload`, `nzbget --reload` - and the ones
+                        which need to signal a running process can find it themselves; asking
+                        each implementation for a reload verb would mean four different ones,
+                        and dinit and runit would be reduced to sending a bare signal anyway.
+
+                        `null` for a daemon with no such command, which is then restarted.
+                      '';
+                    };
+
                     readiness = lib.mkOption {
                       default = [ { fork = { }; } ];
                       defaultText = lib.literalExpression ''[ "fork" ]'';
@@ -525,7 +548,9 @@ in
                     lib.types.attrTag {
                       service = lib.mkOption {
                         description = "A long-running process.";
-                        type = lib.types.submodule { options = { inherit command readiness; }; };
+                        type = lib.types.submodule {
+                          options = { inherit command readiness reload; };
+                        };
                       };
 
                       oneshot = lib.mkOption {

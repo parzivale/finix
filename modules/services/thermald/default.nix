@@ -54,12 +54,13 @@ in
 
     services.dbus.packages = [ cfg.package ];
 
-    finit.services.thermald = {
+    providers.services.units.thermald = {
       description = "thermal daemon service";
-      conditions = "service/syslogd/ready";
-      command = "${lib.getExe cfg.package} " + lib.escapeShellArgs cfg.extraArgs;
-      log = true;
-      nohup = true;
+
+      # nothing about syslogd: it is in the head tier, so anything here is after it
+      requires = [ "basic" ];
+
+      type.service.command = "${lib.getExe cfg.package} " + lib.escapeShellArgs cfg.extraArgs;
     };
   };
 }

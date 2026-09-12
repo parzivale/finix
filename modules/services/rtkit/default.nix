@@ -68,13 +68,20 @@ in
       });
     '';
 
-    finit.services.rtkit-daemon = {
+    providers.services.units.rtkit-daemon = {
       description = "RealtimeKit scheduling policy service";
-      command = "${cfg.package}/libexec/rtkit-daemon" + lib.optionalString cfg.debug " --debug";
-      conditions = "service/polkit/ready";
-      nohup = true;
 
-      cgroup.name = "root";
+      # polkit is named because it is a sibling in this tier - a tier orders a unit against
+      # everything before it and says nothing about what sits beside it. `nohup` and `cgroup`
+      # are gone with the stanza: finit's own process handling, which the contract does not
+      # model and no other implementation would honour.
+      requires = [
+        "basic"
+        "polkit"
+      ];
+
+      type.service.command =
+        "${cfg.package}/libexec/rtkit-daemon" + lib.optionalString cfg.debug " --debug";
     };
 
     users.users.rtkit = {

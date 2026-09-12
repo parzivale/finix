@@ -170,9 +170,13 @@ in
       cfg.package
     ];
 
-    finit.tmpfiles.rules = lib.optionals (cfg.settings.fcrontabs == "/var/spool/fcron") [
-      "d ${cfg.settings.fcrontabs} 0770 fcron fcron"
-    ];
+    providers.services.tmpfiles.rules = lib.optional (cfg.settings.fcrontabs == "/var/spool/fcron") {
+      type = "directory";
+      path = cfg.settings.fcrontabs;
+      mode = "0770";
+      user = "fcron";
+      group = "fcron";
+    };
 
     security.wrappers = {
       fcrontab = {
@@ -197,27 +201,38 @@ in
       };
     };
 
-    finit.tasks.fcrontab = {
+    providers.services.units.fcrontab = {
       description = "reload fcrontab";
-      conditions = [
-        "service/syslogd/ready"
-        "task/suid-sgid-wrappers/success"
+
+      # the setuid wrappers are a contract unit, so this is an ordinary edge now rather than a
+      # condition naming finit's own task. syslogd is in the head tier and needs no naming.
+      requires = [
+        "basic"
+        "suid-sgid-wrappers"
       ];
 
-      # https://github.com/NixOS/nixpkgs/issues/25072
-      command = "${cfg.package}/bin/fcrontab -u systab - < ${systab}";
-
-      # TODO: now we're hijacking `env` and no one else can use it...
+      # fcrontab runs fcron's own helpers by name
       path = [ cfg.package ];
+
+      # still a script, for the redirection: a command is exec'd, not run through a shell
+      # https://github.com/NixOS/nixpkgs/issues/25072
+      type.oneshot.command = pkgs.writeShellScript "fcrontab-reload" ''
+        exec ${cfg.package}/bin/fcrontab -u systab - < ${systab}
+      '';
     };
 
-    finit.services.fcron = {
+    providers.services.units.fcron = {
       description = "fcron daemon";
-      command = "${cfg.package}/bin/fcron --foreground " + lib.escapeShellArgs cfg.extraArgs;
-      conditions = [
-        "service/syslogd/ready"
-        "task/fcrontab/success"
+
+      # the systab has to be loaded before the daemon reads it. `task/fcrontab/success` named
+      # finit's own task; it is a contract unit now, so this is an ordinary edge.
+      requires = [
+        "basic"
+        "fcrontab"
       ];
+
+      # `--foreground`, so the process running is all any backend can observe
+      type.service.command = "${cfg.package}/bin/fcron --foreground " + lib.escapeShellArgs cfg.extraArgs;
     };
 
     users.users = {

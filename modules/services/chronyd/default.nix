@@ -82,31 +82,52 @@ in
     ++ lib.optionals cfg.debug [
       "-L"
       "-1"
-    ]
-    ++ lib.optionals notifySupport [
-      "-N"
-      "%n"
     ];
+
+    # `-N %n` was here: chrony's notification flag, and finit's substitution for the descriptor
+    # it chose. Only the flag is chrony's; the descriptor belongs to whichever implementation is
+    # listening, and s6-rc uses 3 rather than substituting anything. So the flag is declared as
+    # part of the unit's readiness below, and the descriptor is appended by the implementation.
 
     environment.systemPackages = [ cfg.package ];
 
-    finit.services.chronyd = {
+    providers.services.units.chronyd = {
       description = "chrony ntp daemon";
-      conditions = "service/syslogd/ready";
-      command = "${cfg.package}/bin/chronyd " + lib.escapeShellArgs cfg.extraArgs;
-      nohup = true;
-      notify = lib.mkIf notifySupport "s6";
+      requires = [ "basic" ];
 
-      # TODO: add "if" to finit.services
-      extraConfig = "if:<!int/container>";
+      type.service = {
+        command = "${cfg.package}/bin/chronyd " + lib.escapeShellArgs cfg.extraArgs;
+
+        # chrony speaks the s6 protocol from 4.9, and is told which descriptor by the
+        # implementation. Older builds cannot, so the list is just `fork` there - which is
+        # what saying it as a list buys: the version test stays here and the question of
+        # which backends can observe it does not have to be asked at all.
+        readiness = lib.optional notifySupport { s6.flag = "-N"; } ++ [ "fork" ];
+      };
     };
 
-    finit.tmpfiles.rules = [
-      "d /var/lib/chrony 0750 chrony chrony - -"
-      "f /var/lib/chrony/chrony.drift 0640 chrony chrony - -"
-      "f /var/lib/chrony/chrony.keys 0640 chrony chrony - -"
-
-      # "f /var/lib/chrony/chrony.rtc 0640 chrony chrony - -"
+    providers.services.tmpfiles.rules = [
+      {
+        type = "directory";
+        path = "/var/lib/chrony";
+        mode = "0750";
+        user = "chrony";
+        group = "chrony";
+      }
+      {
+        type = "file";
+        path = "/var/lib/chrony/chrony.drift";
+        mode = "0640";
+        user = "chrony";
+        group = "chrony";
+      }
+      {
+        type = "file";
+        path = "/var/lib/chrony/chrony.keys";
+        mode = "0640";
+        user = "chrony";
+        group = "chrony";
+      }
     ];
 
     users.users = {

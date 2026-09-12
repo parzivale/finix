@@ -64,10 +64,15 @@ in
     services.dbus.packages = [ cfg.package ];
     services.udev.packages = [ cfg.package ];
 
-    finit.services.bluetooth = {
+    providers.services.units.bluetooth = {
       description = "bluetooth service";
-      conditions = "service/dbus/ready";
-      command =
+
+      requires = [
+        "basic"
+        "dbus-socket"
+      ];
+
+      type.service.command =
         "${cfg.package}/libexec/bluetooth/bluetoothd -f /etc/bluetooth/main.conf"
         + lib.optionalString cfg.debug " -d";
     };

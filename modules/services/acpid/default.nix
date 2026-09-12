@@ -58,14 +58,12 @@ in
       in
       lib.mkMerge [ etcTree ];
 
-    finit.services.acpid = {
+    providers.services.units.acpid = {
       description = "acpi daemon";
-      conditions = "service/syslogd/ready";
-      command = "${pkgs.acpid}/bin/acpid --foreground --netlink";
-      log = true;
+      requires = [ "basic" ];
 
-      # TODO: add "if" to finit.services
-      extraConfig = "if:<!int/container>";
+      # `--foreground`, so the process running is the whole of what any backend can observe
+      type.service.command = "${pkgs.acpid}/bin/acpid --foreground --netlink";
     };
   };
 }

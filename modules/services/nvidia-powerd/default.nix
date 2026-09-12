@@ -41,11 +41,15 @@ in
 
     services.dbus.packages = [ cfg.package.bin ];
 
-    finit.services.nvidia-powerd = {
+    providers.services.units.nvidia-powerd = {
       description = "NVIDIA Dynamic Boost";
-      command = "${cfg.package.bin}/bin/nvidia-powerd";
+      requires = [ "basic" ];
+
       path = [ pkgs.util-linux ]; # nvidia-powerd wants lscpu
-      restart = -1;
+
+      # `restart = -1` is gone with the stanza - restarting a service which dies is what a
+      # supervisor does, on all four.
+      type.service.command = "${cfg.package.bin}/bin/nvidia-powerd";
     };
   };
 }

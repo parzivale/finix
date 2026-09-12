@@ -96,13 +96,18 @@ in
       cfg.package.out
     ];
 
-    finit.services.polkit = {
+    providers.services.units.polkit = {
       description = "policykit authorization manager";
-      conditions = [
-        "service/dbus/ready"
-      ]
-      ++ lib.optionals config.services.sessiond.enable [ "service/sessiond/ready" ];
-      command =
+
+      # nothing about sessiond: the session and seat managers are in the tier before this one,
+      # so anything here is after them. Naming one would also have made it an optional edge,
+      # which is the shape that hides a requirement rather than stating it.
+      requires = [
+        "basic"
+        "dbus-socket"
+      ];
+
+      type.service.command =
         "${cfg.package.out}/lib/polkit-1/polkitd --no-debug "
         + lib.optionalString cfg.debug "--log-level=debug";
     };

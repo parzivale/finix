@@ -72,7 +72,28 @@ let
     else
       "process";
 
-  commandOf = unit: (variantOf unit).command or null;
+  # dinit has no per-service PATH, so one is scripted in rather than declared unsupported.
+  #
+  # A capability the contract has and one implementation lacks is better emulated than refused:
+  # refusing it means every module which wants a PATH writes this same wrapper by hand, once
+  # per module, and gets it subtly different each time - and a unit which sets `path` then
+  # works on three backends and quietly does not on the fourth.
+  #
+  # `"$@"` because whatever the implementation appends to a command - a readiness descriptor -
+  # is appended to this wrapper, so it has to be passed on rather than swallowed.
+  withPath =
+    name: unit: command:
+    if unit.path == [ ] then
+      command
+    else
+      "${pkgs.writeShellScript "${name}-with-path" ''
+        export PATH=${lib.makeBinPath unit.path}:$PATH
+        exec ${command} "$@"
+      ''}";
+
+  commandOf =
+    name: unit:
+    if (variantOf unit) ? command then withPath name unit (variantOf unit).command else null;
 
   indexOf =
     name:
@@ -165,7 +186,7 @@ let
       # every requirement that actually exists; the root should add none of its own.
       default = true;
     }
-    // lib.optionalAttrs (commandOf unit != null) { command = commandOf unit; }
+    // lib.optionalAttrs (commandOf name unit != null) { command = commandOf name unit; }
 
     # an anchor has no command of its own, and a scripted unit without one is not a unit. The
     # `true` is the whole of it: reached, therefore started.
@@ -296,7 +317,9 @@ in
 
         # `run-as` names a user and not a group, and dinit has no per-service PATH
         group = false;
-        path = false;
+        # dinit has no per-service PATH of its own, but `withPath` above scripts one in, so a
+        # unit which asks for one gets it here too
+        path = true;
       };
 
       # dinit is its own init, so this is what the kernel runs.

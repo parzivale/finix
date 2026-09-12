@@ -86,13 +86,17 @@ in
       # ${config.environment.etc."avahi/avahi-daemon.conf".source}
     '';
 
-    finit.services.avahi-daemon = {
+    providers.services.units.avahi-daemon = {
       description = "avahi daemon service";
-      conditions = [
-        "service/syslogd/ready"
+
+      # nothing about syslogd, which is in the head tier. The bus is named only when this is
+      # built to use it, and then for the socket answering rather than the daemon being up.
+      requires = [
+        "basic"
       ]
-      ++ lib.optionals enableDbus [ "service/dbus/ready" ];
-      command = lib.escapeShellArgs (
+      ++ lib.optional enableDbus "dbus-socket";
+
+      type.service.command = lib.escapeShellArgs (
         [
           (lib.getExe' cfg.package "avahi-daemon")
         ]

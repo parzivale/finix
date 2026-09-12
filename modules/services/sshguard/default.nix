@@ -58,6 +58,7 @@ in
               # "null"
               # "pf"
             ];
+            default = "nft-sets";
             description = ''
               Backend executable.
             '';
@@ -93,23 +94,27 @@ in
       )
     );
 
-    finit.services.sshguard = {
-      command = lib.getExe cfg.package;
-      conditions = [
-        "service/syslogd/ready"
-        "net/route/default"
+    providers.services.units.sshguard = {
+      description = "ssh brute-force guard";
+
+      # nftables is a contract unit now, so what was a condition naming finit's own task is an
+      # ordinary edge. syslogd is in the head tier and needs no naming.
+      requires = [
+        "basic"
+        "network-online"
       ]
-      ++ lib.optionals (cfg.settings.BACKEND == "nft-sets") [
-        "task/nftables/success"
-      ];
-      log = true;
+      ++ lib.optional (cfg.settings.BACKEND == "nft-sets") "nftables";
+
+      # sshguard runs its backend scripts, and those run nft by name
       path = [
         config.programs.coreutils.package
       ]
-      ++ lib.optionals (cfg.settings.BACKEND == "nft-sets") [ config.services.nftables.package ];
+      ++ lib.optional (cfg.settings.BACKEND == "nft-sets") config.services.nftables.package;
+
+      type.service.command = lib.getExe cfg.package;
 
       environment = lib.optionalAttrs cfg.debug {
-        SSHGUARD_DEBUG = 1;
+        SSHGUARD_DEBUG = "1";
       };
     };
   };

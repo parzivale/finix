@@ -67,15 +67,14 @@ in
     providers.services.units.sessiond = {
       description = "daemon for power management";
 
-      # attached to `basic`, so it is in the tier which completes `multi-user` and anything
-      # attached to that is after it. Without a tier a unit is in no level's dependants, so no
-      # level waits for it and the trunk says nothing about when it ran.
+      # `sysinit`, beside seatd and elogind: a session manager is the same kind of thing as a
+      # seat manager, and belongs in the same tier as the rest of them, so that everything
+      # above can assume it without naming it.
       #
-      # `dbus-socket` on top, because the bus is attached to no tier either: what this needs is
-      # the socket answering, rather than the daemon merely being up, which is all the finit
-      # condition it replaces could say.
+      # `dbus-socket` is still named: the bus is a sibling here, and what this needs is the
+      # socket answering rather than the daemon having forked.
       requires = [
-        "basic"
+        "sysinit"
         "dbus-socket"
       ];
 

@@ -98,27 +98,34 @@ in
       NODE_ENV = "production";
     };
 
-    finit.services.uptime-kuma = {
+    providers.services.units.uptime-kuma = {
       inherit (cfg) user group;
 
       description = "uptime kuma";
-      conditions = [
-        "service/syslogd/ready"
-        "net/route/default"
-      ];
-      command = lib.getExe cfg.package;
-      kill = lib.mkDefault 10;
-      nohup = true;
-      log = true;
 
-      # TODO: now we're hijacking `env` and no one else can use it...
-      env = cfg.settings;
+      requires = [
+        "basic"
+        "network-online"
+      ];
+
+      # `kill = 10` becomes the contract's stopTimeout, which every implementation bounds
+      # except runit - and says so.
+      stopTimeout = lib.mkDefault 10;
+
+      # uptime-kuma runs ping by name for its monitors
       path = [ pkgs.unixtools.ping ];
+
+      type.service.command = lib.getExe cfg.package;
+
+      environment = cfg.settings;
     };
 
-    finit.tmpfiles.rules = lib.optionals (cfg.settings.DATA_DIR == "/var/lib/uptime-kuma") [
-      "d ${cfg.settings.DATA_DIR} 0750 ${cfg.user} ${cfg.group}"
-    ];
+    providers.services.tmpfiles.rules = lib.optional (cfg.settings.DATA_DIR == "/var/lib/uptime-kuma") {
+      type = "directory";
+      path = cfg.settings.DATA_DIR;
+      mode = "0750";
+      inherit (cfg) user group;
+    };
 
     users.users = lib.mkIf (cfg.user == "uptime-kuma") {
       uptime-kuma = {

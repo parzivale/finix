@@ -154,13 +154,19 @@ in
         serviceFile
       ];
 
-    finit.services.keyd = {
+    providers.services.units.keyd = {
       description = "keyd, a key remapping daemon";
-      command = "${cfg.package}/bin/keyd";
-      conditions = "service/syslogd/ready";
-      reload = "${cfg.package}/bin/keyd reload";
-      log = true;
-      environment = lib.optionalAttrs cfg.debug { KEYD_DEBUG = 2; };
+
+      # the device manager has settled in the head tier, so the input devices keyd grabs are
+      # there. syslogd is in that tier too and needs no naming.
+      requires = [ "basic" ];
+
+      # `reload` is gone with the stanza: finit can be asked to re-read a service's
+      # configuration, and no other implementation has an equivalent. The switch engine
+      # restarts a unit whose definition changed, which is what reaches the same end here.
+      type.service.command = "${cfg.package}/bin/keyd";
+
+      environment = lib.optionalAttrs cfg.debug { KEYD_DEBUG = "2"; };
     };
 
     # used for group ownership of keyd socket

@@ -68,14 +68,16 @@ in
       });
     '';
 
-    finit.services.fprintd = {
+    providers.services.units.fprintd = {
       description = "fingerprint authentication daemon";
-      command = "${cfg.package}/libexec/fprintd --no-timeout";
-      conditions = "service/polkit/ready";
-      nohup = true;
-      log = true;
 
-      # TODO: now we're hijacking `env` and no one else can use it...
+      requires = [
+        "basic"
+        "polkit"
+      ];
+
+      type.service.command = "${cfg.package}/libexec/fprintd --no-timeout";
+
       environment = {
         G_MESSAGES_DEBUG = lib.mkIf cfg.debug "all";
       };

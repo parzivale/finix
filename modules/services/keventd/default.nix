@@ -110,15 +110,13 @@ in
       # for it, and everything in a later tier has device events without asking.
       requires = [ (lib.head config.providers.services.trunk.levels) ];
 
+      # the udev rules keventd runs invoke helpers by name, so it needs a PATH. Every
+      # implementation gives a unit one now - dinit's is scripted in by its backend rather
+      # than declared unsupported - so this says what it wants and nothing about how.
+      inherit (cfg) path;
+
       type.service = {
-        # the PATH is set in a wrapper rather than through the contract's `path`, because dinit
-        # cannot give a unit one - and keventd needs it, since the udev rules it runs invoke
-        # helpers by name. A unit which relies on a capability one backend lacks works there
-        # and quietly does not here; a wrapper works everywhere.
-        command = pkgs.writeShellScript "keventd" ''
-          export PATH=${lib.makeBinPath cfg.path}:$PATH
-          exec ${config.finit.package}/libexec/finit/keventd ${lib.escapeShellArgs cfg.extraArgs}
-        '';
+        command = "${config.finit.package}/libexec/finit/keventd " + lib.escapeShellArgs cfg.extraArgs;
 
         # `notify = "pid"` is gone with the stanza: it asked finit to manage a pid file on the
         # daemon's behalf, which says nothing about readiness and has no equivalent elsewhere.

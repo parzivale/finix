@@ -47,10 +47,18 @@ in
     services.dbus.packages = [ cfg.package ];
     services.udev.packages = [ cfg.package ];
 
-    finit.services.upower = {
+    providers.services.units.upower = {
       description = "daemon for power management";
-      conditions = "service/dbus/ready";
-      command = "${cfg.package}/libexec/upowerd";
+
+      # `basic` is the tier after the one dbus is in; `dbus-socket` because what this needs is
+      # the bus answering rather than the daemon having forked, and the socket gate is in no
+      # tier of its own.
+      requires = [
+        "basic"
+        "dbus-socket"
+      ];
+
+      type.service.command = "${cfg.package}/libexec/upowerd";
     };
 
     environment.etc."UPower/UPower.conf".source = format.generate "UPower.conf" cfg.settings;

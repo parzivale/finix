@@ -41,12 +41,13 @@ in
   };
 
   config = lib.mkIf cfg.enable {
-    finit.services.illum = {
+    providers.services.units.illum = {
       description = "backlight adjustment service";
-      command = lib.getExe cfg.package;
-      conditions = "service/syslogd/ready";
-      log = true;
-      nohup = true;
+
+      # nothing about syslogd: it is in the head tier, so anything here is after it
+      requires = [ "basic" ];
+
+      type.service.command = lib.getExe cfg.package;
     };
   };
 }

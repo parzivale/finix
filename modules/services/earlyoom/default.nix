@@ -51,19 +51,16 @@ in
   config = lib.mkIf cfg.enable {
     services.earlyoom.extraArgs = [ "-p" ] ++ lib.optionals cfg.debug [ "--debug" ];
 
-    finit.services.earlyoom = {
+    providers.services.units.earlyoom = {
       description = "early oom daemon";
-      command = "${cfg.package}/bin/earlyoom --syslog " + lib.escapeShellArgs cfg.extraArgs;
-      conditions = "service/syslogd/ready";
-      nohup = true;
+      requires = [ "basic" ];
 
-      cgroup.settings = {
-        "memory.max" = "50M";
-        "pids.max" = 10;
-      };
+      # with `-n` earlyoom sends desktop notifications through dbus-send
+      path = lib.optional (lib.elem "-n" cfg.extraArgs) pkgs.dbus;
 
-      # TODO: now we're hijacking `env` and no one else can use it...
-      path = lib.optionals (lib.elem "-n" cfg.extraArgs) [ pkgs.dbus ];
+      # `cgroup.settings` is gone with the stanza - finit's own resource limits, which the
+      # contract does not model and no other implementation would honour.
+      type.service.command = "${cfg.package}/bin/earlyoom --syslog " + lib.escapeShellArgs cfg.extraArgs;
     };
   };
 }
