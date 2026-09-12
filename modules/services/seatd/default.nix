@@ -70,7 +70,14 @@ in
     # window fails to take a seat. Anything needing seatd requires this instead.
     providers.services.units.seatd-socket = {
       description = "wait for the seat management socket";
-      requires = [ "seatd" ];
+
+      # in the same tier as seatd, so anything later has a socket which answers without naming
+      # this - and it must be the same tier, since a gate earlier than what it waits for is a
+      # cycle through the level between them.
+      requires = [
+        "sysinit"
+        "seatd"
+      ];
 
       type.oneshot.command = pkgs.writeShellScript "seatd-wait" ''
         for _ in $(${lib.getExe' pkgs.coreutils "seq"} 1 100); do

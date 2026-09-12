@@ -71,12 +71,9 @@ in
       # seat manager, and belongs in the same tier as the rest of them, so that everything
       # above can assume it without naming it.
       #
-      # `dbus-socket` is still named: the bus is a sibling here, and what this needs is the
-      # socket answering rather than the daemon having forked.
-      requires = [
-        "sysinit"
-        "dbus-socket"
-      ];
+      # Nothing about the bus either: it and its socket gate are in the head tier, and this is
+      # in the one after, so it is already behind both.
+      requires = [ "sysinit" ];
 
       type.service = {
         command = "${lib.getExe' cfg.package "sessiond"} --config ${configFile} --log-target syslog";

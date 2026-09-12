@@ -50,17 +50,20 @@ in
       };
     };
 
-    finit.services.greetd = {
+    providers.services.units.greetd = {
       description = "greeter daemon";
-      runlevels = "34";
-      conditions = [
-        "service/syslogd/ready"
-      ]
-      ++ lib.optionals config.services.sessiond.enable [ "service/sessiond/ready" ]
-      ++ lib.optionals config.services.elogind.enable [ "service/elogind/ready" ]
-      ++ lib.optionals config.services.seatd.enable [ "service/seatd/ready" ];
-      command = "${pkgs.greetd}/bin/greetd --config ${configFile}";
-      cgroup.name = "user";
+
+      # `multi-user`, like any other login prompt: a greeter before the system is up offers a
+      # session into a half-built machine. `runlevels = "34"` had no contract equivalent - the
+      # trunk has no notion of a level a service is simply not considered on - and on a machine
+      # booting to 2 it meant greetd never started at all.
+      #
+      # The session and seat managers are in earlier tiers, and so are their socket gates, so
+      # none of them is named here - a greeter starts a compositor, and what a compositor needs
+      # is the seat socket answering, which the tier before this one has already waited for.
+      requires = [ "multi-user" ];
+
+      type.service.command = "${pkgs.greetd}/bin/greetd --config ${configFile}";
     };
 
     users.users = {

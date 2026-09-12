@@ -148,17 +148,20 @@ in
       "d ${cfg.dataDir} 0700 ${cfg.user} ${cfg.group}"
     ];
 
-    finit.services.sonarr = {
+    providers.services.units.sonarr = {
       inherit (cfg) user group;
 
       description = "sonarr";
-      conditions = [
-        "service/syslogd/ready"
-        "net/route/default"
+
+      # syslogd is in the head tier; `net/route/default` was a finit netlink condition, and
+      # `network-online` is the portable unit which means the same
+      requires = [
+        "basic"
+        "network-online"
       ];
-      command = "${lib.getExe cfg.package} -nobrowser -data=${cfg.dataDir}";
-      nohup = true;
-      log = true;
+
+      type.service.command = "${lib.getExe cfg.package} -nobrowser -data=${cfg.dataDir}";
+
       environment = toEnvVars cfg.settings;
     };
 

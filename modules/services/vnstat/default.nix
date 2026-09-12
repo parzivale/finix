@@ -136,15 +136,13 @@ in
       "d ${cfg.settings.DatabaseDir} 0750 ${cfg.user} ${cfg.group}"
     ];
 
-    finit.services.vnstat = {
+    providers.services.units.vnstat = {
       inherit (cfg) user group;
 
       description = "vnStat network traffic monitor";
-      conditions = "service/syslogd/ready";
-      command = "${pkgs.vnstat}/bin/vnstatd " + lib.escapeShellArgs cfg.extraArgs;
+      requires = [ "basic" ];
 
-      # when running in the foreground debug logs go to stdout
-      log = lib.mkDefault cfg.debug;
+      type.service.command = "${pkgs.vnstat}/bin/vnstatd " + lib.escapeShellArgs cfg.extraArgs;
     };
 
     # TODO: add finit.services.reloadTriggers option

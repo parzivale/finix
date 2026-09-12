@@ -50,13 +50,9 @@ in
     providers.services.units.upower = {
       description = "daemon for power management";
 
-      # `basic` is the tier after the one dbus is in; `dbus-socket` because what this needs is
-      # the bus answering rather than the daemon having forked, and the socket gate is in no
-      # tier of its own.
-      requires = [
-        "basic"
-        "dbus-socket"
-      ];
+      # nothing about the bus: it and its socket gate are in the head tier, so anything here
+      # is after them
+      requires = [ "basic" ];
 
       type.service.command = "${cfg.package}/libexec/upowerd";
     };

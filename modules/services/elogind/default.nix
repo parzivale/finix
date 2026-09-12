@@ -45,12 +45,9 @@ in
       # trunk rather than by naming it, and naming it would have meant an optional edge, which
       # hides a requirement rather than stating it.
       #
-      # `dbus-socket` is still named: the bus is a sibling here, and a tier says nothing about
-      # its own members. What this needs is the socket answering, not the daemon having forked.
-      requires = [
-        "sysinit"
-        "dbus-socket"
-      ];
+      # Nothing about the bus either: it and its socket gate are in the head tier, and this is
+      # in the one after, so it is already behind both.
+      requires = [ "sysinit" ];
 
       # the stanza named no notification protocol, so finit called it ready once started.
       # `fork` is that, said in the contract's words.

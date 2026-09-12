@@ -89,12 +89,9 @@ in
     providers.services.units.avahi-daemon = {
       description = "avahi daemon service";
 
-      # nothing about syslogd, which is in the head tier. The bus is named only when this is
-      # built to use it, and then for the socket answering rather than the daemon being up.
-      requires = [
-        "basic"
-      ]
-      ++ lib.optional enableDbus "dbus-socket";
+      # nothing about syslogd or the bus: both are in the head tier, with the bus's socket gate
+      # beside it, so anything here is after them
+      requires = [ "basic" ];
 
       type.service.command = lib.escapeShellArgs (
         [

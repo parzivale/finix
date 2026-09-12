@@ -157,6 +157,10 @@ let
   # ones this check found on its first run.
   needsConfiguration = {
     sshguard = "settings.FILES, the logs to watch";
+
+    # `user` and `command` have no default, and it asserts that a seat manager exists - all
+    # three correctly, which is why turning it on alone cannot work
+    autologin = "a user, a command, and a seat manager";
   };
 
   # a module with no `enable` is one a machine always has - coreutils, modprobe, the shell -

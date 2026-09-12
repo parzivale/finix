@@ -65,10 +65,9 @@ in
     providers.services.units.power-profiles-daemon = {
       description = "power profiles daemon";
 
-      requires = [
-        "basic"
-        "dbus-socket"
-      ];
+      # nothing about the bus: it and its socket gate are in the head tier, so anything here
+      # is after them
+      requires = [ "basic" ];
 
       type.service.command = "${cfg.package}/libexec/power-profiles-daemon";
     };

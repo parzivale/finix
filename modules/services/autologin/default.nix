@@ -107,22 +107,13 @@ in
         readiness = "fork";
       };
 
-      # the session managers wait on their socket rather than on having forked, so that a
-      # compositor started from here finds a seat to take
       # `multi-user`, like any other login prompt: a session before the system is up is a
       # session into a half-built machine.
       #
-      # The tier supplies almost all of what this used to name one at a time. syslogd and the
-      # device manager's settle are in the head tier; elogind and sessiond attach to `basic`.
-      # Everything here is in the multi-user tier, so it is after all of them.
-      #
-      # seatd's socket is named because it is not in a tier, and the socket answering - rather
-      # than the daemon having forked - is what a compositor needs. elogind needs nothing here:
-      # it attaches to `basic`, so this tier is already after it.
-      requires = [
-        "multi-user"
-      ]
-      ++ lib.optional config.services.seatd.enable "seatd-socket";
+      # That one edge is the whole of it now. This used to name five things one at a time -
+      # syslogd, the device manager's settle, elogind, sessiond, seatd's socket - and every one
+      # of them is in an earlier tier, including the socket gates, so the trunk says it all.
+      requires = [ "multi-user" ];
     };
   };
 }

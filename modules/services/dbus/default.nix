@@ -153,19 +153,27 @@ in
 
       environment = lib.optionalAttrs cfg.debug { DBUS_VERBOSE = "1"; };
 
-      # attached to `sysinit`, so the bus is up in the basic tier - before `basic` is reached
-      # and so before anything attached to it, elogind and sessiond among them.
+      # the head tier, beside logging and the device managers. The bus is infrastructure in the
+      # same sense they are: the seat and session managers want it, and everything above them
+      # wants those - so putting it any later means every one of them naming it.
       #
-      # syslogd is no longer named: it attaches to the head of the trunk, so everything in a
-      # later tier is after it by the trunk rather than by each module saying so.
-      requires = [ "sysinit" ];
+      # Its socket gate is in this tier too, and must be: the gate waits for the daemon, so a
+      # gate one tier earlier than what it waits for is a cycle through the level between them.
+      requires = [ (lib.head config.providers.services.trunk.levels) ];
     };
 
     # the bus has forked before it is listening, and a client which connects first simply
     # fails. Anything needing the system bus requires this.
     providers.services.units.dbus-socket = {
       description = "wait for the system bus socket";
-      requires = [ "dbus" ];
+
+      # in the same tier as the bus itself, so that everything in a later tier has a bus which
+      # answers without naming this. A gate which is in no tier is one every consumer has to
+      # name, which is how eight modules came to.
+      requires = [
+        (lib.head config.providers.services.trunk.levels)
+        "dbus"
+      ];
 
       type.oneshot.command = pkgs.writeShellScript "dbus-wait" ''
         for _ in $(${lib.getExe' pkgs.coreutils "seq"} 1 100); do
