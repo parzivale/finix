@@ -69,12 +69,5 @@
       '';
     };
 
-    # task to run if ctrl-alt-del is pressed - this condition is asserted by finit upon receiving SIGINT (from the kernel).
-    finit.tasks.ctrl-alt-del = {
-      description = "rebooting system";
-      runlevels = "12345789";
-      conditions = "sys/key/ctrlaltdel";
-      command = "${config.finit.package}/bin/initctl reboot";
-    };
   };
 }

@@ -58,5 +58,20 @@ in
     finit.tmpfiles.rules = [
       "d /etc/finit.d/enabled 0755"
     ];
+
+    # what to do when ctrl-alt-del is pressed: the kernel sends SIGINT to PID 1, and finit
+    # turns that into the `sys/key/ctrlaltdel` condition.
+    #
+    # finit's, and it lives here rather than in modules/boot because there is no portable
+    # version of it - it is not a unit, it is what an init does with a signal, and each of the
+    # others has its own answer (runit runs /etc/runit/ctrlaltdel, dinit and s6-linux-init
+    # have their own handlers). Those are not wired up yet, so on any other backend the key
+    # combination currently does whatever that init does by default.
+    finit.tasks.ctrl-alt-del = {
+      description = "rebooting system";
+      runlevels = "12345789";
+      conditions = "sys/key/ctrlaltdel";
+      command = "${cfg.package}/bin/initctl reboot";
+    };
   };
 }
