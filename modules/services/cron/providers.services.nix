@@ -26,6 +26,15 @@ in
         # changed crontab is a changed unit and the daemon is restarted with it. The "standard
         # nixos trick" this replaces was appended to finit.d/cron.conf - a trick only finit
         # ever fell for, which left every other init running yesterday's schedule.
+        #
+        # A restart, and not a `reload`, for two reasons worth writing down because both are
+        # easy to assume the other way round:
+        #
+        #   - cronie's SIGHUP only reopens its log. The database reload is `load_database()`,
+        #     which the scan calls; the signal does not.
+        #   - cronie does notice a crontab changing on its own, by mtime and by inotify - but
+        #     the mtime half cannot work here. Every file in the store carries the same mtime,
+        #     so a new /etc/crontab is not a newer one.
         command = pkgs.writeShellScript "cron" ''
           # restart trigger: ${cfg.crontabFile}
           exec ${lib.getExe cfg.package} -n ${lib.escapeShellArgs cfg.extraArgs}

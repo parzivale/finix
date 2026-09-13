@@ -9,6 +9,8 @@ let
 
   format = pkgs.formats.ini { };
 
+  configFile = format.generate "00-nixos.conf" cfg.settings;
+
   packages = [
     cfg.package
     pkgs.wpa_supplicant
@@ -62,6 +64,17 @@ in
         for additional details.
       '';
     };
+
+    # exposed so that providers.services.nix can name it: a unit which reads this file has
+    # to name it to be rebuilt when it changes, and it cannot reach it through
+    # `environment.etc`, which is where implementations put the unit itself.
+    configFile = lib.mkOption {
+      type = lib.types.raw;
+      internal = true;
+      readOnly = true;
+      default = configFile;
+      description = "The generated NetworkManager configuration.";
+    };
   };
 
   config = lib.mkIf cfg.enable {
@@ -77,8 +90,7 @@ in
     ];
 
     environment.systemPackages = packages;
-    environment.etc."NetworkManager/conf.d/00-nixos.conf".source =
-      format.generate "00-nixos.conf" cfg.settings;
+    environment.etc."NetworkManager/conf.d/00-nixos.conf".source = configFile;
 
     services.dbus.enable = true;
     services.dbus.packages = packages;
