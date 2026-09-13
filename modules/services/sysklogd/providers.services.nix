@@ -42,6 +42,11 @@ in
       # settle, mdevd's coldplug - and neither is attached to a tier, so both are named.
       requires = [
         (lib.head config.providers.services.trunk.levels)
+
+        # in the same tier, so named rather than merely attached-after: /var/log is one of the
+        # base tmpfiles rules, and on a machine where it is not already on disk the logger
+        # would otherwise race the unit which creates it.
+        "tmpfiles-setup"
       ]
       ++ lib.optional config.services.udev.enable "udev-settle"
       ++ lib.optional config.services.mdevd.enable "coldplug";

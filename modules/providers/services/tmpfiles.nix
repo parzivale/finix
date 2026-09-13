@@ -201,9 +201,22 @@ in
         text = lib.concatMapStringsSep "\n" lower cfg.tmpfiles.rules;
       };
 
-      # the earliest point in the trunk, so that every level after it - and so everything
-      # attached to any of them - is behind the files it puts in place
-      requires = [ (lib.head cfg.trunk.levels) ];
+      # the earliest point in the trunk, so that every *later level* - and so everything
+      # attached to any of them - is behind the files it puts in place.
+      #
+      # Its own tier is not, and that is the part worth being careful about: units attached to
+      # one level start together, so anything in the head tier which wants a directory from
+      # here has to name this unit, exactly as this one names the mount below. dbus is the
+      # case which found it - it binds a socket in /run/dbus and died on every boot until the
+      # directory happened to exist, which finit papered over by restarting it until it did.
+      #
+      # After the mounts, for the same class of reason: a rule writing into /var before /var is
+      # mounted puts the files on the root filesystem, where the real /var is then mounted on
+      # top of them and they are neither present nor recoverable.
+      requires = [
+        (lib.head cfg.trunk.levels)
+        "mount-filesystems"
+      ];
     };
   };
 }

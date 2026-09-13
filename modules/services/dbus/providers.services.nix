@@ -51,7 +51,16 @@ in
       # the head tier, beside logging and the device managers. The bus is infrastructure in the
       # same sense they are: the seat and session managers want it, and everything above them
       # wants those - so putting it any later means every one of them naming it.
-      requires = [ (lib.head config.providers.services.trunk.levels) ];
+      #
+      # `tmpfiles-setup` is named because it is in that same tier, and a tier starts together:
+      # attaching to the level alone left dbus racing the unit which creates /run/dbus, and
+      # losing. It died with "Failed to bind socket /run/dbus/system_bus_socket: No such file
+      # or directory" and finit restarted it every two seconds until the directory appeared -
+      # four attempts in a VM, and on slower hardware enough of them to look like a hung boot.
+      requires = [
+        (lib.head config.providers.services.trunk.levels)
+        "tmpfiles-setup"
+      ];
     };
 
     providers.services.tmpfiles.rules =

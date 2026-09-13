@@ -34,6 +34,7 @@ let
 
   modules = {
     openssh = ./openssh.nix;
+    dbus = ./dbus.nix;
   };
 
   # one row: the same test file, instantiated once per implementation
