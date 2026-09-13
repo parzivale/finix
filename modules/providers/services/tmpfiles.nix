@@ -209,27 +209,36 @@ in
       type.oneshot.command = pkgs.writeShellScript "tmpfiles-setup" ''
         export PATH=${lib.makeBinPath [ pkgs.coreutils ]}:$PATH
 
-        # a file as well as stderr, because stderr is not readable after the fact: where a
-        # unit's output goes is the implementation's business, and finit sends it to /dev/null
-        # unless the stanza asks for a log. /run is mounted before any unit runs, so this is
-        # somewhere a person can look once the machine is up - which is the point of not
-        # stopping the boot in the first place.
-        report=/run/tmpfiles-setup.failed
-        rm -f "$report"
+        # a running log, not only a list of failures.
+        #
+        # Where a unit's output goes is the implementation's business - finit sends it to
+        # /dev/null unless the stanza asks for a log - so stderr alone tells nobody anything
+        # afterwards. /run is mounted before any unit runs, so this file is readable once the
+        # machine is up.
+        #
+        # Each rule is announced *before* it runs rather than after, which is what makes this
+        # useful for a rule which never returns: the last line of the log is then either the
+        # rule which failed or the rule still running, and those are the only two ways this
+        # unit can fail to complete.
+        log=/run/tmpfiles-setup.log
+        : > "$log"
 
         failed=0
 
         ${lib.concatMapStringsSep "\n" (rule: ''
+          echo "${rule.type} ${rule.path}" >> "$log"
           if ! (
             ${lower rule}
           ); then
-            echo "${rule.type} rule for ${rule.path} failed" | tee -a "$report" >&2
+            echo "  FAILED: ${rule.type} rule for ${rule.path}" | tee -a "$log" >&2
             failed=$((failed + 1))
           fi
         '') cfg.tmpfiles.rules}
 
+        echo "done: ${toString (lib.length cfg.tmpfiles.rules)} rules, $failed failed" >> "$log"
+
         if [ "$failed" -gt 0 ]; then
-          echo "tmpfiles-setup: $failed of ${toString (lib.length cfg.tmpfiles.rules)} rules failed, see $report" >&2
+          echo "tmpfiles-setup: $failed of ${toString (lib.length cfg.tmpfiles.rules)} rules failed, see $log" >&2
         fi
       '';
 
