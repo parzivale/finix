@@ -195,11 +195,43 @@ in
     providers.services.units.tmpfiles-setup = {
       description = "create volatile files and directories";
 
-      type.oneshot.command = pkgs.writeShellApplication {
-        name = "tmpfiles-setup";
-        runtimeInputs = [ pkgs.coreutils ];
-        text = lib.concatMapStringsSep "\n" lower cfg.tmpfiles.rules;
-      };
+      # every rule is attempted, and one which fails is reported rather than fatal.
+      #
+      # This was a `writeShellApplication`, which prepends `set -euo pipefail` - so the first
+      # rule to fail ended the script, every rule after it never ran, and the unit never
+      # completed. Everything in the trunk waits on this one, so a single unhappy rule took the
+      # whole machine with it and said nothing about which rule it was: the boot simply stopped
+      # after "create volatile files and directories" with no error to go on.
+      #
+      # A directory which cannot be created is a daemon which will fail to start later, and a
+      # daemon failing for a legible reason on a machine that booted beats a machine that did
+      # not. The name of the path goes to stderr, which is the console and the log.
+      type.oneshot.command = pkgs.writeShellScript "tmpfiles-setup" ''
+        export PATH=${lib.makeBinPath [ pkgs.coreutils ]}:$PATH
+
+        # a file as well as stderr, because stderr is not readable after the fact: where a
+        # unit's output goes is the implementation's business, and finit sends it to /dev/null
+        # unless the stanza asks for a log. /run is mounted before any unit runs, so this is
+        # somewhere a person can look once the machine is up - which is the point of not
+        # stopping the boot in the first place.
+        report=/run/tmpfiles-setup.failed
+        rm -f "$report"
+
+        failed=0
+
+        ${lib.concatMapStringsSep "\n" (rule: ''
+          if ! (
+            ${lower rule}
+          ); then
+            echo "${rule.type} rule for ${rule.path} failed" | tee -a "$report" >&2
+            failed=$((failed + 1))
+          fi
+        '') cfg.tmpfiles.rules}
+
+        if [ "$failed" -gt 0 ]; then
+          echo "tmpfiles-setup: $failed of ${toString (lib.length cfg.tmpfiles.rules)} rules failed, see $report" >&2
+        fi
+      '';
 
       # the earliest point in the trunk, so that every *later level* - and so everything
       # attached to any of them - is behind the files it puts in place.
