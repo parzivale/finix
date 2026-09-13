@@ -37,6 +37,7 @@ let
     dbus = ./dbus.nix;
     micolash = ./micolash.nix;
     tmpfiles-hostile = ./tmpfiles-hostile.nix;
+    resolvconf = ./resolvconf.nix;
   };
 
   # one row: the same test file, instantiated once per implementation
