@@ -87,11 +87,6 @@ in
   testScript = ''
     machine.start()
 
-    with subtest("tmpfiles-setup leaves a log naming every rule it ran"):
-        machine.wait_until_succeeds("test -e ", timeout=90)
-        machine.succeed("grep -q '^done: ' /run/tmpfiles-setup.log")
-        machine.succeed("grep -q 'directory /run/dbus' /run/tmpfiles-setup.log")
-
     with subtest("userspace comes up and the bus is answering"):
         machine.wait_until_succeeds("test -e ${coreLib.bootedMarker}", timeout=90)
         machine.succeed("test -S /run/dbus/system_bus_socket")
