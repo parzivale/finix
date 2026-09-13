@@ -44,7 +44,10 @@ let
   };
 in
 {
-  imports = [ ./options.nix ];
+  imports = [
+    ./providers.services.nix
+    ./options.nix
+  ];
 
   config = {
     assertions = [
@@ -62,27 +65,6 @@ in
 
     # home directories are not finit's business either - a user declared with createHome has
     # one whichever init the machine boots
-    providers.services.tmpfiles.rules = [
-      {
-        type = "directory";
-        path = "/home";
-      }
-    ]
-    ++
-      lib.mapAttrsToList
-        (username: opts: {
-          type = "directory";
-          path = opts.home;
-          mode = "0700";
-          user = opts.name;
-          inherit (opts) group;
-        })
-        (
-          lib.filterAttrs (
-            _: opts: opts.enable && opts.createHome && opts.home != "/var/empty"
-          ) config.users.users
-        );
-
     # default user & group definitions
     users.users.root = {
       uid = 0;

@@ -38,5 +38,11 @@ in
       };
     };
 
+    providers.services.tmpfiles.rules = [
+      {
+        type = "directory";
+        path = "/run/php-fpm";
+      }
+    ];
   };
 }

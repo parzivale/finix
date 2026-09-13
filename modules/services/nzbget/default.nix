@@ -130,19 +130,5 @@ in
       };
     };
 
-    providers.services.tmpfiles.rules = [
-      {
-        type = "directory";
-        path = logDir;
-        mode = "0750";
-        inherit (cfg) user group;
-      }
-    ]
-    ++ lib.optional (cfg.stateDir == "/var/lib/nzbget") {
-      type = "directory";
-      path = cfg.stateDir;
-      mode = "0750";
-      inherit (cfg) user group;
-    };
   };
 }

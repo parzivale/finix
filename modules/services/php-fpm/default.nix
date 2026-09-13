@@ -145,11 +145,5 @@ in
       daemonize = false;
     };
 
-    providers.services.tmpfiles.rules = [
-      {
-        type = "directory";
-        path = "/run/php-fpm";
-      }
-    ];
   };
 }

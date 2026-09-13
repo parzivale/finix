@@ -21,6 +21,8 @@ let
   checkAssertWarn = lib.asserts.checkAssertWarn config.assertions config.warnings;
 in
 {
+  imports = [ ./providers.services.nix ];
+
   options.system.topLevel = lib.mkOption {
     type = lib.types.path;
     description = "top-level system derivation";
@@ -129,41 +131,14 @@ in
     '';
 
     # the base filesystem layout, declared against the contract rather than against finit: a
-    # machine needs these whichever init it boots
-    providers.services.tmpfiles.rules =
-      map
-        (path: {
-          type = "directory";
-          inherit path;
-        })
-        [
-          "/etc"
-          "/run"
-          "/var"
-          "/var/cache"
-          "/var/db"
-          "/var/empty"
-          "/var/lib"
-          "/var/log"
-          "/var/spool"
-        ]
-      ++ [
-        # world-writable and sticky, which is the whole point of /tmp - left at the default
-        # 0755 root:root nothing unprivileged on the machine can write a temporary file, and
-        # what that looks like is a program failing on a path it had every reason to expect
-        {
-          type = "directory";
-          path = "/tmp";
-          mode = "1777";
-        }
-
-        {
-          type = "symlink";
-          path = "/var/run";
-          argument = "/run";
-        }
-      ];
-
+    # machine needs these whichever init it boots.
+    #
+    # `mkBefore` because the rules are applied in the order they are merged, and every module's
+    # rules are underneath these: /var/lib/foo cannot be created with the right owner before
+    # /var exists with the right mode. That used to hold by accident - these are defined in a
+    # module which merges early - and it stopped holding the moment each module's rules moved
+    # into a file of their own, since an imported file merges ahead of the one importing it.
+    # Said outright, it does not depend on where anything happens to be written.
     system.activation.path = map lib.getBin [
       config.programs.coreutils.package
       pkgs.gnugrep

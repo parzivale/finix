@@ -151,25 +151,5 @@ in
       gid = config.ids.gids.postgres;
     };
 
-    providers.services.tmpfiles.rules = [
-      {
-        type = "directory";
-        path = "/run/postgresql";
-        inherit (cfg) user group;
-      }
-    ]
-    ++ lib.optionals (cfg.dataDir == "/var/lib/postgresql/${cfg.package.psqlSchema}") (
-      map
-        (path: {
-          type = "directory";
-          inherit path;
-          mode = "0750";
-          inherit (cfg) user group;
-        })
-        [
-          "/var/lib/postgresql"
-          "/var/lib/postgresql/${cfg.package.psqlSchema}"
-        ]
-    );
   };
 }

@@ -110,11 +110,5 @@ in
       uptime-kuma = { };
     };
 
-    providers.services.tmpfiles.rules = lib.optional (cfg.settings.DATA_DIR == "/var/lib/uptime-kuma") {
-      type = "directory";
-      path = cfg.settings.DATA_DIR;
-      mode = "0750";
-      inherit (cfg) user group;
-    };
   };
 }

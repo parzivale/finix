@@ -44,5 +44,14 @@ in
 
       environment = toEnvVars cfg.settings;
     };
+
+    providers.services.tmpfiles.rules = lib.optionals (cfg.dataDir == "/var/lib/radarr") [
+      {
+        type = "directory";
+        path = cfg.dataDir;
+        mode = "0700";
+        inherit (cfg) user group;
+      }
+    ];
   };
 }

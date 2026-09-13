@@ -33,5 +33,15 @@ in
       };
     };
 
+    providers.services.tmpfiles.rules =
+      map
+        (path: {
+          type = "directory";
+          inherit path;
+        })
+        [
+          "/var/lib/fwupd"
+          "/var/cache/fwupd"
+        ];
   };
 }

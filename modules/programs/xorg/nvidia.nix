@@ -24,6 +24,8 @@ let
       "Device-nvidia[0]";
 in
 {
+  imports = [ ./nvidia.providers.services.nix ];
+
   options.hardware.nvidia.reduceTearing = lib.mkOption {
     type = lib.types.bool;
     default = false;
@@ -43,21 +45,6 @@ in
   };
 
   config = lib.mkIf (cfg.enable && config.programs.xorg.enable) {
-    providers.services.tmpfiles.rules = [
-      # Remove the following log message:
-      #    (WW) NVIDIA: Failed to bind sideband socket to
-      #    (WW) NVIDIA:     '/var/run/nvidia-xdriver-b4f69129' Permission denied
-      #
-      # https://bbs.archlinux.org/viewtopic.php?pid=1909115#p1909115
-      {
-        type = "directory";
-        path = "/run/nvidia-xdriver";
-        mode = "0770";
-        user = "root";
-        group = "users";
-      }
-    ];
-
     environment.etc."X11/xorg.conf.d/00-nvidia.conf".source = pkgs.writeText "00-nvidia.conf" ''
       Section "Device"
         Identifier "Device-nvidia[0]"

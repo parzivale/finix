@@ -180,18 +180,5 @@ in
       }
     ];
 
-    providers.services.tmpfiles.rules =
-      map
-        (path: {
-          type = "directory";
-          inherit path;
-          mode = "0755";
-          user = "greeter";
-          group = "greeter";
-        })
-        [
-          "/var/log/regreet"
-          "/var/lib/regreet"
-        ];
   };
 }

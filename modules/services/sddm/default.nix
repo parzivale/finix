@@ -208,39 +208,5 @@ in
       '';
     };
 
-    providers.services.tmpfiles.rules = [
-      # Home dir of the sddm user, also contains state.conf
-      {
-        type = "directory";
-        path = "/var/lib/sddm";
-        mode = "0750";
-        user = "sddm";
-        group = "sddm";
-      }
-
-      # This contains X11 auth files passed to Xorg and the greeter
-      {
-        type = "directory";
-        path = "/run/sddm";
-        mode = "0711";
-      }
-
-      # the auth files a previous boot left in /tmp. These ran at every boot under finit's
-      # reader too - the `r!` which would have made it boot-only is the TODO that was here -
-      # and the rules are only run once, by `tmpfiles-setup`, so a glob matching nothing is
-      # the ordinary case rather than a mistake.
-      #
-      # The `X` rules which paired with these are gone: they told a periodic /tmp cleaner to
-      # leave these files alone, and the contract's rules describe what to put in place at
-      # boot rather than a policy for something else to read later.
-      {
-        type = "remove";
-        path = "/tmp/sddm-auth*";
-      }
-      {
-        type = "remove";
-        path = "/tmp/xauth_*";
-      }
-    ];
   };
 }

@@ -27,5 +27,11 @@ in
       type.service.command = "${cfg.package}/bin/zerotier-one ${cfg.stateDir}";
     };
 
+    providers.services.tmpfiles.rules = lib.optionals (cfg.stateDir == "/var/lib/zerotier-one") [
+      {
+        type = "directory";
+        path = cfg.stateDir;
+      }
+    ];
   };
 }

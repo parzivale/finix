@@ -49,5 +49,13 @@ in
       # `--foreground`, so the process running is all any backend can observe
       type.service.command = "${cfg.package}/bin/fcron --foreground " + lib.escapeShellArgs cfg.extraArgs;
     };
+
+    providers.services.tmpfiles.rules = lib.optional (cfg.settings.fcrontabs == "/var/spool/fcron") {
+      type = "directory";
+      path = cfg.settings.fcrontabs;
+      mode = "0770";
+      user = "fcron";
+      group = "fcron";
+    };
   };
 }

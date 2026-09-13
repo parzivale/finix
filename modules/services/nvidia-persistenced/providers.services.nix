@@ -43,5 +43,13 @@ in
       '';
     };
 
+    providers.services.tmpfiles.rules = [
+      {
+        type = "directory";
+        path = runtimeDir;
+        mode = "0750";
+        inherit (cfg) user group;
+      }
+    ];
   };
 }

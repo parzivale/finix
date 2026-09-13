@@ -29,5 +29,22 @@ in
         isSystemUser = true;
       };
     };
+
+    providers.services.tmpfiles.rules =
+      let
+        owned = mode: path: {
+          type = "directory";
+          inherit path mode;
+          inherit (cfg) user group;
+        };
+      in
+      [
+        (owned "0700" "/var/cache/jellyfin")
+        (owned "0750" "/var/log/jellyfin")
+      ]
+      ++ lib.optionals (cfg.dataDir == "/var/lib/jellyfin") [
+        (owned "0700" cfg.dataDir)
+        (owned "0700" "${cfg.dataDir}/config")
+      ];
   };
 }

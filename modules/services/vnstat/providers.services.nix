@@ -34,5 +34,14 @@ in
         reload = "${lib.getExe' pkgs.procps "pkill"} -HUP -x vnstatd";
       };
     };
+
+    providers.services.tmpfiles.rules = lib.optionals (cfg.settings.DatabaseDir == "/var/lib/vnstat") [
+      {
+        type = "directory";
+        path = cfg.settings.DatabaseDir;
+        mode = "0750";
+        inherit (cfg) user group;
+      }
+    ];
   };
 }

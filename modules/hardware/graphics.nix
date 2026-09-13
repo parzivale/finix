@@ -20,6 +20,8 @@ let
   gidOf = name: toString config.ids.gids.${name};
 in
 {
+  imports = [ ./graphics.providers.services.nix ];
+
   options.hardware.graphics = {
     enable = lib.mkOption {
       description = ''
@@ -106,19 +108,6 @@ in
     # `L+` was "make the symlink, replacing whatever is there", which is what a symlink rule
     # does here - `ln -sfn`, so a generation switch repoints it rather than failing on the
     # link the last one left
-    providers.services.tmpfiles.rules = [
-      {
-        type = "symlink";
-        path = "/run/opengl-driver";
-        argument = "${driversEnv}";
-      }
-    ]
-    ++ lib.optional cfg.enable32Bit {
-      type = "symlink";
-      path = "/run/opengl-driver-32";
-      argument = "${driversEnv32}";
-    };
-
     hardware.graphics.package = lib.mkDefault pkgs.mesa;
     hardware.graphics.package32 = lib.mkDefault pkgs.pkgsi686Linux.mesa;
   };

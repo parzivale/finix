@@ -67,5 +67,33 @@ in
       };
     };
 
+    providers.services.tmpfiles.rules =
+      lib.concatMap
+        (
+          { path, mode }:
+          [
+            {
+              type = "directory";
+              inherit path mode;
+              inherit (cfg) user group;
+            }
+            {
+              type = "permissions";
+              inherit path mode;
+              inherit (cfg) user group;
+              recursive = true;
+            }
+          ]
+        )
+        [
+          {
+            path = cfg.dataDir;
+            mode = "0700";
+          }
+          {
+            path = "/run/mysqld";
+            mode = "0755";
+          }
+        ];
   };
 }

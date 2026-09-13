@@ -182,24 +182,5 @@ in
     users.groups = lib.optionalAttrs (cfg.group == "ytdl-sub") {
       ytdl-sub = { };
     };
-
-    providers.services.tmpfiles.rules =
-      let
-        owned = path: {
-          type = "directory";
-          inherit path;
-          mode = "0750";
-          inherit (cfg) user group;
-        };
-      in
-      lib.optional (cfg.settings.configuration.persist_logs.logs_directory == "/var/log/ytdl-sub") (
-        owned "/var/log/ytdl-sub"
-      )
-      ++ lib.optional (cfg.settings.configuration.working_directory == "/run/ytdl-sub") (
-        owned "/run/ytdl-sub"
-      )
-      ++ lib.optional (cfg.settings.configuration.lock_directory == "/run/lock/ytdl-sub") (
-        owned "/run/lock/ytdl-sub"
-      );
   };
 }

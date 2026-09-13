@@ -106,13 +106,5 @@ in
       '';
     };
 
-    providers.services.tmpfiles.rules = [
-      {
-        type = "directory";
-        path = "/var/cache/tuigreet";
-        user = "greeter";
-        group = "greeter";
-      }
-    ];
   };
 }

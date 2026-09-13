@@ -39,32 +39,5 @@ in
     # These rules run once, from `tmpfiles-setup`, which is what the `!` in `D!` and `r!` asked
     # for - there is no periodic cleaner here to tell "boot only".
 
-    providers.services.tmpfiles.rules =
-      lib.concatMap
-        (path: [
-          {
-            type = "remove";
-            inherit path;
-            recursive = true;
-          }
-          {
-            type = "directory";
-            inherit path;
-            mode = "1777";
-          }
-        ])
-        [
-          "/tmp/.X11-unix"
-          "/tmp/.ICE-unix"
-          "/tmp/.XIM-unix"
-          "/tmp/.font-unix"
-        ]
-      ++ [
-        # a lock naming a server which is no longer running
-        {
-          type = "remove";
-          path = "/tmp/.X[0-9]*-lock";
-        }
-      ];
   };
 }

@@ -108,51 +108,10 @@ let
   plainSwapDevices = lib.filter (sw: !isEncryptedSwap sw) config.swapDevices;
   encryptedSwapDevices = lib.filter isEncryptedSwap config.swapDevices;
 
-  sanitizeName = s: lib.replaceStrings [ "/" " " ] [ "-" "-" ] (lib.removePrefix "/" s);
-
-  makeEncryptedSwapTask =
-    sw:
-    let
-      name = "cryptswap-${sanitizeName sw.device}";
-    in
-    {
-      inherit name;
-      value =
-        let
-          re = sw.randomEncryption;
-          options =
-            sw.options
-            ++ lib.optional (sw.priority != null) "pri=${toString sw.priority}"
-            ++ lib.optional (sw.discardPolicy != null) (
-              if sw.discardPolicy == "both" then "discard" else "discard=${sw.discardPolicy}"
-            );
-        in
-        {
-          description = "Encrypted swap device on ${sw.device}";
-
-          # `runlevels = "S"` was finit's earliest; here that is the tier after the device
-          # managers, which is what has to have run before there is a device to encrypt
-          requires = [ "sysinit" ];
-
-          type.oneshot.command = toString (
-            pkgs.writeShellScript name ''
-              set -eu
-              ${pkgs.cryptsetup}/bin/cryptsetup plainOpen \
-                -c ${lib.escapeShellArg re.cipher} \
-                -s ${toString re.keySize} \
-                ${lib.optionalString (re.sectorSize != 0) "--sector-size ${toString re.sectorSize}"} \
-                ${lib.optionalString re.allowDiscards "--allow-discards"} \
-                -d ${lib.escapeShellArg re.source} \
-                ${lib.escapeShellArg sw.device} ${lib.escapeShellArg name}
-              ${pkgs.util-linuxMinimal}/bin/mkswap /dev/mapper/${name}
-              ${pkgs.util-linuxMinimal}/bin/swapon -o ${lib.escapeShellArg (lib.concatStringsSep "," options)} /dev/mapper/${name}
-            ''
-          );
-        };
-    };
 in
 {
   imports = [
+    ./providers.services.nix
     ./options.nix
 
     ./9p.nix
@@ -201,8 +160,6 @@ in
       )
       ++ lib.optional (encryptedSwapDevices != [ ]) pkgs.cryptsetup;
 
-    providers.services.units = lib.listToAttrs (lib.map makeEncryptedSwapTask encryptedSwapDevices);
-
     environment.etc.fstab.text = ''
       # This is a generated file.  Do not edit!
       #
@@ -220,7 +177,7 @@ in
         ]
       ) fileSystems) { }}
 
-      # swap devices (random-encrypted swap is handled by finit.tasks instead)
+      # swap devices (random-encrypted swap is set up by a unit - see providers.services.nix)
       ${lib.concatMapStrings makeSwapEntry plainSwapDevices}
     '';
 

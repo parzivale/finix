@@ -57,5 +57,12 @@ in
       ];
     };
 
+    providers.services.tmpfiles.rules = [
+      {
+        type = "directory";
+        path = stateDir;
+        mode = "0755";
+      }
+    ];
   };
 }

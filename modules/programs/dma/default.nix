@@ -91,20 +91,5 @@ in
       permissions = "u+rwx,g+rx,o+rx";
     };
 
-    providers.services.tmpfiles.rules =
-      map
-        (path: {
-          type = "directory";
-          inherit path;
-
-          # setgid mail, so a message dropped in one is group-owned by mail whoever wrote it
-          mode = "2775";
-          user = "root";
-          group = "mail";
-        })
-        [
-          "/var/mail"
-          "/var/spool/dma"
-        ];
   };
 }

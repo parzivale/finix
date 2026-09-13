@@ -5,14 +5,6 @@
   ...
 }:
 let
-  sysctlConf = pkgs.writeText "60-finix.conf" (
-    lib.concatStrings (
-      lib.mapAttrsToList (
-        n: v: lib.optionalString (v != null) "${n}=${if v == false then "0" else toString v}\n"
-      ) config.boot.kernel.sysctl
-    )
-  );
-
   sysctlOption = lib.mkOptionType {
     name = "sysctl option value";
     check =
@@ -25,6 +17,8 @@ let
   };
 in
 {
+  imports = [ ./sysctl.providers.services.nix ];
+
   options.boot.kernel.sysctl = lib.mkOption {
     type =
       let
@@ -72,31 +66,6 @@ in
   };
 
   config = {
-    environment.etc."sysctl.d/60-finix.conf".source = sysctlConf;
-
-    # TODO: force reload of all kernel variables -> `command = "${pkgs.procps}/bin/sysctl --load --system";`
-    #
-    # a contract unit rather than a finit task: kernel variables are not finit's business, and
-    # written as a stanza they were applied on finit and nowhere else - a machine booting any
-    # other init ran with the kernel's defaults for every one of these.
-    providers.services.units.sysctl = {
-      description = "apply kernel variables";
-
-      # the head of the trunk: anything started after this should see the values it sets
-      requires = [ (lib.head config.providers.services.trunk.levels) ];
-
-      # the generated file directly, not `config.environment.etc.<...>.source`. Most
-      # implementations lower a unit into /etc, so a unit whose command reads back out of
-      # `environment.etc` is defined in terms of itself - which surfaces as infinite recursion
-      # rather than as anything a person could read.
-      #
-      # `-e` because a key the running kernel does not have is not a reason to stop booting.
-      # As a finit task this was free - nothing waited on a task - but a unit at the head of
-      # the trunk is waited for by every level above it, so one stale entry in
-      # boot.kernel.sysctl would otherwise take the whole machine down with it.
-      type.oneshot.command = "${pkgs.procps}/bin/sysctl -e -p ${sysctlConf}";
-    };
-
     # Hide kernel pointers (e.g. in /proc/modules) for unprivileged
     # users as these make it easier to exploit kernel vulnerabilities.
     boot.kernel.sysctl."kernel.kptr_restrict" = lib.mkDefault 1;

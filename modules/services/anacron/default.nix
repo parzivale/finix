@@ -133,12 +133,5 @@ in
     # this module supplies an implementation for `providers.scheduler`
     providers.scheduler.backend = "anacron";
 
-    providers.services.tmpfiles.rules = [
-      {
-        type = "directory";
-        path = "/var/spool/anacron";
-        mode = "0755";
-      }
-    ];
   };
 }

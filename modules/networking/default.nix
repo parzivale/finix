@@ -22,6 +22,8 @@ let
   '';
 in
 {
+  imports = [ ./providers.services.nix ];
+
   options.networking = {
     hostName = lib.mkOption {
       type = lib.types.str;
@@ -106,14 +108,6 @@ in
     # sethostname(2) with it. finit does that itself as part of being finit, which is why this
     # was never needed before - on any other init the machine comes up as "noname" with the
     # right value sitting in a file nobody read.
-    providers.services.units.set-hostname = {
-      description = "apply the configured hostname";
-      type.oneshot.command = "${lib.getExe' pkgs.nettools "hostname"} -F /etc/hostname";
-
-      # early, so that anything logging or announcing itself later says the right name
-      requires = [ (lib.head config.providers.services.trunk.levels) ];
-    };
-
     # "the machine can reach the network", as a unit rather than as a condition.
     #
     # `net/route/default` is a finit netlink condition, and seven modules were waiting on one.
@@ -133,22 +127,6 @@ in
     # machine was otherwise up. Five seconds covers a DHCP lease on a network which is there;
     # a daemon whose network arrives later has to cope with that anyway, since nothing
     # guarantees the route stays up once it has been seen.
-    providers.services.units.network-online = {
-      description = "wait for a default route";
-      requires = [ "sysinit" ];
-
-      type.oneshot.command = pkgs.writeShellScript "network-online" ''
-        for _ in $(${lib.getExe' pkgs.coreutils "seq"} 1 50); do
-          if [ -s /proc/net/route ] && ${lib.getExe' pkgs.gnugrep "grep"} -qE '^[^	]+	00000000	' /proc/net/route; then
-            exit 0
-          fi
-          ${lib.getExe' pkgs.coreutils "sleep"} 0.1
-        done
-
-        echo "network-online: no default route after 5s, continuing" >&2
-      '';
-    };
-
     environment.etc = {
       hostname.text = cfg.hostName + "\n";
 

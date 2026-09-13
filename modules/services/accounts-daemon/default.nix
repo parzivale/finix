@@ -43,12 +43,5 @@ in
     services.dbus.enable = true;
     services.dbus.packages = [ cfg.package ];
 
-    providers.services.tmpfiles.rules = [
-      {
-        type = "directory";
-        path = "/var/lib/AccountsService";
-        mode = "0775";
-      }
-    ];
   };
 }

@@ -49,5 +49,12 @@ in
 
       type.oneshot.command = "${tlpExe} init stop";
     };
+
+    providers.services.tmpfiles.rules = [
+      {
+        type = "directory";
+        path = "/var/lib/tlp";
+      }
+    ];
   };
 }

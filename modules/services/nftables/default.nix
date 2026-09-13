@@ -209,21 +209,5 @@ in
     # this module supplies an implementation for `providers.firewall`
     providers.firewall.backend = "nftables";
 
-    providers.services.tmpfiles.rules = [
-      {
-        type = "directory";
-        path = "/var/lib/nftables";
-        mode = "0700";
-      }
-
-      # created empty if it is not there, because the ruleset `include`s it on the way in and
-      # nft fails on a missing include. Never truncated here - what it holds is the deletions
-      # belonging to the ruleset currently loaded, which is state the next generation needs.
-      {
-        type = "file";
-        path = cfg.stateFile;
-        mode = "0600";
-      }
-    ];
   };
 }

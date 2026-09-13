@@ -106,28 +106,5 @@ in
       chrony.gid = config.ids.gids.chrony;
     };
 
-    providers.services.tmpfiles.rules = [
-      {
-        type = "directory";
-        path = "/var/lib/chrony";
-        mode = "0750";
-        user = "chrony";
-        group = "chrony";
-      }
-      {
-        type = "file";
-        path = "/var/lib/chrony/chrony.drift";
-        mode = "0640";
-        user = "chrony";
-        group = "chrony";
-      }
-      {
-        type = "file";
-        path = "/var/lib/chrony/chrony.keys";
-        mode = "0640";
-        user = "chrony";
-        group = "chrony";
-      }
-    ];
   };
 }

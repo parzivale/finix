@@ -90,11 +90,5 @@ in
       # -SUBSYSTEM=block;DEVTYPE=disk;.* root:root 0600 +${cfg.package}/lib/udev/tlp-usb-udev disk /sys/$DEVPATH
     '';
 
-    providers.services.tmpfiles.rules = [
-      {
-        type = "directory";
-        path = "/var/lib/tlp";
-      }
-    ];
   };
 }

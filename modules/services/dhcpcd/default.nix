@@ -222,18 +222,5 @@ in
       dhcpcd = { };
     };
 
-    providers.services.tmpfiles.rules = [
-      {
-        type = "directory";
-        path = "/var/db/dhcpcd";
-        user = "dhcpcd";
-      }
-      {
-        type = "directory";
-        path = "/var/lib/dhcpcd";
-        user = "dhcpcd";
-        group = "dhcpcd";
-      }
-    ];
   };
 }

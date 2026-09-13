@@ -111,27 +111,5 @@ in
       permissions = "u+rx,g+rx,o-rx";
     };
 
-    providers.services.tmpfiles.rules =
-      map
-        (path: {
-          type = "directory";
-          inherit path;
-          mode = "0755";
-          user = "messagebus";
-          group = "messagebus";
-        })
-        [
-          "/run/dbus"
-          "/run/lock/subsys"
-          "/var/lib/dbus"
-          "/tmp/dbus"
-        ]
-      ++ [
-        {
-          type = "symlink";
-          path = "/etc/machine-id";
-          argument = "/var/lib/dbus/machine-id";
-        }
-      ];
   };
 }

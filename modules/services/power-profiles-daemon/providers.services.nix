@@ -24,5 +24,11 @@ in
       type.service.command = "${cfg.package}/libexec/power-profiles-daemon";
     };
 
+    providers.services.tmpfiles.rules = [
+      {
+        type = "directory";
+        path = "/var/lib/power-profiles-daemon";
+      }
+    ];
   };
 }

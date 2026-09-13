@@ -209,12 +209,5 @@ in
     # this module supplies an implementation for `providers.scheduler`
     providers.scheduler.backend = "fcron";
 
-    providers.services.tmpfiles.rules = lib.optional (cfg.settings.fcrontabs == "/var/spool/fcron") {
-      type = "directory";
-      path = cfg.settings.fcrontabs;
-      mode = "0770";
-      user = "fcron";
-      group = "fcron";
-    };
   };
 }

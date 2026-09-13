@@ -158,13 +158,5 @@ in
       sonarr.gid = config.ids.gids.sonarr;
     };
 
-    providers.services.tmpfiles.rules = lib.optionals (cfg.dataDir == "/var/lib/sonarr") [
-      {
-        type = "directory";
-        path = cfg.dataDir;
-        mode = "0700";
-        inherit (cfg) user group;
-      }
-    ];
   };
 }

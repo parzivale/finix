@@ -30,5 +30,13 @@ in
         exec ${cfg.package}/libexec/iwd${lib.optionalString cfg.debug " -d"}
       '';
     };
+
+    providers.services.tmpfiles.rules = [
+      {
+        type = "directory";
+        path = "/var/lib/iwd";
+        mode = "0700";
+      }
+    ];
   };
 }
