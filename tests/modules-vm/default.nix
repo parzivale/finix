@@ -35,6 +35,8 @@ let
   modules = {
     openssh = ./openssh.nix;
     dbus = ./dbus.nix;
+    micolash = ./micolash.nix;
+    tmpfiles-hostile = ./tmpfiles-hostile.nix;
   };
 
   # one row: the same test file, instantiated once per implementation

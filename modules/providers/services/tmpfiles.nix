@@ -230,7 +230,14 @@ in
           if ! (
             ${lower rule}
           ); then
-            echo "  FAILED: ${rule.type} rule for ${rule.path}" | tee -a "$log" >&2
+            # what is actually there, because that is the answer nearly every time: a path
+            # left by an older install as the wrong kind of thing. A `directory` rule fails
+            # against a regular file and against a dangling symlink, and the failure on its
+            # own does not say which.
+            found=$(stat -Lc %F ${arg rule.path} 2>/dev/null ||
+                    stat -c "broken %F" ${arg rule.path} 2>/dev/null ||
+                    echo "nothing")
+            echo "  FAILED: ${rule.type} rule for ${rule.path} (found: $found)" | tee -a "$log" >&2
             failed=$((failed + 1))
           fi
         '') cfg.tmpfiles.rules}
