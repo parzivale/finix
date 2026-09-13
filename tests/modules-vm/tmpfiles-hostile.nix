@@ -74,6 +74,12 @@ in
         assert "FAILED: directory rule for /tmp/dbus (found: regular" in log, log
         assert "FAILED: directory rule for /var/lib/iwd" in log, log
 
+        # the one which used to succeed at the wrong thing: `ln -sfn` onto a directory links
+        # inside it rather than replacing it, so /etc/machine-id became
+        # /etc/machine-id/machine-id and nothing said a word. It is refused now.
+        assert "FAILED: symlink rule for /etc/machine-id" in log, log
+        machine.fail("test -e /etc/machine-id/machine-id")
+
         # and the rest of the rules ran: a failure is not an exit
         assert "done: " in log, log
 

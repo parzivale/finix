@@ -120,7 +120,25 @@ let
         fi
       '';
 
-      symlink = "ln -sfn ${arg (toString rule.argument)} ${path}";
+      # `ln -sfn` onto a path which is a real directory does not replace it - it creates the
+      # link *inside* it, silently and successfully. /etc/machine-id then becomes
+      # /etc/machine-id/machine-id, and everything which reads a machine id gets the wrong
+      # answer with nothing anywhere reporting a problem.
+      #
+      # So that case is refused outright. It is not something this rule may repair on its own:
+      # removing a directory it did not create could take a machine's state with it, and a
+      # directory standing where a symlink belongs is a question for whoever put it there.
+      #
+      # A *symlink* to a directory is not this case, and is replaced as usual - that is the
+      # ordinary "the target moved" update, which is what `-f` is for.
+      symlink = ''
+        if [ -d ${path} ] && [ ! -L ${path} ]; then
+          echo "${rule.path} is a directory where a symlink belongs; refusing to link inside it" >&2
+          exit 1
+        fi
+
+        ln -sfn ${arg (toString rule.argument)} ${path}
+      '';
 
       # creates nothing, so a path that is not there yet is not an error - something else owns
       # its existence and this rule only has an opinion about its permissions
