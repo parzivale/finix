@@ -21,11 +21,12 @@ in
       #
       # https://bbs.archlinux.org/viewtopic.php?pid=1909115#p1909115
       {
-        type = "directory";
         path = "/run/nvidia-xdriver";
-        mode = "0770";
-        user = "root";
-        group = "users";
+        type.directory = {
+          mode = "0770";
+          user = "root";
+          group = "users";
+        };
       }
     ];
   };

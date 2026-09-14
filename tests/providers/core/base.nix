@@ -24,8 +24,8 @@
   services.mdevd.enable = true;
 
   # a terminal is not a daemon - no readiness signal, and nothing ever depends on one - so it is
-  # not a `providers.services` unit but its own provider, which is what lets this be said once
-  # for all four backends. It used to be a `finit.ttys` stanza under an `mkIf`, because a
+  # its own provider rather than something declared directly, which is what lets this be said
+  # once for all four backends. It used to be a `finit.ttys` stanza under an `mkIf`, because a
   # terminal was only expressible to finit.
   services.getty.enable = false;
   providers.ttys.devices.tty1 = {
@@ -42,9 +42,8 @@
   # exactly like the unit never having started.
   providers.services.tmpfiles.rules = [
     {
-      type = "directory";
       path = coreLib.markerDir;
-      mode = "1777";
+      type.directory.mode = "1777";
     }
   ];
 

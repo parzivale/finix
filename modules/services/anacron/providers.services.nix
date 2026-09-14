@@ -16,9 +16,8 @@ in
   config = lib.mkIf cfg.enable {
     providers.services.tmpfiles.rules = [
       {
-        type = "directory";
         path = "/var/spool/anacron";
-        mode = "0755";
+        type.directory.mode = "0755";
       }
     ];
   };

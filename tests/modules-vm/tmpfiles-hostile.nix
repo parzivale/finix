@@ -54,9 +54,8 @@ in
 
       providers.services.tmpfiles.rules = [
         {
-          type = "directory";
           path = coreLib.markerDir;
-          mode = "1777";
+          type.directory.mode = "1777";
         }
       ];
     };

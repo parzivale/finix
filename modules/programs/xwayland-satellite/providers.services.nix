@@ -18,14 +18,12 @@ in
       lib.concatMap
         (path: [
           {
-            type = "remove";
             inherit path;
-            recursive = true;
+            type.remove.recursive = true;
           }
           {
-            type = "directory";
             inherit path;
-            mode = "1777";
+            type.directory.mode = "1777";
           }
         ])
         [

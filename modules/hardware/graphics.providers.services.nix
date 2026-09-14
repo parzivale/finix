@@ -28,15 +28,13 @@ in
   config = lib.mkIf cfg.enable {
     providers.services.tmpfiles.rules = [
       {
-        type = "symlink";
         path = "/run/opengl-driver";
-        argument = "${driversEnv}";
+        type.symlink.argument = "${driversEnv}";
       }
     ]
     ++ lib.optional cfg.enable32Bit {
-      type = "symlink";
       path = "/run/opengl-driver-32";
-      argument = "${driversEnv32}";
+      type.symlink.argument = "${driversEnv32}";
     };
   };
 }

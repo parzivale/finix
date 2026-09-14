@@ -73,15 +73,19 @@ in
           { path, mode }:
           [
             {
-              type = "directory";
-              inherit path mode;
-              inherit (cfg) user group;
+              inherit path;
+              type.directory = {
+                inherit mode;
+                inherit (cfg) user group;
+              };
             }
             {
-              type = "permissions";
-              inherit path mode;
-              inherit (cfg) user group;
-              recursive = true;
+              inherit path;
+              type.permissions = {
+                inherit mode;
+                inherit (cfg) user group;
+                recursive = true;
+              };
             }
           ]
         )

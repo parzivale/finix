@@ -20,26 +20,47 @@
 let
   cfg = config.providers.services;
 
+  # shared by whichever variants below actually take them, rather than sitting on every rule
+  # regardless of kind - a `directory` rule setting `recursive`, or a `file` rule setting
+  # `argument` meaning something the type system never asked it to, used to be representable
+  # and silently ignored by `lower`. Declared once so `directory`'s `mode`/`user`/`group` and
+  # `permissions`'s are the same option, not two definitions which could drift apart.
+  mode = lib.mkOption {
+    type = with lib.types; nullOr str;
+    default = null;
+    example = "0755";
+    description = ''
+      Access mode, as {manpage}`chmod(1)` would take it. `null` leaves it alone - for a path
+      being created, that means the process umask decides.
+    '';
+  };
+
+  user = lib.mkOption {
+    type = with lib.types; nullOr str;
+    default = null;
+    description = ''
+      Owning user, by name or numeric id. `null` leaves ownership with whoever created the
+      path, which this early in boot is root.
+    '';
+  };
+
+  group = lib.mkOption {
+    type = with lib.types; nullOr str;
+    default = null;
+    description = "Owning group, by name or numeric id. `null` leaves it alone.";
+  };
+
+  recursive = lib.mkOption {
+    type = lib.types.bool;
+    default = false;
+    description = ''
+      Whether the rule descends into the path's contents. `permissions` then applies to
+      everything beneath the path; `remove` otherwise refuses a non-empty directory.
+    '';
+  };
+
   ruleType = lib.types.submodule {
     options = {
-      type = lib.mkOption {
-        type = lib.types.enum [
-          "directory"
-          "file"
-          "symlink"
-          "permissions"
-          "remove"
-        ];
-        description = ''
-          What the rule does.
-
-          `directory` and `file` create the path if it is not already there; `symlink` points
-          it at {option}`argument`. `permissions` creates nothing and only changes a path
-          which already exists, for something another unit or the kernel has made. `remove`
-          deletes it, and is the one type whose {option}`path` may be a glob.
-        '';
-      };
-
       path = lib.mkOption {
         type = lib.types.str;
         description = ''
@@ -50,51 +71,71 @@ let
         '';
       };
 
-      recursive = lib.mkOption {
-        type = lib.types.bool;
-        default = false;
+      type = lib.mkOption {
         description = ''
-          Whether the rule descends into the path's contents. Meaningful for `permissions`,
-          which then applies to everything beneath the path, and for `remove`, which will
-          otherwise refuse a non-empty directory.
-        '';
-      };
+          What the rule does, and whatever that needs.
 
-      mode = lib.mkOption {
-        type = with lib.types; nullOr str;
-        default = null;
-        example = "0755";
-        description = ''
-          Access mode, as {manpage}`chmod(1)` would take it. `null` leaves it alone - for a
-          path being created, that means the process umask decides.
-        '';
-      };
+          `directory` and `file` create the path if it is not already there. `symlink` points
+          it at {option}`argument`, which that kind alone requires. `permissions` creates
+          nothing and only changes a path which already exists, for something another unit or
+          the kernel has made. `remove` deletes it, and is the one kind whose {option}`path`
+          may be a glob.
 
-      user = lib.mkOption {
-        type = with lib.types; nullOr str;
-        default = null;
-        description = ''
-          Owning user, by name or numeric id. `null` leaves ownership with whoever created
-          the path, which this early in boot is root.
+          A kind carrying nothing beyond `path` may be written as a bare string, so
+          `type = "remove"` and `type.remove = { }` mean the same thing.
         '';
-      };
+        type = lib.types.coercedTo lib.types.str (kind: { ${kind} = { }; }) (
+          lib.types.attrTag {
+            directory = lib.mkOption {
+              description = "Create the path as a directory if it is not there yet.";
+              type = lib.types.submodule { options = { inherit mode user group; }; };
+            };
 
-      group = lib.mkOption {
-        type = with lib.types; nullOr str;
-        default = null;
-        description = "Owning group, by name or numeric id. `null` leaves it alone.";
-      };
+            file = lib.mkOption {
+              description = "Create the path as a file if it is not there yet.";
+              type = lib.types.submodule {
+                options = {
+                  inherit mode user group;
+                  argument = lib.mkOption {
+                    type = with lib.types; nullOr str;
+                    default = null;
+                    description = ''
+                      Initial contents. `null` creates an empty file.
+                    '';
+                  };
+                };
+              };
+            };
 
-      argument = lib.mkOption {
-        type = with lib.types; nullOr str;
-        default = null;
-        description = ''
-          The target, for a `symlink`, or the initial contents, for a `file`. Meaningless for
-          the other types.
-        '';
+            symlink = lib.mkOption {
+              description = "Point the path at {option}`argument` as a symlink.";
+              type = lib.types.submodule {
+                options.argument = lib.mkOption {
+                  type = lib.types.str;
+                  description = "The link's target.";
+                };
+              };
+            };
+
+            permissions = lib.mkOption {
+              description = ''
+                Change ownership and/or mode on a path which already exists; creates nothing.
+              '';
+              type = lib.types.submodule { options = { inherit mode user group recursive; }; };
+            };
+
+            remove = lib.mkOption {
+              description = "Delete the path.";
+              type = lib.types.submodule { options = { inherit recursive; }; };
+            };
+          }
+        );
       };
     };
   };
+
+  kindOf = rule: lib.head (lib.attrNames rule.type);
+  variantOf = rule: rule.type.${kindOf rule};
 
   arg = lib.escapeShellArg;
 
@@ -103,9 +144,10 @@ let
   lower =
     rule:
     let
-      owner = lib.optionalString (rule.user != null) "-o ${arg rule.user}";
-      grp = lib.optionalString (rule.group != null) "-g ${arg rule.group}";
-      mode = lib.optionalString (rule.mode != null) "-m ${arg rule.mode}";
+      v = variantOf rule;
+      owner = lib.optionalString (v.user or null != null) "-o ${arg v.user}";
+      grp = lib.optionalString (v.group or null != null) "-g ${arg v.group}";
+      mode = lib.optionalString (v.mode or null != null) "-m ${arg v.mode}";
       path = arg rule.path;
     in
     {
@@ -116,7 +158,7 @@ let
       file = ''
         if [ ! -e ${path} ]; then
           install -D ${mode} ${owner} ${grp} /dev/null ${path}
-          ${lib.optionalString (rule.argument != null) "printf '%s' ${arg rule.argument} > ${path}"}
+          ${lib.optionalString (v.argument != null) "printf '%s' ${arg v.argument} > ${path}"}
         fi
       '';
 
@@ -137,20 +179,20 @@ let
           exit 1
         fi
 
-        ln -sfn ${arg (toString rule.argument)} ${path}
+        ln -sfn ${arg v.argument} ${path}
       '';
 
       # creates nothing, so a path that is not there yet is not an error - something else owns
       # its existence and this rule only has an opinion about its permissions
       permissions =
         let
-          r = lib.optionalString rule.recursive "-R ";
+          r = lib.optionalString v.recursive "-R ";
         in
         ''
           if [ -e ${path} ]; then
-            ${lib.optionalString (rule.mode != null) "chmod ${r}${arg rule.mode} ${path}"}
-            ${lib.optionalString (rule.user != null) "chown ${r}${arg rule.user} ${path}"}
-            ${lib.optionalString (rule.group != null) "chgrp ${r}${arg rule.group} ${path}"}
+            ${lib.optionalString (v.mode != null) "chmod ${r}${arg v.mode} ${path}"}
+            ${lib.optionalString (v.user != null) "chown ${r}${arg v.user} ${path}"}
+            ${lib.optionalString (v.group != null) "chgrp ${r}${arg v.group} ${path}"}
           fi
         '';
 
@@ -163,12 +205,12 @@ let
         # shellcheck disable=SC2043
         for candidate in ${rule.path}; do
           if [ -e "$candidate" ]; then
-            rm -${lib.optionalString rule.recursive "r"}f -- "$candidate"
+            rm -${lib.optionalString v.recursive "r"}f -- "$candidate"
           fi
         done
       '';
     }
-    .${rule.type};
+    .${kindOf rule};
 in
 {
   options.providers.services.tmpfiles.rules = lib.mkOption {
@@ -178,11 +220,12 @@ in
     example = lib.literalExpression ''
       [
         {
-          type = "directory";
           path = "/run/postgresql";
-          mode = "0755";
-          user = "postgres";
-          group = "postgres";
+          type.directory = {
+            mode = "0755";
+            user = "postgres";
+            group = "postgres";
+          };
         }
       ]
     '';
@@ -200,14 +243,6 @@ in
   };
 
   config = {
-    # a symlink with nothing to point at is a configuration error, not an empty link. Checked
-    # here rather than in the rule submodule: assertions declared inside an option's type are
-    # never collected into config.assertions, so one there would never fire.
-    assertions = map (rule: {
-      assertion = (rule.type == "symlink") -> (rule.argument != null);
-      message = "providers.services.tmpfiles rule for ${rule.path} is a symlink with no argument to point at";
-    }) cfg.tmpfiles.rules;
-
     # a contract unit rather than anything the implementation has to wire up: every backend
     # gets this by implementing the contract, and none of them has to know it exists.
     providers.services.units.tmpfiles-setup = {
@@ -244,7 +279,7 @@ in
         failed=0
 
         ${lib.concatMapStringsSep "\n" (rule: ''
-          echo "${rule.type} ${rule.path}" >> "$log"
+          echo "${kindOf rule} ${rule.path}" >> "$log"
           if ! (
             ${lower rule}
           ); then
@@ -255,7 +290,7 @@ in
             found=$(stat -Lc %F ${arg rule.path} 2>/dev/null ||
                     stat -c "broken %F" ${arg rule.path} 2>/dev/null ||
                     echo "nothing")
-            echo "  FAILED: ${rule.type} rule for ${rule.path} (found: $found)" | tee -a "$log" >&2
+            echo "  FAILED: ${kindOf rule} rule for ${rule.path} (found: $found)" | tee -a "$log" >&2
             failed=$((failed + 1))
           fi
         '') cfg.tmpfiles.rules}

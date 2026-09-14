@@ -33,9 +33,8 @@ in
 
     providers.services.tmpfiles.rules = [
       {
-        type = "directory";
         path = "/var/lib/iwd";
-        mode = "0700";
+        type.directory.mode = "0700";
       }
     ];
   };

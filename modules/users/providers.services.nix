@@ -25,11 +25,12 @@
       ++
         lib.mapAttrsToList
           (username: opts: {
-            type = "directory";
             path = opts.home;
-            mode = "0700";
-            user = opts.name;
-            inherit (opts) group;
+            type.directory = {
+              mode = "0700";
+              user = opts.name;
+              inherit (opts) group;
+            };
           })
           (
             lib.filterAttrs (

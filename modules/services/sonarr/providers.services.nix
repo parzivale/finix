@@ -52,10 +52,11 @@ in
 
     providers.services.tmpfiles.rules = lib.optionals (cfg.dataDir == "/var/lib/sonarr") [
       {
-        type = "directory";
         path = cfg.dataDir;
-        mode = "0700";
-        inherit (cfg) user group;
+        type.directory = {
+          mode = "0700";
+          inherit (cfg) user group;
+        };
       }
     ];
   };

@@ -33,15 +33,13 @@
         # 0755 root:root nothing unprivileged on the machine can write a temporary file, and
         # what that looks like is a program failing on a path it had every reason to expect
         {
-          type = "directory";
           path = "/tmp";
-          mode = "1777";
+          type.directory.mode = "1777";
         }
 
         {
-          type = "symlink";
           path = "/var/run";
-          argument = "/run";
+          type.symlink.argument = "/run";
         }
       ]
     );

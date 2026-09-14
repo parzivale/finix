@@ -33,18 +33,18 @@ in
     providers.services.tmpfiles.rules = [
       # Home dir of the sddm user, also contains state.conf
       {
-        type = "directory";
         path = "/var/lib/sddm";
-        mode = "0750";
-        user = "sddm";
-        group = "sddm";
+        type.directory = {
+          mode = "0750";
+          user = "sddm";
+          group = "sddm";
+        };
       }
 
       # This contains X11 auth files passed to Xorg and the greeter
       {
-        type = "directory";
         path = "/run/sddm";
-        mode = "0711";
+        type.directory.mode = "0711";
       }
 
       # the auth files a previous boot left in /tmp. These ran at every boot under finit's

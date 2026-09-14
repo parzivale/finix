@@ -30,25 +30,28 @@ in
 
     providers.services.tmpfiles.rules = [
       {
-        type = "directory";
         path = "/var/spool/atjobs";
-        mode = "1770";
-        user = "atd";
-        group = "atd";
+        type.directory = {
+          mode = "1770";
+          user = "atd";
+          group = "atd";
+        };
       }
       {
-        type = "file";
         path = "/var/spool/atjobs/.SEQ";
-        mode = "0600";
-        user = "atd";
-        group = "atd";
+        type.file = {
+          mode = "0600";
+          user = "atd";
+          group = "atd";
+        };
       }
       {
-        type = "directory";
         path = "/var/spool/atspool";
-        mode = "1770";
-        user = "atd";
-        group = "atd";
+        type.directory = {
+          mode = "1770";
+          user = "atd";
+          group = "atd";
+        };
       }
     ];
   };

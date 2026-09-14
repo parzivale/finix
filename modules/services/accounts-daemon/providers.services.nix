@@ -41,9 +41,8 @@ in
 
     providers.services.tmpfiles.rules = [
       {
-        type = "directory";
         path = "/var/lib/AccountsService";
-        mode = "0775";
+        type.directory.mode = "0775";
       }
     ];
   };

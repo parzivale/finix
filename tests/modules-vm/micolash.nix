@@ -64,9 +64,8 @@ in
       providers.services.tmpfiles.rules = lib.mkMerge [
         [
           {
-            type = "directory";
             path = coreLib.markerDir;
-            mode = "1777";
+            type.directory.mode = "1777";
           }
         ]
         # slow tmpfiles-setup down, so that the runlevel switch lands while it is still running

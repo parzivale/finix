@@ -37,10 +37,11 @@ in
 
     providers.services.tmpfiles.rules = lib.optionals (cfg.settings.DatabaseDir == "/var/lib/vnstat") [
       {
-        type = "directory";
         path = cfg.settings.DatabaseDir;
-        mode = "0750";
-        inherit (cfg) user group;
+        type.directory = {
+          mode = "0750";
+          inherit (cfg) user group;
+        };
       }
     ];
   };

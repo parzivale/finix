@@ -59,9 +59,8 @@ in
 
     providers.services.tmpfiles.rules = [
       {
-        type = "directory";
         path = stateDir;
-        mode = "0755";
+        type.directory.mode = "0755";
       }
     ];
   };

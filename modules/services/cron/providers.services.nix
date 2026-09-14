@@ -45,19 +45,16 @@ in
 
     providers.services.tmpfiles.rules = [
       {
-        type = "directory";
         path = "/var/cron";
-        mode = "0710";
+        type.directory.mode = "0710";
       }
       {
-        type = "directory";
         path = "/var/spool";
-        mode = "0755";
+        type.directory.mode = "0755";
       }
       {
-        type = "directory";
         path = "/var/spool/cron";
-        mode = "0755";
+        type.directory.mode = "0755";
       }
 
       # ensure this directory exists - cronie complains if it doesn't

@@ -66,11 +66,12 @@ in
     providers.services.tmpfiles.rules =
       map
         (path: {
-          type = "directory";
           inherit path;
-          mode = "0755";
-          user = "messagebus";
-          group = "messagebus";
+          type.directory = {
+            mode = "0755";
+            user = "messagebus";
+            group = "messagebus";
+          };
         })
         [
           "/run/dbus"
@@ -80,9 +81,8 @@ in
         ]
       ++ [
         {
-          type = "symlink";
           path = "/etc/machine-id";
-          argument = "/var/lib/dbus/machine-id";
+          type.symlink.argument = "/var/lib/dbus/machine-id";
         }
       ];
   };

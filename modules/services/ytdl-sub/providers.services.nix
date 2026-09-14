@@ -25,10 +25,11 @@ in
     providers.services.tmpfiles.rules =
       let
         owned = path: {
-          type = "directory";
           inherit path;
-          mode = "0750";
-          inherit (cfg) user group;
+          type.directory = {
+            mode = "0750";
+            inherit (cfg) user group;
+          };
         };
       in
       lib.optional (cfg.settings.configuration.persist_logs.logs_directory == "/var/log/ytdl-sub") (

@@ -56,40 +56,34 @@ in
 
     providers.services.tmpfiles.rules = [
       {
-        type = "directory";
         path = "/nix/var";
-        mode = "0755";
+        type.directory.mode = "0755";
       }
       {
-        type = "directory";
         path = "/nix/var/nix/daemon-socket";
-        mode = "0755";
+        type.directory.mode = "0755";
       }
       {
         type = "directory";
         path = "/nix/var/nix/gcroots";
       }
       {
-        type = "remove";
         path = "/nix/var/nix/gcroots/tmp";
-        recursive = true;
+        type.remove.recursive = true;
       }
       {
-        type = "remove";
         path = "/nix/var/nix/temproots";
-        recursive = true;
+        type.remove.recursive = true;
       }
 
       # so the running and booted systems are not garbage-collected out from under the machine
       {
-        type = "symlink";
         path = "/nix/var/nix/gcroots/booted-system";
-        argument = "/run/booted-system";
+        type.symlink.argument = "/run/booted-system";
       }
       {
-        type = "symlink";
         path = "/nix/var/nix/gcroots/current-system";
-        argument = "/run/current-system";
+        type.symlink.argument = "/run/current-system";
       }
     ];
   };

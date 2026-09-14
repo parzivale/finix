@@ -60,9 +60,8 @@ in
       providers.services.tmpfiles.rules = lib.mkMerge [
         [
           {
-            type = "directory";
             path = coreLib.markerDir;
-            mode = "1777";
+            type.directory.mode = "1777";
           }
         ]
         # and a thousand directories nobody wants, to make the race decidable.

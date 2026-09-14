@@ -33,9 +33,11 @@ in
     providers.services.tmpfiles.rules =
       let
         owned = mode: path: {
-          type = "directory";
-          inherit path mode;
-          inherit (cfg) user group;
+          inherit path;
+          type.directory = {
+            inherit mode;
+            inherit (cfg) user group;
+          };
         };
       in
       [

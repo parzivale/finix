@@ -58,9 +58,8 @@ in
 
     providers.services.tmpfiles.rules = [
       {
-        type = "directory";
         path = "/var/lib/sshd";
-        mode = "0755";
+        type.directory.mode = "0755";
       }
     ];
   };
