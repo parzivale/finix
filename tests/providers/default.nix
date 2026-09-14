@@ -37,6 +37,7 @@ let
     switching = ./core/switching.nix;
     users = ./core/users.nix;
     shutdown = ./core/shutdown.nix;
+    ctty = ./core/ctty.nix;
 
     # ordering and shutdown again, with the timing made hostile. Kept separate from them so a
     # failure says which it is: the claim being broken, or only the easy version of it holding.
