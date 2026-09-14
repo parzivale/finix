@@ -27,7 +27,10 @@ let
   variantOf = unit: unit.type.${kindOf unit};
   readinessOf = unit: lib.head (lib.attrNames (variantOf unit).readiness);
 
-  readinessLib = import ../../providers/services/readiness.nix { inherit pkgs lib; };
+  readinessLib = import ../../providers/services/readiness.nix {
+    inherit pkgs lib;
+    inherit (cfg) readinessPollInterval;
+  };
   shutdownLib = import ../../providers/services/shutdown.nix { inherit pkgs lib; };
 
   # runit has no runlevels and no notion of a unit which is not to start yet: every directory in
@@ -74,6 +77,15 @@ let
   sleep = lib.getExe' pkgs.coreutils "sleep";
   touch = lib.getExe' pkgs.coreutils "touch";
 
+  # runsv never calls setsid() on the process it execs - only on itself, and only under `-P` -
+  # so a daemon inherits runsv's own session rather than getting one of its own. Most daemons
+  # never notice, but anything which has to become a session leader to do its job - a tty's
+  # `agetty` acquiring a controlling terminal via TIOCSCTTY chief among them - fails outright
+  # without this. `setsid` itself only forks if it would otherwise be a process group leader
+  # (sys-utils/setsid.c), which a script run this way never is, so this execs straight into the
+  # same process rather than adding a fork the way `runsv -P` does.
+  setsid = "${pkgs.util-linux}/bin/setsid";
+
   # `sv` resolves a bare service name through SVDIR, which defaults somewhere else entirely,
   # so every call names the directory outright.
   scanDir = "/run/service";
@@ -81,15 +93,10 @@ let
   latchDir = "/run/providers-services";
   latch = name: "${latchDir}/${name}.ready";
 
-  # ten times a second, and it shows: each hop of the trunk costs one poll interval, so this is
-  # most of what a runit boot spends between tiers. It is also one `exec` of `sleep` per waiting
-  # unit per iteration, which is the cheapest thing available - runit has no way to be told that
-  # a file appeared.
-  waitFor =
-    unit:
-    lib.concatMapStrings (dep: ''
-      while [ ! -e ${latch dep} ]; do ${sleep} 0.1; done
-    '') unit.requires;
+  # runit has no way to be told that a file appeared on its own, but something does:
+  # `readinessLib.waitForPath` arms an inotify watch on the latch's directory rather than
+  # polling for it, which is the same primitive this and `waitFor.path` both need.
+  waitFor = unit: lib.concatMapStrings (dep: readinessLib.waitForPath (latch dep)) unit.requires;
 
   # a unit runit considers "up" must not exit, or runsv restarts it forever. anchors and
   # completed oneshots therefore park rather than return.
@@ -138,7 +145,7 @@ let
             # nothing itself - not even a forking daemon - so every waitFor kind is this.
             ( ${readinessLib.scriptFor name v.readiness}
               ${touch} ${latch name} ) &
-            exec ${asUser unit}${v.command}
+            exec ${setsid} ${asUser unit}${v.command}
           ''
         else
           ''
@@ -146,7 +153,7 @@ let
             # by a service being up. `notify` and `s6` never reach here - the contract refuses
             # them against this backend.
             ${touch} ${latch name}
-            exec ${asUser unit}${v.command}
+            exec ${setsid} ${asUser unit}${v.command}
           ''
       )
     );
@@ -278,9 +285,15 @@ in
 
       # stage 2. runsvdir execs `runsv` by name for each service directory, so it needs runit
       # on PATH - which nothing else arranges, and this does for itself.
+      #
+      # `-P`: runsv never calls setsid() on its own, so without it every runsv - and everything
+      # it in turn execs - stays in runsvdir's own session and process group. A service which
+      # opens a controlling terminal for itself, like a tty's `agetty`, needs to be a session
+      # leader with none yet for that to succeed; without `-P` it never is one, and acquiring a
+      # ctty fails with EPERM/ENOTTY regardless of what the service does.
       "runit/2".source = pkgs.writeShellScript "runit-stage-2" ''
         export PATH=${lib.makeBinPath [ pkgs.runit ]}:$PATH
-        exec ${lib.getExe' pkgs.runit "runsvdir"} ${scanDir}
+        exec ${lib.getExe' pkgs.runit "runsvdir"} -P ${scanDir}
       '';
 
       # stage 3. runit has already stopped the supervisor by the time this runs; the contract's

@@ -45,7 +45,10 @@ let
   # here bounces more than one switching on finit, dinit or runit does.
   dependencies = unit: lib.concatMapStrings (dep: "${dep}\n") unit.requires;
 
-  readinessLib = import ../../providers/services/readiness.nix { inherit pkgs lib; };
+  readinessLib = import ../../providers/services/readiness.nix {
+    inherit pkgs lib;
+    inherit (cfg) readinessPollInterval;
+  };
   shutdownLib = import ../../providers/services/shutdown.nix { inherit pkgs lib; };
 
   # the `everything` bundle is brought up at boot, and s6-rc has no notion of a unit which is

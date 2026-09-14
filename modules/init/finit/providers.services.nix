@@ -20,10 +20,19 @@ let
     ${lib.concatStringsSep "\n" config.finit.tmpfiles.rules}
   '';
 
-  # boot-side stanzas sit in every runlevel except 0 (halt) and 6 (reboot); the graph carries
-  # all of the ordering, so finit's own sequencing is left with nothing to do. shutdown-side
-  # stanzas sit in exactly 0 and 6, which is the only vocabulary finit has for "on the way out".
-  bootRunlevels = "S12345789";
+  # boot-side stanzas sit in every runlevel from 1 to 9 except 0 (halt) and 6 (reboot) -
+  # deliberately not S. finit's own bootstrap wait (sm_check_bootstrap in src/sm.c) blocks
+  # entering the configured runlevel until every `task`/`run` stanza valid in S has completed,
+  # which is a second synchronization barrier the graph did not ask for: it would make finit's
+  # own "entering runlevel N" wait on whichever trunk-attached task happens to be slowest -
+  # `network-online`'s five second timeout, for instance - rather than on nothing at all. The
+  # graph already carries every ordering constraint that matters via `conditions`, so nothing
+  # here needs runlevel S to mean anything; landing in the configured runlevel as fast as finit
+  # can manage and letting the graph take it from there is the point.
+  #
+  # shutdown-side stanzas sit in exactly 0 and 6, which is the only vocabulary finit has for
+  # "on the way out".
+  bootRunlevels = "12345789";
   shutdownRunlevels = "06";
 
   indexOf =
@@ -170,7 +179,10 @@ let
     // lib.optionalAttrs (unit.user != null) { inherit (unit) user; }
     // lib.optionalAttrs (unit.group != null) { inherit (unit) group; };
 
-  readinessLib = import ../../providers/services/readiness.nix { inherit pkgs lib; };
+  readinessLib = import ../../providers/services/readiness.nix {
+    inherit pkgs lib;
+    inherit (cfg) readinessPollInterval;
+  };
   shutdownLib = import ../../providers/services/shutdown.nix { inherit pkgs lib; };
 
   readinessOf = unit: lib.head (lib.attrNames (variantOf unit).readiness);

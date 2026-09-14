@@ -20,10 +20,8 @@
   services.mdevd.enable = true;
 
   # a terminal is not a daemon: no readiness signal, and nothing ever depends on one. So it is
-  # not a `providers.services` unit - modelling one there would export finit's tty stanza into
-  # an abstraction the other three would have to honour - but its own provider, which finit
-  # implements natively and everything else lowers to an ordinary supervised prompt. This is
-  # also what satisfies finix's assertion that finit.ttys be non-empty.
+  # its own provider rather than something a module declares directly - but what it hands to
+  # the contract is an ordinary supervised prompt, same as any other `providers.services` unit.
   services.getty.enable = false;
   providers.ttys.devices.tty1 = {
     description = "getty on /dev/tty1";

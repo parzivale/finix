@@ -26,7 +26,10 @@ let
   variantOf = unit: unit.type.${kindOf unit};
   readinessOf = unit: lib.head (lib.attrNames (variantOf unit).readiness);
 
-  readinessLib = import ../../providers/services/readiness.nix { inherit pkgs lib; };
+  readinessLib = import ../../providers/services/readiness.nix {
+    inherit pkgs lib;
+    inherit (cfg) readinessPollInterval;
+  };
   shutdownLib = import ../../providers/services/shutdown.nix { inherit pkgs lib; };
 
   # where the running generation's fingerprints live, and the store copy /run is seeded from at

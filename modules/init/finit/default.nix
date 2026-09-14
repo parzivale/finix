@@ -12,7 +12,6 @@ in
     ./initrd.nix
     ./mount.nix
     ./providers.services.nix
-    ./providers.ttys.nix
     ./stage1.nix
     ./stage2.nix
   ];
@@ -22,13 +21,6 @@ in
       {
         assertion = lib.versionAtLeast cfg.package.version "4.16";
         message = "finit version must be at least 4.16";
-      }
-
-      {
-        # only finit's business when finit is the init: a machine booting dinit or s6 has no
-        # finit.ttys to define, and this module is imported either way
-        assertion = (config.providers.services.backend == "finit") -> config.finit.ttys != { };
-        message = "you have not defined any ttys; consider importing and enabling the getty module";
       }
     ];
 

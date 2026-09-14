@@ -195,6 +195,21 @@ in
       };
     };
 
+    readinessPollInterval = lib.mkOption {
+      type = lib.types.ints.positive;
+      default = 1;
+      description = ''
+        How long, in whole seconds, a `waitFor` script may block between checks when it
+        cannot rely purely on the event that would otherwise wake it: `inotifywait`'s own
+        timeout, and the interval between attempts wherever nothing filesystem-observable
+        applies at all - a socket refusing a connection, or the directory a watched path
+        would live under not existing yet.
+
+        Lower catches a missed event sooner, at the cost of more frequent wake-ups when one
+        was never coming; higher is closer to a pure sleep-until-woken wait.
+      '';
+    };
+
     backend = lib.mkOption {
       type = lib.types.enum [ "none" ];
       default = "none";

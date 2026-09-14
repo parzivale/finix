@@ -1,9 +1,11 @@
-# a terminal, as a thing an init either has or has to be told how to fake
+# a terminal, as a login prompt pointed at a device
 #
-# finit has a first-class notion of one: it opens the device, handles the session and respawns
-# the prompt when that session ends, and it says so in its own configuration. dinit, runit and
-# s6 have no notion of one at all - there a login prompt is an ordinary supervised process which
-# happens to be pointed at a device.
+# finit *can* be told to hand a stanza a controlling terminal (`tty:<dev>`), but that exists for
+# commands which cannot acquire one themselves - and a login prompt is not one of those. `agetty`
+# already opens the device it is named after and claims it as its controlling terminal itself,
+# which is all any of the four implementations need: they start it as an ordinary supervised
+# process and it does the rest. So there is no native/emulated split here any more - every
+# backend gets the same unit.
 #
 # Modules used to write that difference out themselves: `finit.ttys.tty1` in one branch and a
 # contract unit in the other, in every module which wanted a terminal. Worse, a module which
@@ -16,11 +18,10 @@
 # same device is a merge conflict which names both. Nothing has to be subtracted from anything,
 # and nothing has to know which init is running.
 #
-# This is a provider and not a kind of `providers.services` unit, deliberately. A tty is not a
-# daemon - it has no readiness to report and nothing ever depends on one - and giving the
-# service contract a notion of one would export a finit peculiarity into the abstraction every
-# other implementation has to honour. As a provider it is what it is: one concept, with a native
-# implementation where there is one and an emulated implementation where there is not.
+# This is still a provider and not a kind of `providers.services` unit directly - a tty is not a
+# daemon, it has no readiness of its own to report - but what it hands to the contract is an
+# ordinary `service`, the same as every module which happens to run something pointed at a
+# device. There is nothing left for an implementation to do specially.
 {
   config,
   pkgs,
@@ -49,26 +50,13 @@ let
 in
 {
   options.providers.ttys = {
-    native = lib.mkOption {
-      type = lib.types.bool;
-      default = false;
-      description = ''
-        Whether the selected init has terminals of its own, and so will be given these
-        directly rather than through {option}`providers.services.units`.
-
-        Set by the implementation, not by configuration. When `false`, each device becomes an
-        ordinary supervised service running a program which opens the terminal for itself.
-      '';
-    };
-
     package = lib.mkOption {
       type = with lib.types; nullOr package;
       default = null;
       description = ''
         The program to run on a device claimed with no {option}`command` of its own.
 
-        `null` leaves it to the implementation: finit has a login prompt built in and uses it,
-        and anything else falls back to `agetty`.
+        `null` falls back to `agetty`.
       '';
       example = lib.literalExpression ''
         pkgs.util-linux // {
@@ -131,8 +119,8 @@ in
                   is work only the program can do properly, and every login prompt worth
                   running already does it.
 
-                  `null` asks for a login prompt: {option}`providers.ttys.package`, or the
-                  implementation's own where it has one.
+                  `null` asks for a login prompt: {option}`providers.ttys.package`, or `agetty`
+                  where that is also unset.
                 '';
               };
 
@@ -154,10 +142,9 @@ in
     };
   };
 
-  # every init without terminals of its own, which is every init but finit. A prompt is a
-  # supervised process like any other, and the respawn finit does natively is what a service
-  # being restarted when it exits already means.
-  config = lib.mkIf (!cfg.native) {
+  # a prompt is a supervised process like any other, and the respawn every backend already does
+  # for a service is what "restart it when the session ends" means.
+  config = {
     providers.services.units = lib.mapAttrs' (
       name: device:
       lib.nameValuePair "tty-${name}" {
