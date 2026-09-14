@@ -157,6 +157,46 @@ in
     environment.etc."security/limits.conf".text = lib.mkDefault "";
     environment.etc."login.defs".source = format.generate "login.defs" cfg.settings;
 
+    # `pam_lastlog` below writes these, and every login path on the machine runs it - getty,
+    # autologin, a display manager, `su` - so this belongs to shadow rather than to whichever
+    # of those happened to be enabled. Silently absent rather than refused: `pam_lastlog` is
+    # advisory (a login still succeeds without them, `silent` even swallows the warning), so
+    # the only symptom of these missing is `last`/`lastlog`/`who` having nothing to say.
+    providers.services.tmpfiles.rules = [
+      {
+        path = "/var/run/utmp";
+        type.file = {
+          mode = "0664";
+          user = "root";
+          group = "utmp";
+        };
+      }
+      {
+        path = "/var/log/wtmp";
+        type.file = {
+          mode = "0664";
+          user = "root";
+          group = "utmp";
+        };
+      }
+      {
+        path = "/var/log/btmp";
+        type.file = {
+          mode = "0660";
+          user = "root";
+          group = "utmp";
+        };
+      }
+      {
+        path = "/var/log/lastlog";
+        type.file = {
+          mode = "0664";
+          user = "root";
+          group = "utmp";
+        };
+      }
+    ];
+
     security.pam.services.login = {
       text = ''
         # Account management.
