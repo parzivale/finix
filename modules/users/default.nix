@@ -79,6 +79,16 @@ in
       group = "nogroup";
     };
 
+    # toShellPath points a shellPackage at /run/current-system/sw, not at the store directly -
+    # so without this, a user's declared shell is a passwd entry to a path nothing ever puts
+    # there, and login fails past the password prompt with "no shell" no matter how correctly
+    # everything else was configured.
+    environment.systemPackages = lib.unique (
+      lib.filter (shell: lib.types.shellPackage.check shell) (
+        lib.mapAttrsToList (_: u: u.shell) (lib.filterAttrs (_: u: u.enable) cfg.users)
+      )
+    );
+
     users.groups =
       lib.genAttrs
         [
