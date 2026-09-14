@@ -71,5 +71,8 @@ let
         value = runTest (./. + "/${filename}");
       })
       (lib.filterAttrs (name: type: type == "regular" && name != "default.nix") (builtins.readDir ./.));
+  # not one of the matrix rows: the graph renderer is pure, so what it needs is an evaluation
+  # and a look at the text it produced, not four machines which would boot identically.
+  graph = import ./core/graph.nix { inherit lib pkgs testLib; };
 in
-lib.mapAttrs (_: row) core // perBackend
+lib.mapAttrs (_: row) core // perBackend // { inherit graph; }
