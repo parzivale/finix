@@ -35,6 +35,17 @@
             --dhcp-option=option:dns-server,192.168.1.2
         '';
       };
+
+      # dnsmasq's own default lease file lives here, and nothing creates it: finit's package
+      # happens to ship a bundled, generic tmpfiles.d(5) fragment covering it (among a whole
+      # stock FHS layout finit applies to itself, independent of this contract entirely), which
+      # is how this went unnoticed on one backend and not the other four.
+      providers.services.tmpfiles.rules = [
+        {
+          path = "/var/lib/misc";
+          type = "directory";
+        }
+      ];
     };
 
   nodes.client =
