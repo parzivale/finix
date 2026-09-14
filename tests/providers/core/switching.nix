@@ -47,6 +47,13 @@ let
   };
 
   nextSystem = (testLib.evalNode "machine" next).config.system.topLevel;
+
+  # not every backend supplies list/activate/deactivate - sinit's first version deliberately
+  # does not (see modules/init/sinit/default.nix) - and the contract has a documented degraded
+  # mode for exactly that: switch-to-configuration warns and leaves the running units alone
+  # rather than erroring. That is worth asserting in its own right, not skipping past, since it
+  # is the whole reason a backend without reconciliation is still safe to switch against.
+  supported = (testLib.evalNode "machine" base).config.providers.services.switch.supported;
 in
 {
   name = "providers.switching-${backend}";
@@ -62,53 +69,87 @@ in
       };
     };
 
-  testScript = ''
-    ${coreLib.prelude}
+  testScript =
+    if supported then
+      ''
+        ${coreLib.prelude}
 
-    machine.start()
-    wait_booted()
+        machine.start()
+        wait_booted()
 
-    with subtest("the first generation's services are up"):
-        machine.wait_until_succeeds("pgrep -f '[f]inix-daemon-keeper'", timeout=60)
-        machine.wait_until_succeeds("pgrep -f '[f]inix-daemon-goner'", timeout=60)
+        with subtest("the first generation's services are up"):
+            machine.wait_until_succeeds("pgrep -f '[f]inix-daemon-keeper'", timeout=60)
+            machine.wait_until_succeeds("pgrep -f '[f]inix-daemon-goner'", timeout=60)
 
-        keeper_before = pid_of("keeper")
-        assert pid_of("newcomer") is None, "newcomer is running before the switch"
+            keeper_before = pid_of("keeper")
+            assert pid_of("newcomer") is None, "newcomer is running before the switch"
 
-    with subtest("switching into a configuration which drops one and adds another"):
-        # teed to the console as well as captured: a switch which hangs leaves the captured
-        # output unread until the command returns, which is never - so on the console is the
-        # only place the progress of a hanging switch can be seen. pipefail keeps tee from
-        # swallowing a failure.
-        out = machine.succeed(
-            "set -o pipefail; ${nextSystem}/bin/switch-to-configuration test 2>&1 | tee /dev/console"
-        )
-        print(out)
+        with subtest("switching into a configuration which drops one and adds another"):
+            # teed to the console as well as captured: a switch which hangs leaves the captured
+            # output unread until the command returns, which is never - so on the console is the
+            # only place the progress of a hanging switch can be seen. pipefail keeps tee from
+            # swallowing a failure.
+            out = machine.succeed(
+                "set -o pipefail; ${nextSystem}/bin/switch-to-configuration test 2>&1 | tee /dev/console"
+            )
+            print(out)
 
-        # what the engine says it did, which should name both and neither of the others
-        assert "goner" in out, f"the engine did not mention goner: {out}"
-        assert "newcomer" in out, f"the engine did not mention newcomer: {out}"
+            # what the engine says it did, which should name both and neither of the others
+            assert "goner" in out, f"the engine did not mention goner: {out}"
+            assert "newcomer" in out, f"the engine did not mention newcomer: {out}"
 
-    with subtest("the one that went away is down"):
-        machine.wait_until_fails("pgrep -f '[f]inix-daemon-goner'", timeout=60)
+        with subtest("the one that went away is down"):
+            machine.wait_until_fails("pgrep -f '[f]inix-daemon-goner'", timeout=60)
 
-    with subtest("the one that arrived is up"):
-        machine.wait_until_succeeds("pgrep -f '[f]inix-daemon-newcomer'", timeout=60)
+        with subtest("the one that arrived is up"):
+            machine.wait_until_succeeds("pgrep -f '[f]inix-daemon-newcomer'", timeout=60)
 
-    with subtest("and the one that did not change was left alone"):
-        # the whole point: the same process, not a restarted one. An engine which cannot tell
-        # the difference would have taken this down and brought it back with a new pid.
-        keeper_after = pid_of("keeper")
+        with subtest("and the one that did not change was left alone"):
+            # the whole point: the same process, not a restarted one. An engine which cannot tell
+            # the difference would have taken this down and brought it back with a new pid.
+            keeper_after = pid_of("keeper")
 
-        assert keeper_after is not None, "keeper is not running after the switch"
-        assert keeper_after == keeper_before, (
-            f"keeper was restarted: {keeper_before} -> {keeper_after}"
-        )
+            assert keeper_after is not None, "keeper is not running after the switch"
+            assert keeper_after == keeper_before, (
+                f"keeper was restarted: {keeper_before} -> {keeper_after}"
+            )
 
-    with subtest("the machine is still up afterwards"):
-        # a switch which took the trunk down with it would still have passed everything above
-        machine.succeed("test -e ${coreLib.bootedMarker}")
+        with subtest("the machine is still up afterwards"):
+            # a switch which took the trunk down with it would still have passed everything above
+            machine.succeed("test -e ${coreLib.bootedMarker}")
 
-    machine.shutdown()
-  '';
+        machine.shutdown()
+      ''
+    else
+      ''
+        ${coreLib.prelude}
+
+        machine.start()
+        wait_booted()
+
+        with subtest("the first generation's services are up"):
+            machine.wait_until_succeeds("pgrep -f '[f]inix-daemon-keeper'", timeout=60)
+            machine.wait_until_succeeds("pgrep -f '[f]inix-daemon-goner'", timeout=60)
+            keeper_before = pid_of("keeper")
+
+        with subtest("switching still succeeds, but says it could not reconcile"):
+            out = machine.succeed(
+                "set -o pipefail; ${nextSystem}/bin/switch-to-configuration test 2>&1 | tee /dev/console"
+            )
+            print(out)
+            assert "cannot reconcile" in out, f"expected the degraded-mode warning, got: {out}"
+
+        with subtest("nothing about the running units changed"):
+            # this is the actual guarantee: an implementation which cannot reconcile leaves
+            # what is running alone rather than getting it wrong - goner is still here,
+            # newcomer never arrives, and keeper was never touched to begin with.
+            assert pid_of("goner") is not None, "goner was stopped despite switching being unsupported"
+            assert pid_of("newcomer") is None, "newcomer started despite switching being unsupported"
+            assert pid_of("keeper") == keeper_before, "keeper was restarted despite switching being unsupported"
+
+        with subtest("the machine is still up afterwards"):
+            machine.succeed("test -e ${coreLib.bootedMarker}")
+
+        machine.shutdown()
+      '';
 }

@@ -29,6 +29,7 @@ let
     "dinit"
     "runit"
     "s6-rc"
+    "sinit"
   ];
 
   core = {

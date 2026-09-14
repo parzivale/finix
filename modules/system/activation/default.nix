@@ -194,7 +194,6 @@ in
               --subst-var out \
               --subst-var-by bash ${pkgs.bash} \
               --subst-var-by distroId finix \
-              --subst-var-by finit ${config.finit.package} \
               --subst-var-by logger ${pkgs.util-linuxMinimal} \
               --subst-var-by coreutils ${config.programs.coreutils.package} \
               --subst-var-by installHook ${config.providers.bootloader.installHook} \

@@ -91,6 +91,7 @@ in
   dinit = ./init/dinit;
   s6-rc = ./init/s6-rc;
   runit = ./init/runit;
+  sinit = ./init/sinit;
 
   # virtualisation
 

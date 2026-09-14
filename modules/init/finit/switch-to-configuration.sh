@@ -6,7 +6,6 @@ localeArchive="@localeArchive@"
 distroId="@distroId@"
 installHook="@installHook@"
 inhibitCheck="@inhibitCheck@"
-finit="@finit@"
 logger="@logger@"
 coreutils="@coreutils@"
 servicesSwitch="@servicesSwitch@"
@@ -83,14 +82,19 @@ fi
 # behind this: the engine is the same whatever init is underneath, and the selected
 # providers.services implementation supplies the three operations it drives.
 #
-# A system defining no providers.services units has no such implementation to call, so it
-# falls back to asking finit to reload directly, as it always did.
+# Empty rather than absent is what an implementation which cannot supply all three - sinit's
+# minimal first version, for one - is asked to report, precisely so this can tell "nothing to
+# reconcile" from "reconciliation isn't possible here" and only warn about the second. It used
+# to instead call finit's own initctl directly, which was never a fallback for the second case
+# - only ever correct when finit genuinely was PID 1, which supplies all three itself, so
+# empty there means the first case too - and wrong for any other implementation this runs
+# against, since nothing checked which one was actually running before asking it to reload.
 if [[ -n "$servicesSwitch" ]]; then
   if ! "$servicesSwitch"; then
     (( res == 0 )) && res=3
   fi
-elif ! "$finit/bin/initctl" reload; then
-  (( res == 0 )) && res=3
+else
+  echo "this system's providers.services implementation cannot reconcile units in place; a reboot is needed to apply any change to them" >&2
 fi
 
 if (( res == 0 )); then
