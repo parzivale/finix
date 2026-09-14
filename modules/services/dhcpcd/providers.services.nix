@@ -19,21 +19,50 @@ in
 
       type.service = {
         # PATH set in the command rather than asked for as a unit property: dinit has no
-        # per-unit PATH, and dhcpcd needs resolvconf on it to write /etc/resolv.conf.
+        # per-unit PATH, and dhcpcd needs it - not for itself, but for the hook scripts it
+        # shells out to (dhcpcd-run-hooks and libexec/dhcpcd-hooks/*), which are themselves
+        # plain shell scripts calling bare `mkdir`/`cat`/`rm`/`chmod` rather than absolute
+        # paths, same as every other unit-provided PATH gets built - unlike this repo's own
+        # generated scripts, these are upstream's and outside its control. coreutils covers
+        # those unconditionally; resolvconf is added on top only when there's a resolvconf
+        # hook that will actually run.
         command = pkgs.writeShellScript "dhcpcd" ''
-          ${lib.optionalString config.programs.resolvconf.enable "export PATH=${config.programs.resolvconf.package}/bin:$PATH"}
+          export PATH=${
+            lib.makeBinPath (
+              [ pkgs.coreutils ] ++ lib.optional config.programs.resolvconf.enable config.programs.resolvconf.package
+            )
+          }
           exec ${lib.getExe cfg.package} ${lib.escapeShellArgs cfg.extraArgs}
         '';
 
-        readiness = "fork";
+        # dhcpcd is not asked whether it is `notify`/`s6`-aware because it isn't - neither
+        # protocol is something it speaks. `-w` on the supervised command itself blocks it from
+        # doing anything past bringing an interface up until an address exists, which is real
+        # and worth having independent of what this reports, but it is not what this reports:
+        # `fork` readiness here touches the moment the unit is exec'd, before the command has
+        # done anything at all, whatever flags it was given.
+        #
+        # A second, short-lived invocation of the same flag is what actually observes it:
+        # `dhcpcd -w` run again while the supervised one is already up talks to that running
+        # manager instead of starting a competing one - the same mechanism `-n`/`-N`/`-x`
+        # document as "signal an existing process" - and blocks until it returns the answer
+        # rather than polling for one. `timeout` is a backstop, not the real bound: dhcpcd's
+        # own reboot/discover/IPv4LL fallbacks already resolve this one way or another well
+        # inside it - it exists so a stuck manager cannot hang whatever requires this outright.
+        readiness.waitFor.check.command = pkgs.writeShellScript "dhcpcd-ready" ''
+          exec ${lib.getExe' pkgs.coreutils "timeout"} 60 ${lib.getExe cfg.package} -w
+        '';
       };
 
-      # `basic` puts it in the multi-user tier. Not the basic tier: nothing before multi-user
-      # needs the network, and gating `basic` on a DHCP lease would stall the whole trunk on a
-      # machine with no link. syslogd is in the head tier, so this is already after it.
-      # `basic` puts it in the multi-user tier, which is after the head tier the device
-      # manager settles in - so neither that nor syslogd is named here any more.
-      requires = [ "basic" ];
+      # `multi-user` itself, not `basic`: attaching to a level makes you a dependant of it,
+      # and a level's dependants are what the *next* level waits on - so requiring `basic`
+      # was making dhcpcd a prerequisite of `multi-user`, serializing a DHCP lease ahead of
+      # getty and everything else that only needs `multi-user`, for no reason any of them
+      # actually needs. Nothing before `multi-user` touches the network, and nothing after
+      # this point is entitled to assume a lease exists either - `network-online` is the unit
+      # that promises that, to whatever actually needs it - so dhcpcd only has to be running
+      # by the time the things beside it are, not done.
+      requires = [ "multi-user" ];
     };
 
     providers.services.tmpfiles.rules = [

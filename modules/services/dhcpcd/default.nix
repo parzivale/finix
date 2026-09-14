@@ -167,6 +167,7 @@ in
   config = lib.mkIf cfg.enable {
     services.dhcpcd.extraArgs = [
       "-B"
+      "-w"
       "-f"
       (toString cfg.configFile)
     ];
