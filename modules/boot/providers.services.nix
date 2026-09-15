@@ -23,6 +23,15 @@
         export PATH=${
           lib.makeBinPath [
             config.programs.coreutils.package
+
+            # for the `grep` below, which coreutils does not provide. Without it this script
+            # ran `grep: command not found` on every backend but finit - the one which sets a
+            # PATH of its own that happens to hold one - and the test that follows reads a
+            # failed grep as "the store is not read-only yet", so the remount was attempted on
+            # a store which already had it. Harmless in its outcome, silent either way, and
+            # not what this is meant to be deciding.
+            pkgs.gnugrep
+
             pkgs.util-linux
           ]
         }:$PATH
