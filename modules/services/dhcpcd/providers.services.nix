@@ -63,6 +63,20 @@ in
         # written on. runit and sinit hand a unit nothing.
         readiness.waitFor.check.command = pkgs.writeShellScript "dhcpcd-ready" ''
           export PATH=${hookPath}
+
+          # nothing is asked until there is something to ask. `dhcpcd -w` talks to a running
+          # manager, and if there is no manager it *becomes* one - so a probe which runs
+          # before the supervised command has got there starts a second dhcpcd, which then
+          # backgrounds itself out of the supervisor's sight. What follows is the unit
+          # restarting forever: every start finds that manager already in place, sends it a
+          # control command and exits, which the supervisor reads as the service dying.
+          #
+          # The socket is the manager's own, created once it is up, so waiting for it is
+          # waiting for the thing this is supposed to be querying.
+          while [ ! -S /run/dhcpcd/sock ]; do
+            ${lib.getExe' pkgs.coreutils "sleep"} 0.1
+          done
+
           exec ${lib.getExe' pkgs.coreutils "timeout"} 60 ${lib.getExe cfg.package} -w
         '';
       };

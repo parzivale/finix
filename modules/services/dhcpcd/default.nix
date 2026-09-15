@@ -167,7 +167,14 @@ in
   config = lib.mkIf cfg.enable {
     services.dhcpcd.extraArgs = [
       "-B"
-      "-w"
+
+      # and deliberately not `-w`. It reads as "wait for an address", and what it actually
+      # says is *when* to fork to the background rather than whether - "wait for an address to
+      # be assigned before forking to the background" - which is the same question `-B` above
+      # already answers, in the other direction. The waiting this unit does want is asked for
+      # as readiness, in providers.services.nix, where it decides when dependants may start
+      # rather than how long this process lives.
+
       "-f"
       (toString cfg.configFile)
     ];
