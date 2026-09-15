@@ -11,6 +11,15 @@
 }:
 let
   cfg = config.services.dhcpcd;
+
+  # dhcpcd shells out to its hook scripts - dhcpcd-run-hooks and libexec/dhcpcd-hooks/* - and
+  # those are upstream's, calling bare `mkdir`/`cat`/`rm`/`chmod` rather than absolute paths.
+  # So anything which can end up running them needs this, and that is both of the commands
+  # below: `dhcpcd -w` runs hooks the same as the supervised one does.
+  hookPath = lib.makeBinPath (
+    [ pkgs.coreutils ]
+    ++ lib.optional config.programs.resolvconf.enable config.programs.resolvconf.package
+  );
 in
 {
   config = lib.mkIf cfg.enable {
@@ -27,12 +36,7 @@ in
         # those unconditionally; resolvconf is added on top only when there's a resolvconf
         # hook that will actually run.
         command = pkgs.writeShellScript "dhcpcd" ''
-          export PATH=${
-            lib.makeBinPath (
-              [ pkgs.coreutils ]
-              ++ lib.optional config.programs.resolvconf.enable config.programs.resolvconf.package
-            )
-          }
+          export PATH=${hookPath}
           exec ${lib.getExe cfg.package} ${lib.escapeShellArgs cfg.extraArgs}
         '';
 
@@ -50,7 +54,15 @@ in
         # rather than polling for one. `timeout` is a backstop, not the real bound: dhcpcd's
         # own reboot/discover/IPv4LL fallbacks already resolve this one way or another well
         # inside it - it exists so a stuck manager cannot hang whatever requires this outright.
+        #
+        # It carries the same PATH as the command, and for the same reason: this one also
+        # runs the hooks. What happens without it is a lease which arrives and is never
+        # written down - the hooks fail on `mkdir: command not found` and dhcpcd carries on
+        # regardless - and it went unseen because finit sets a PATH of its own which happens
+        # to hold coreutils, so the one backend which did not need this was the one it was
+        # written on. runit and sinit hand a unit nothing.
         readiness.waitFor.check.command = pkgs.writeShellScript "dhcpcd-ready" ''
+          export PATH=${hookPath}
           exec ${lib.getExe' pkgs.coreutils "timeout"} 60 ${lib.getExe cfg.package} -w
         '';
       };
