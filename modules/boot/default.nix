@@ -11,6 +11,7 @@
     ./efi.nix
     ./initrd.nix
     ./kernel.nix
+    ./root.nix
     ./sysctl.nix
   ];
 

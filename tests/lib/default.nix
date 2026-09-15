@@ -39,8 +39,10 @@ let
             "console=${qemuSerialDevice},115200n8"
           ];
 
-          # tmpfs root - /nix/store is mounted via 9p from host
-          fileSystems."/" = {
+          # tmpfs root - /nix/store is mounted via 9p from host. A default, because a machine
+          # booting without an initrd has no stage 1 to create this and names a real root of
+          # its own - see tests/no-initrd.nix.
+          fileSystems."/" = lib.mkDefault {
             device = "tmpfs";
             fsType = "tmpfs";
             options = [ "mode=755" ];

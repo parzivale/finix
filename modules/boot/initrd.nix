@@ -121,50 +121,56 @@ in
     };
   };
 
-  config = {
-    warnings = lib.optionals (cfg.fileSystemImportCommands != "") [
-      "boot.initrd.fileSystemImportCommands has been deprecated; please use boot.initrd.finit.tasks instead"
-    ];
+  config = lib.mkMerge [
+    {
+      warnings = lib.optionals (cfg.fileSystemImportCommands != "") [
+        "boot.initrd.fileSystemImportCommands has been deprecated; please use boot.initrd.finit.tasks instead"
+      ];
+    }
 
-    boot.initrd.supportedFilesystems = lib.mapAttrs' (
-      _: v: lib.nameValuePair v.fsType { enable = true; }
-    ) (lib.filterAttrs (_: fs: fs.neededForBoot) config.fileSystems);
+    # everything below describes an image, so none of it means anything on a machine which
+    # boots without one - see modules/boot/root.nix for what happens instead.
+    (lib.mkIf cfg.enable {
+      boot.initrd.supportedFilesystems = lib.mapAttrs' (
+        _: v: lib.nameValuePair v.fsType { enable = true; }
+      ) (lib.filterAttrs (_: fs: fs.neededForBoot) config.fileSystems);
 
-    boot.initrd.package = pkgs.makeInitrdNG {
-      name = "initrd-" + config.boot.kernelPackages.kernel.name or "kernel";
-      inherit (cfg) compressor compressorArgs prepend;
-      contents = map (
-        { source, target }@pair: if target != null then pair else { inherit source; }
-      ) cfg.contents;
-    };
+      boot.initrd.package = pkgs.makeInitrdNG {
+        name = "initrd-" + config.boot.kernelPackages.kernel.name or "kernel";
+        inherit (cfg) compressor compressorArgs prepend;
+        contents = map (
+          { source, target }@pair: if target != null then pair else { inherit source; }
+        ) cfg.contents;
+      };
 
-    boot.initrd.path = [
-      pkgs.busybox
+      boot.initrd.path = [
+        pkgs.busybox
 
-      # needed for at least luks on gardendevd, if not more...
-      pkgs.util-linux
+        # needed for at least luks on gardendevd, if not more...
+        pkgs.util-linux
 
-      # defer to kmod for modprobe binary
-      (lib.hiPrio pkgs.kmod)
+        # defer to kmod for modprobe binary
+        (lib.hiPrio pkgs.kmod)
 
-      # busybox's own `mount` applet doesn't understand `X-mount.mkdir` and other util-linux specific options used below
-      (lib.hiPrio pkgs.util-linux.mount)
-    ]
-    ++ fsPackages;
+        # busybox's own `mount` applet doesn't understand `X-mount.mkdir` and other util-linux specific options used below
+        (lib.hiPrio pkgs.util-linux.mount)
+      ]
+      ++ fsPackages;
 
-    boot.initrd.contents = [
-      {
-        target = "/lib";
-        source = "${modulesClosure}/lib";
-      }
-      {
-        target = "/bin";
-        source = "${initrdPath}/bin";
-      }
-      {
-        target = "/sbin";
-        source = "${initrdPath}/bin";
-      }
-    ];
-  };
+      boot.initrd.contents = [
+        {
+          target = "/lib";
+          source = "${modulesClosure}/lib";
+        }
+        {
+          target = "/bin";
+          source = "${initrdPath}/bin";
+        }
+        {
+          target = "/sbin";
+          source = "${initrdPath}/bin";
+        }
+      ];
+    })
+  ];
 }

@@ -113,8 +113,21 @@ let
         config.boot.kernelPackages.kernel.target
           or config.boot.kernelPackages.stdenv.hostPlatform.linux-kernel.target
       }"
+    ]
+    # a machine with no initrd is handed nothing but the kernel: the root parameters
+    # modules/boot/root.nix derives are already in `boot.kernelParams` below, and the kernel
+    # mounts the disk attached by `rootImage` itself.
+    ++ lib.optionals config.boot.initrd.enable [
       "-initrd"
       "${config.boot.initrd.package}/initrd"
+    ]
+    ++ lib.optionals (cfg.rootImage != null) [
+      "-drive"
+      # snapshot=on: the image is in the store, so writes go to a temporary overlay and the
+      # machine still gets a writable root
+      "file=${cfg.rootImage},format=raw,if=virtio,snapshot=on"
+    ]
+    ++ [
       "-append"
       (toString (config.boot.kernelParams ++ [ "init=${config.system.topLevel}/init" ]))
     ];
@@ -212,10 +225,27 @@ in
         '';
       };
 
+      rootImage = lib.mkOption {
+        type = with lib.types; nullOr path;
+        default = null;
+        description = ''
+          A raw disk image to attach as the first virtio disk, which the guest sees as
+          `/dev/vda`.
+
+          For a machine which boots without an initrd: the kernel has to mount the root
+          itself, so there has to be a root to mount, and the host's store cannot be it -
+          nothing is there to mount 9p before the init runs. An image holding the closure of
+          the system is, and `fileSystems."/"` names it the way any other machine names a
+          disk.
+
+          Writes go to a temporary overlay rather than to the image, which is in the store.
+        '';
+      };
+
       mountHostNixStore = lib.mkOption {
         type = lib.types.bool;
-        default = !useBootLoader;
-        defaultText = lib.literalExpression ''config.virtualisation.qemu.bootMode == "kernel"'';
+        default = !useBootLoader && config.boot.initrd.enable;
+        defaultText = lib.literalExpression ''config.virtualisation.qemu.bootMode == "kernel" && config.boot.initrd.enable'';
         description = ''
           Mount the host Nix store as a 9p mount.
         '';
