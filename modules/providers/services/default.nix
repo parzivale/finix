@@ -220,6 +220,11 @@ in
         {option}`boot.init` at its own executable. The two are not separable, because an init
         is not only a thing which supervises units - it is also what the kernel hands the
         machine to. An implementation which cannot be that is not selectable here.
+
+        It rarely needs saying directly: every implementation sets this from its own
+        `enable`, so `dinit.enable = true` is the whole of selecting dinit. Each does so as
+        a default, which is what leaves this option able to override the choice, and what
+        makes enabling two of them a conflict rather than one of them quietly winning.
       '';
     };
 

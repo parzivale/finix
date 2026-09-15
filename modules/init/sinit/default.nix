@@ -101,19 +101,17 @@ let
   # between attempts rather than detecting a crash loop - the same corner this backend cuts
   # everywhere else for a first version - and stops respawning, rather than looping forever,
   # once rc.shutdown has asked it to by leaving a stop file behind.
-  supervise =
-    name: command:
-    ''
-      while :; do
-        ${command} &
-        child=$!
-        echo "$child" > ${pidFile name}
-        wait "$child"
-        ${rm} -f ${pidFile name}
-        [ -e ${stopFile name} ] && break
-        ${sleep} 1
-      done
-    '';
+  supervise = name: command: ''
+    while :; do
+      ${command} &
+      child=$!
+      echo "$child" > ${pidFile name}
+      wait "$child"
+      ${rm} -f ${pidFile name}
+      [ -e ${stopFile name} ] && break
+      ${sleep} 1
+    done
+  '';
 
   fingerprint = name: "${latchDir}/${name}.fingerprint";
 
@@ -231,129 +229,151 @@ let
   };
 in
 {
+  # enabling an implementation is what selects it: this names itself into the contract
+  # below, the same way every other providers implementation does when it is enabled.
+  options.sinit.enable = lib.mkOption {
+    type = lib.types.bool;
+    default = false;
+    example = true;
+    description = ''
+      Whether to boot sinit as PID 1, with the supervision this module builds on top of it.
+
+      Enabling it points {option}`providers.services.backend` at `sinit`, which is what
+      actually selects an implementation - so this is a default, and a machine naming a
+      backend directly still wins.
+    '';
+  };
+
   options.providers.services = {
     backend = lib.mkOption {
       type = lib.types.enum [ "sinit" ];
     };
   };
 
-  config = lib.mkIf (cfg.backend == "sinit") {
-    providers.services.supportedFeatures = {
-      # neither is bounded: stopping is TERM then KILL on a fixed schedule, and nothing here
-      # times a unit's own start out
-      startTimeout = false;
-      stopTimeout = false;
+  config = lib.mkMerge [
+    # this module supplies an implementation for `providers.services`
+    (lib.mkIf config.sinit.enable {
+      providers.services.backend = lib.mkDefault "sinit";
+    })
 
-      # `waitFor.pidfile` is refused for the same reason it is on runit: it says the daemon
-      # forks and the spawned process exits, which this respawn loop would read as a crash and
-      # restart forever. `notify` and `s6` are protocols nothing here speaks.
-      readiness = [
-        "fork"
-        "waitFor.socket"
-        "waitFor.path"
-        "waitFor.check"
-      ];
+    (lib.mkIf (cfg.backend == "sinit") {
+      providers.services.supportedFeatures = {
+        # neither is bounded: stopping is TERM then KILL on a fixed schedule, and nothing here
+        # times a unit's own start out
+        startTimeout = false;
+        stopTimeout = false;
 
-      user = true;
-      group = true;
-      path = true;
-    };
+        # `waitFor.pidfile` is refused for the same reason it is on runit: it says the daemon
+        # forks and the spawned process exits, which this respawn loop would read as a crash and
+        # restart forever. `notify` and `s6` are protocols nothing here speaks.
+        readiness = [
+          "fork"
+          "waitFor.socket"
+          "waitFor.path"
+          "waitFor.check"
+        ];
 
-    providers.services.initExecutable = lib.getExe' sinit' "sinit";
-
-    # sinit only ever acts on this by reacting to a signal sent to PID 1 - unlike every other
-    # backend here, there is no command which asks it to shut down directly, only one which
-    # asks the kernel to deliver the signal sinit's own sigwait loop is waiting on. It is what
-    # then runs rc.shutdown itself, with the right argv, not this.
-    #
-    # SIGINT is also what the kernel delivers to PID 1 for Ctrl-Alt-Del, and halt is folded
-    # into poweroff, the same as runit's: sinit draws no distinction between the two either.
-    providers.services.shutdownCommands =
-      let
-        signal =
-          sig:
-          pkgs.writeShellScript "sinit-${sig}" ''
-            exec ${lib.getExe' pkgs.coreutils "kill"} -s ${sig} 1
-          '';
-      in
-      {
-        poweroff = signal "USR1";
-        halt = signal "USR1";
-        reboot = signal "INT";
+        user = true;
+        group = true;
+        path = true;
       };
 
-    providers.services.switch = {
-      # every job writes its own fingerprint the moment it starts, whether or not it has
-      # actually reached readiness yet - "active" here means "a job for this generation's
-      # definition has been launched", the same standard `fork` readiness already treats as
-      # good enough for this backend, not "and is done starting".
-      list = pkgs.writeShellScript "sinit-list" ''
-        ${reportShutdownSide}
-        for f in ${latchDir}/*.fingerprint; do
-          [ -e "$f" ] || continue
-          name=$(${lib.getExe' pkgs.coreutils "basename"} "$f" .fingerprint)
-          printf '%s\t%s\n' "$name" "$(${lib.getExe' pkgs.coreutils "cat"} "$f")"
-        done
-      '';
+      providers.services.initExecutable = lib.getExe' sinit' "sinit";
 
-      # launched detached rather than as a plain background job of this script: this exits as
-      # soon as every name on stdin has been started, and a bare `&` job survives that exit
-      # only because non-interactive bash does not SIGHUP its children on the way out - true
-      # today, but not a guarantee worth depending on. `setsid --fork` forks it into its own
-      # session outright, and `disown` drops it from this shell's job table so nothing about
-      # this shell ending can reach it either way.
+      # sinit only ever acts on this by reacting to a signal sent to PID 1 - unlike every other
+      # backend here, there is no command which asks it to shut down directly, only one which
+      # asks the kernel to deliver the signal sinit's own sigwait loop is waiting on. It is what
+      # then runs rc.shutdown itself, with the right argv, not this.
       #
-      # a name not in jobDir is the shutdown side, or a unit this generation no longer has -
-      # neither is something to start, so it is skipped rather than failing the whole batch.
-      #
-      # the stop file is cleared here, not by deactivate once the process it names is gone -
-      # confirming that and removing the file are two different processes racing each other,
-      # and deactivate winning would tell a supervise loop that has not yet checked it to stop
-      # respawning something that was never asked to run again. Clearing it immediately before
-      # a fresh start has no such race: nothing is still running this name at that point to
-      # care whether the file exists.
-      activate = pkgs.writeShellScript "sinit-activate" ''
-        while read -r unit; do
-          [ -e ${jobDir}/"$unit" ] || continue
-          ${rm} -f ${latchDir}/"$unit".stop
-          ${setsid} --fork ${jobDir}/"$unit" </dev/null >/dev/null 2>&1 &
-          disown
-        done
-      '';
+      # SIGINT is also what the kernel delivers to PID 1 for Ctrl-Alt-Del, and halt is folded
+      # into poweroff, the same as runit's: sinit draws no distinction between the two either.
+      providers.services.shutdownCommands =
+        let
+          signal =
+            sig:
+            pkgs.writeShellScript "sinit-${sig}" ''
+              exec ${lib.getExe' pkgs.coreutils "kill"} -s ${sig} 1
+            '';
+        in
+        {
+          poweroff = signal "USR1";
+          halt = signal "USR1";
+          reboot = signal "INT";
+        };
 
-      # a service is stopped exactly as rc.shutdown stops one - the stop file first, so the
-      # supervise loop it belongs to does not respawn once the kill below lands, then TERM and
-      # KILL on the same fixed schedule, by process group since setsid made each one its own.
-      # An anchor or oneshot has no pid file to find, having never been supervised in the first
-      # place, so there is nothing to signal - only its latch and fingerprint to take back.
-      #
-      # the stop file is touched unconditionally, before checking for a pid at all: the loop
-      # removes its pid file *before* checking for this one, so a unit between attempts - dead
-      # child reaped, backoff sleep not yet over - would otherwise show no pid to signal here,
-      # and still respawn once more after this returns, since nothing would have told it to stop.
-      #
-      # it is deliberately never removed here - see activate, which is where clearing it is
-      # actually safe.
-      deactivate = pkgs.writeShellScript "sinit-deactivate" ''
-        export PATH=${lib.makeBinPath [ pkgs.coreutils ]}:$PATH
+      providers.services.switch = {
+        # every job writes its own fingerprint the moment it starts, whether or not it has
+        # actually reached readiness yet - "active" here means "a job for this generation's
+        # definition has been launched", the same standard `fork` readiness already treats as
+        # good enough for this backend, not "and is done starting".
+        list = pkgs.writeShellScript "sinit-list" ''
+          ${reportShutdownSide}
+          for f in ${latchDir}/*.fingerprint; do
+            [ -e "$f" ] || continue
+            name=$(${lib.getExe' pkgs.coreutils "basename"} "$f" .fingerprint)
+            printf '%s\t%s\n' "$name" "$(${lib.getExe' pkgs.coreutils "cat"} "$f")"
+          done
+        '';
 
-        while read -r unit; do
-          touch ${latchDir}/"$unit".stop
+        # launched detached rather than as a plain background job of this script: this exits as
+        # soon as every name on stdin has been started, and a bare `&` job survives that exit
+        # only because non-interactive bash does not SIGHUP its children on the way out - true
+        # today, but not a guarantee worth depending on. `setsid --fork` forks it into its own
+        # session outright, and `disown` drops it from this shell's job table so nothing about
+        # this shell ending can reach it either way.
+        #
+        # a name not in jobDir is the shutdown side, or a unit this generation no longer has -
+        # neither is something to start, so it is skipped rather than failing the whole batch.
+        #
+        # the stop file is cleared here, not by deactivate once the process it names is gone -
+        # confirming that and removing the file are two different processes racing each other,
+        # and deactivate winning would tell a supervise loop that has not yet checked it to stop
+        # respawning something that was never asked to run again. Clearing it immediately before
+        # a fresh start has no such race: nothing is still running this name at that point to
+        # care whether the file exists.
+        activate = pkgs.writeShellScript "sinit-activate" ''
+          while read -r unit; do
+            [ -e ${jobDir}/"$unit" ] || continue
+            ${rm} -f ${latchDir}/"$unit".stop
+            ${setsid} --fork ${jobDir}/"$unit" </dev/null >/dev/null 2>&1 &
+            disown
+          done
+        '';
 
-          if [ -e ${latchDir}/"$unit".pid ]; then
-            pid=$(cat ${latchDir}/"$unit".pid)
-            kill -TERM -- -"$pid" 2>/dev/null || :
+        # a service is stopped exactly as rc.shutdown stops one - the stop file first, so the
+        # supervise loop it belongs to does not respawn once the kill below lands, then TERM and
+        # KILL on the same fixed schedule, by process group since setsid made each one its own.
+        # An anchor or oneshot has no pid file to find, having never been supervised in the first
+        # place, so there is nothing to signal - only its latch and fingerprint to take back.
+        #
+        # the stop file is touched unconditionally, before checking for a pid at all: the loop
+        # removes its pid file *before* checking for this one, so a unit between attempts - dead
+        # child reaped, backoff sleep not yet over - would otherwise show no pid to signal here,
+        # and still respawn once more after this returns, since nothing would have told it to stop.
+        #
+        # it is deliberately never removed here - see activate, which is where clearing it is
+        # actually safe.
+        deactivate = pkgs.writeShellScript "sinit-deactivate" ''
+          export PATH=${lib.makeBinPath [ pkgs.coreutils ]}:$PATH
 
-            for _ in $(seq 1 50); do
-              kill -0 -- -"$pid" 2>/dev/null || break
-              sleep 0.1
-            done
-            kill -KILL -- -"$pid" 2>/dev/null || :
-          fi
+          while read -r unit; do
+            touch ${latchDir}/"$unit".stop
 
-          rm -f ${latchDir}/"$unit".ready ${latchDir}/"$unit".fingerprint ${latchDir}/"$unit".pid
-        done
-      '';
-    };
-  };
+            if [ -e ${latchDir}/"$unit".pid ]; then
+              pid=$(cat ${latchDir}/"$unit".pid)
+              kill -TERM -- -"$pid" 2>/dev/null || :
+
+              for _ in $(seq 1 50); do
+                kill -0 -- -"$pid" 2>/dev/null || break
+                sleep 0.1
+              done
+              kill -KILL -- -"$pid" 2>/dev/null || :
+            fi
+
+            rm -f ${latchDir}/"$unit".ready ${latchDir}/"$unit".fingerprint ${latchDir}/"$unit".pid
+          done
+        '';
+      };
+    })
+  ];
 }

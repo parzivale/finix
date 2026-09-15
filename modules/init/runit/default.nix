@@ -174,6 +174,21 @@ let
   sv = lib.getExe' pkgs.runit "sv";
 in
 {
+  # enabling an implementation is what selects it: this names itself into the contract
+  # below, the same way every other providers implementation does when it is enabled.
+  options.runit.enable = lib.mkOption {
+    type = lib.types.bool;
+    default = false;
+    example = true;
+    description = ''
+      Whether to boot runit as PID 1, through `runit-init`, supervising with `runsvdir`.
+
+      Enabling it points {option}`providers.services.backend` at `runit`, which is what
+      actually selects an implementation - so this is a default, and a machine naming a
+      backend directly still wins.
+    '';
+  };
+
   options.providers.services = {
     backend = lib.mkOption {
       type = lib.types.enum [ "runit" ];
@@ -201,181 +216,188 @@ in
     };
   };
 
-  config = lib.mkIf (cfg.backend == "runit") {
-    providers.services.runit.serviceDir = serviceDir;
+  config = lib.mkMerge [
+    # this module supplies an implementation for `providers.services`
+    (lib.mkIf config.runit.enable {
+      providers.services.backend = lib.mkDefault "runit";
+    })
 
-    providers.services.supportedFeatures = {
-      # runit bounds neither: `sv -w` waits on the caller's side rather than the service's,
-      # and stopping is SIGTERM then SIGKILL on a fixed schedule
-      startTimeout = false;
-      stopTimeout = false;
+    (lib.mkIf (cfg.backend == "runit") {
+      providers.services.runit.serviceDir = serviceDir;
 
-      # runit speaks neither protocol - it knows only that a process is running - so both are
-      # refused by the contract rather than silently treated as `fork`. The rest are polled
-      # from inside the run script.
-      #
-      # `waitFor.pidfile` is refused for a different reason, and is the one kind this cannot
-      # fake: it says the daemon forks and the process runsv spawned exits. runsv reads that
-      # exit as the service dying and starts it again, forever. The polling would succeed and
-      # the supervision would be wrong, so refusing is the only honest answer.
-      readiness = [
-        "fork"
-        "waitFor.socket"
-        "waitFor.path"
-        "waitFor.check"
-      ];
+      providers.services.supportedFeatures = {
+        # runit bounds neither: `sv -w` waits on the caller's side rather than the service's,
+        # and stopping is SIGTERM then SIGKILL on a fixed schedule
+        startTimeout = false;
+        stopTimeout = false;
 
-      # through `chpst`, which ships with runit
-      user = true;
-      group = true;
+        # runit speaks neither protocol - it knows only that a process is running - so both are
+        # refused by the contract rather than silently treated as `fork`. The rest are polled
+        # from inside the run script.
+        #
+        # `waitFor.pidfile` is refused for a different reason, and is the one kind this cannot
+        # fake: it says the daemon forks and the process runsv spawned exits. runsv reads that
+        # exit as the service dying and starts it again, forever. The polling would succeed and
+        # the supervision would be wrong, so refusing is the only honest answer.
+        readiness = [
+          "fork"
+          "waitFor.socket"
+          "waitFor.path"
+          "waitFor.check"
+        ];
 
-      # the generated run script sets it before exec
-      path = true;
-    };
+        # through `chpst`, which ships with runit
+        user = true;
+        group = true;
 
-    # runit's own boot, which is three scripts run in order by `runit` - PID 1 - and nothing
-    # else: stage 1 is one-time setup, stage 2 is the supervisor and is expected never to
-    # return, stage 3 is teardown. The paths are fixed by runit and not configurable.
-    # activation has to happen before runit-init rather than in stage 1, because the stage
-    # scripts are themselves at /etc/runit/[123] - they are among the things activation puts
-    # there, so runit could not find stage 1 to run it from.
-    providers.services.initExecutable = pkgs.writeShellScript "runit-init" ''
-      ${cfg.activationScript}
-      exec ${pkgs.runit}/bin/runit-init
-    '';
-
-    # runit is the only backend which ships nothing under these names. `runit-init` is the
-    # whole interface: it writes /etc/runit/stopit, sets or clears the executable bit on
-    # /etc/runit/reboot, and sends SIGCONT to PID 1, which wakes runit into stage 3.
-    #
-    # That it writes into /etc/runit is why this works at all - setup-etc symlinks leaf files
-    # and makes the directories above them real, so the directory holding the stage scripts is
-    # writable even though every script in it is a store symlink.
-    #
-    # halt and poweroff are the same call because runit draws no distinction: after stage 3 it
-    # reads the bit on /etc/runit/reboot, and where that is clear it tries RB_POWER_OFF and
-    # only falls back to RB_HALT_SYSTEM. There is no way to ask it for one and not the other.
-    providers.services.shutdownCommands =
-      let
-        runitInit =
-          arg:
-          pkgs.writeShellScript "runit-${arg}" ''
-            exec ${pkgs.runit}/bin/runit-init ${arg}
-          '';
-      in
-      {
-        poweroff = runitInit "0";
-        halt = runitInit "0";
-        reboot = runitInit "6";
+        # the generated run script sets it before exec
+        path = true;
       };
 
-    environment.etc = {
-      # stage 1. runsv creates `supervise` inside each service directory, so the generated tree
-      # cannot be scanned out of the store and is copied somewhere writable first. Both these
-      # directories have to exist before the first unit runs, which is why they are made here
-      # rather than declared as tmpfiles rules - tmpfiles-setup is itself a unit, and could
-      # only create them from inside the scan directory it would be creating.
-      "runit/1".source = pkgs.writeShellScript "runit-stage-1" ''
-        export PATH=${lib.makeBinPath [ pkgs.coreutils ]}:$PATH
-        mkdir -p ${latchDir}
-        rm -rf ${scanDir}
-        cp -rL ${serviceDir} ${scanDir}
-        chmod -R u+w ${scanDir}
+      # runit's own boot, which is three scripts run in order by `runit` - PID 1 - and nothing
+      # else: stage 1 is one-time setup, stage 2 is the supervisor and is expected never to
+      # return, stage 3 is teardown. The paths are fixed by runit and not configurable.
+      # activation has to happen before runit-init rather than in stage 1, because the stage
+      # scripts are themselves at /etc/runit/[123] - they are among the things activation puts
+      # there, so runit could not find stage 1 to run it from.
+      providers.services.initExecutable = pkgs.writeShellScript "runit-init" ''
+        ${cfg.activationScript}
+        exec ${pkgs.runit}/bin/runit-init
       '';
 
-      # stage 2. runsvdir execs `runsv` by name for each service directory, so it needs runit
-      # on PATH - which nothing else arranges, and this does for itself.
+      # runit is the only backend which ships nothing under these names. `runit-init` is the
+      # whole interface: it writes /etc/runit/stopit, sets or clears the executable bit on
+      # /etc/runit/reboot, and sends SIGCONT to PID 1, which wakes runit into stage 3.
       #
-      # `-P`: runsv never calls setsid() on its own, so without it every runsv - and everything
-      # it in turn execs - stays in runsvdir's own session and process group. A service which
-      # opens a controlling terminal for itself, like a tty's `agetty`, needs to be a session
-      # leader with none yet for that to succeed; without `-P` it never is one, and acquiring a
-      # ctty fails with EPERM/ENOTTY regardless of what the service does.
-      "runit/2".source = pkgs.writeShellScript "runit-stage-2" ''
-        export PATH=${lib.makeBinPath [ pkgs.runit ]}:$PATH
-        exec ${lib.getExe' pkgs.runit "runsvdir"} -P ${scanDir}
-      '';
+      # That it writes into /etc/runit is why this works at all - setup-etc symlinks leaf files
+      # and makes the directories above them real, so the directory holding the stage scripts is
+      # writable even though every script in it is a store symlink.
+      #
+      # halt and poweroff are the same call because runit draws no distinction: after stage 3 it
+      # reads the bit on /etc/runit/reboot, and where that is clear it tries RB_POWER_OFF and
+      # only falls back to RB_HALT_SYSTEM. There is no way to ask it for one and not the other.
+      providers.services.shutdownCommands =
+        let
+          runitInit =
+            arg:
+            pkgs.writeShellScript "runit-${arg}" ''
+              exec ${pkgs.runit}/bin/runit-init ${arg}
+            '';
+        in
+        {
+          poweroff = runitInit "0";
+          halt = runitInit "0";
+          reboot = runitInit "6";
+        };
 
-      # stage 3. runit has already stopped the supervisor by the time this runs; the contract's
-      # shutdown-side units are the graph's business, not runit's.
-      # stage 3, which runit runs as PID 1 once the supervisor is gone - so the boot-side
-      # services have already been stopped by the time this executes. That is the one point
-      # runit reaches on the way down, and so where the contract's shutdown side belongs; it is
-      # also why those units are excluded from the scan directory above, since anything left
-      # there would have been started at boot instead.
-      "runit/3".source = pkgs.writeShellScript "runit-stage-3" ''
-        export PATH=${lib.makeBinPath [ pkgs.coreutils ]}:$PATH
-        echo "runit: shutting down"
-        ${lib.optionalString (shutdownScript != null) "${shutdownScript}"}
-      '';
-    };
+      environment.etc = {
+        # stage 1. runsv creates `supervise` inside each service directory, so the generated tree
+        # cannot be scanned out of the store and is copied somewhere writable first. Both these
+        # directories have to exist before the first unit runs, which is why they are made here
+        # rather than declared as tmpfiles rules - tmpfiles-setup is itself a unit, and could
+        # only create them from inside the scan directory it would be creating.
+        "runit/1".source = pkgs.writeShellScript "runit-stage-1" ''
+          export PATH=${lib.makeBinPath [ pkgs.coreutils ]}:$PATH
+          mkdir -p ${latchDir}
+          rm -rf ${scanDir}
+          cp -rL ${serviceDir} ${scanDir}
+          chmod -R u+w ${scanDir}
+        '';
 
-    providers.services.switch = {
-      list = pkgs.writeShellScript "runit-list" ''
-        ${reportShutdownSide}
-        for dir in ${scanDir}/*; do
-          [ -d "$dir" ] || continue
-          unit=$(${lib.getExe' pkgs.coreutils "basename"} "$dir")
-          ${sv} status "$dir" 2>/dev/null | ${lib.getExe' pkgs.gnugrep "grep"} -q '^run:' || continue
+        # stage 2. runsvdir execs `runsv` by name for each service directory, so it needs runit
+        # on PATH - which nothing else arranges, and this does for itself.
+        #
+        # `-P`: runsv never calls setsid() on its own, so without it every runsv - and everything
+        # it in turn execs - stays in runsvdir's own session and process group. A service which
+        # opens a controlling terminal for itself, like a tty's `agetty`, needs to be a session
+        # leader with none yet for that to succeed; without `-P` it never is one, and acquiring a
+        # ctty fails with EPERM/ENOTTY regardless of what the service does.
+        "runit/2".source = pkgs.writeShellScript "runit-stage-2" ''
+          export PATH=${lib.makeBinPath [ pkgs.runit ]}:$PATH
+          exec ${lib.getExe' pkgs.runit "runsvdir"} -P ${scanDir}
+        '';
 
-          # runsv decides what is running; the fingerprint only says which definition it was
-          # started from. A service directory put here by hand has none, and skipping it would
-          # make it invisible to the engine - never stopped, however the incoming tree changes.
-          # `unknown` cannot equal a real fingerprint, so it is reconciled instead.
-          if [ -e "$dir/fingerprint" ]; then
-            printf '%s\t%s\n' "$unit" "$(cat "$dir/fingerprint")"
-          else
-            printf '%s\tunknown\n' "$unit"
-          fi
-        done
-      '';
+        # stage 3. runit has already stopped the supervisor by the time this runs; the contract's
+        # shutdown-side units are the graph's business, not runit's.
+        # stage 3, which runit runs as PID 1 once the supervisor is gone - so the boot-side
+        # services have already been stopped by the time this executes. That is the one point
+        # runit reaches on the way down, and so where the contract's shutdown side belongs; it is
+        # also why those units are excluded from the scan directory above, since anything left
+        # there would have been started at boot instead.
+        "runit/3".source = pkgs.writeShellScript "runit-stage-3" ''
+          export PATH=${lib.makeBinPath [ pkgs.coreutils ]}:$PATH
+          echo "runit: shutting down"
+          ${lib.optionalString (shutdownScript != null) "${shutdownScript}"}
+        '';
+      };
 
-      activate = pkgs.writeShellScript "runit-activate" ''
-        export PATH=${lib.makeBinPath [ pkgs.coreutils ]}:$PATH
+      providers.services.switch = {
+        list = pkgs.writeShellScript "runit-list" ''
+          ${reportShutdownSide}
+          for dir in ${scanDir}/*; do
+            [ -d "$dir" ] || continue
+            unit=$(${lib.getExe' pkgs.coreutils "basename"} "$dir")
+            ${sv} status "$dir" 2>/dev/null | ${lib.getExe' pkgs.gnugrep "grep"} -q '^run:' || continue
 
-        while read -r unit; do
-          # the scan directory is a writable copy made once, at boot - runsv keeps its own
-          # state inside each service directory, so it cannot be scanned out of the store. A
-          # unit which is new in this generation is therefore not in it, and starting it would
-          # fail for want of anything to start. So the definition is brought across first.
-          #
-          # Only the files this backend generates are replaced, never the whole directory:
-          # `supervise` belongs to a running runsv, and removing it out from under one loses
-          # the process it is supervising.
-          # a unit the engine names but this backend does not manage - the shutdown side, which
-          # is kept out of the scan directory because runit would otherwise start it at boot
-          if [ ! -d ${serviceDir}/"$unit" ] && [ ! -d ${scanDir}/"$unit" ]; then
-            continue
-          fi
+            # runsv decides what is running; the fingerprint only says which definition it was
+            # started from. A service directory put here by hand has none, and skipping it would
+            # make it invisible to the engine - never stopped, however the incoming tree changes.
+            # `unknown` cannot equal a real fingerprint, so it is reconciled instead.
+            if [ -e "$dir/fingerprint" ]; then
+              printf '%s\t%s\n' "$unit" "$(cat "$dir/fingerprint")"
+            else
+              printf '%s\tunknown\n' "$unit"
+            fi
+          done
+        '';
 
-          if [ -d ${serviceDir}/"$unit" ]; then
-            mkdir -p ${scanDir}/"$unit"
+        activate = pkgs.writeShellScript "runit-activate" ''
+          export PATH=${lib.makeBinPath [ pkgs.coreutils ]}:$PATH
 
-            cp -fL ${serviceDir}/"$unit"/run ${scanDir}/"$unit"/run
-            cp -fL ${serviceDir}/"$unit"/fingerprint ${scanDir}/"$unit"/fingerprint
-            chmod u+w ${scanDir}/"$unit"/run ${scanDir}/"$unit"/fingerprint
+          while read -r unit; do
+            # the scan directory is a writable copy made once, at boot - runsv keeps its own
+            # state inside each service directory, so it cannot be scanned out of the store. A
+            # unit which is new in this generation is therefore not in it, and starting it would
+            # fail for want of anything to start. So the definition is brought across first.
+            #
+            # Only the files this backend generates are replaced, never the whole directory:
+            # `supervise` belongs to a running runsv, and removing it out from under one loses
+            # the process it is supervising.
+            # a unit the engine names but this backend does not manage - the shutdown side, which
+            # is kept out of the scan directory because runit would otherwise start it at boot
+            if [ ! -d ${serviceDir}/"$unit" ] && [ ! -d ${scanDir}/"$unit" ]; then
+              continue
+            fi
 
-            # runsvdir rescans on its own schedule - every five seconds - so a directory which
-            # has just appeared has no runsv behind it yet, and `sv start` on it fails rather
-            # than waiting. This waits for the supervisor to notice instead of racing it.
-            for _ in $(seq 1 100); do
-              if [ -e ${scanDir}/"$unit"/supervise/ok ]; then
-                break
-              fi
-              sleep 0.1
-            done
-          fi
+            if [ -d ${serviceDir}/"$unit" ]; then
+              mkdir -p ${scanDir}/"$unit"
 
-          ${sv} start ${scanDir}/"$unit" || echo "start $unit failed" >&2
-        done
-      '';
+              cp -fL ${serviceDir}/"$unit"/run ${scanDir}/"$unit"/run
+              cp -fL ${serviceDir}/"$unit"/fingerprint ${scanDir}/"$unit"/fingerprint
+              chmod u+w ${scanDir}/"$unit"/run ${scanDir}/"$unit"/fingerprint
 
-      deactivate = pkgs.writeShellScript "runit-deactivate" ''
-        while read -r unit; do
-          ${sv} stop ${scanDir}/"$unit" || echo "stop $unit failed" >&2
-          rm -f ${latchDir}/"$unit".ready
-        done
-      '';
-    };
-  };
+              # runsvdir rescans on its own schedule - every five seconds - so a directory which
+              # has just appeared has no runsv behind it yet, and `sv start` on it fails rather
+              # than waiting. This waits for the supervisor to notice instead of racing it.
+              for _ in $(seq 1 100); do
+                if [ -e ${scanDir}/"$unit"/supervise/ok ]; then
+                  break
+                fi
+                sleep 0.1
+              done
+            fi
+
+            ${sv} start ${scanDir}/"$unit" || echo "start $unit failed" >&2
+          done
+        '';
+
+        deactivate = pkgs.writeShellScript "runit-deactivate" ''
+          while read -r unit; do
+            ${sv} stop ${scanDir}/"$unit" || echo "stop $unit failed" >&2
+            rm -f ${latchDir}/"$unit".ready
+          done
+        '';
+      };
+    })
+  ];
 }

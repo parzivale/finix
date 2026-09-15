@@ -85,9 +85,9 @@ in
 // programModules
 // serviceModules
 // {
-  # alternative providers.services implementations, imported explicitly - a system selects one
-  # with providers.services.backend. finit is the one in `default` above; the rest live beside
-  # it under ./init and are opted into.
+  # alternative providers.services implementations, imported explicitly - importing one only
+  # makes its options exist, and its own `enable` is what selects it. finit is the one in
+  # `default` above; the rest live beside it under ./init and are opted into.
   dinit = ./init/dinit;
   s6-rc = ./init/s6-rc;
   runit = ./init/runit;

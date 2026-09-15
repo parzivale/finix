@@ -286,6 +286,21 @@ let
   services = lib.filterAttrs isService bootSide;
 in
 {
+  # enabling an implementation is what selects it: this names itself into the contract
+  # below, the same way every other providers implementation does when it is enabled.
+  options.finit.enable = lib.mkOption {
+    type = lib.types.bool;
+    default = false;
+    example = true;
+    description = ''
+      Whether to boot finit as PID 1, supervising the system with it.
+
+      Enabling it points {option}`providers.services.backend` at `finit`, which is what
+      actually selects an implementation - so this is a default, and a machine naming a
+      backend directly still wins.
+    '';
+  };
+
   options.providers.services = {
     backend = lib.mkOption {
       type = lib.types.enum [ "finit" ];
@@ -341,6 +356,11 @@ in
   };
 
   config = lib.mkMerge [
+    # this module supplies an implementation for `providers.services`
+    (lib.mkIf config.finit.enable {
+      providers.services.backend = lib.mkDefault "finit";
+    })
+
     (lib.mkIf (cfg.backend == "finit") {
       # backend is a bare string key, so only this module can say which binary it means.
       # Wiring it to boot.init is the contract's job, not this one's.

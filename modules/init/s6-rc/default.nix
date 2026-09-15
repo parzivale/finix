@@ -365,6 +365,21 @@ let
   '';
 in
 {
+  # enabling an implementation is what selects it: this names itself into the contract
+  # below, the same way every other providers implementation does when it is enabled.
+  options.s6-rc.enable = lib.mkOption {
+    type = lib.types.bool;
+    default = false;
+    example = true;
+    description = ''
+      Whether to boot s6 as PID 1, through `s6-linux-init`, supervising with `s6-rc`.
+
+      Enabling it points {option}`providers.services.backend` at `s6-rc`, which is what
+      actually selects an implementation - so this is a default, and a machine naming a
+      backend directly still wins.
+    '';
+  };
+
   options.providers.services = {
     backend = lib.mkOption {
       type = lib.types.enum [ "s6-rc" ];
@@ -386,135 +401,142 @@ in
     };
   };
 
-  config = lib.mkIf (cfg.backend == "s6-rc") {
-    providers.services.s6-rc.database = database;
+  config = lib.mkMerge [
+    # this module supplies an implementation for `providers.services`
+    (lib.mkIf config.s6-rc.enable {
+      providers.services.backend = lib.mkDefault "s6-rc";
+    })
 
-    providers.services.supportedFeatures = {
-      # `timeout-up` and `timeout-down`, per unit
-      startTimeout = true;
-      stopTimeout = true;
+    (lib.mkIf (cfg.backend == "s6-rc") {
+      providers.services.s6-rc.database = database;
 
-      # s6 speaks its own protocol natively and has no notion of sd_notify. The waitFor kinds
-      # are turned into an s6 notification by the run script, which waits beside the daemon and
-      # writes the descriptor s6 is already listening on.
-      #
-      # `waitFor.pidfile` is the exception, and s6 has no notion of a pid file at all: the kind
-      # means the spawned process forks and exits, which s6-supervise reads as the service
-      # dying and restarts, forever. Waiting for the file would work and the supervision would
-      # not, so it is refused.
-      readiness = [
-        "fork"
-        "s6"
-        "waitFor.socket"
-        "waitFor.path"
-        "waitFor.check"
-      ];
+      providers.services.supportedFeatures = {
+        # `timeout-up` and `timeout-down`, per unit
+        startTimeout = true;
+        stopTimeout = true;
 
-      user = true;
-      group = false;
-      path = true;
-    };
-
-    providers.services.switch = {
-      list = pkgs.writeShellScript "s6-rc-list" ''
-        # s6-rc decides what is running; the fingerprint only says which definition it was
-        # started from, which the supervisor cannot be asked. A missing record therefore does
-        # not remove the unit from the list - one brought up by hand has none, and omitting it
-        # would leave the engine unable to see, and so unable to stop, something that is
-        # running. `unknown` cannot equal a real fingerprint, so such a unit is reconciled.
-        ${reportUnmanaged}
-        known=" ${lib.concatStringsSep " " (lib.attrNames atomic)} "
-
-        ${lib.getExe' s6rc "s6-rc"} -l ${live} -a list 2>/dev/null | while read -r unit; do
-          # s6-rc's own internals are in the live state too - `s6rc-oneshot-runner` most of
-          # all - and they are not units. Reporting one puts it in a list the engine reconciles
-          # against the incoming tree, where it can never appear, so the engine would stop it
-          # and take s6-rc's ability to run a oneshot with it.
-          case "$known" in
-            *" $unit "*) ;;
-            *) continue ;;
-          esac
-
-          fp="${runFingerprints}/$unit"
-          if [ -e "$fp" ]; then
-            printf '%s\t%s\n' "$unit" "$(cat "$fp")"
-          else
-            printf '%s\tunknown\n' "$unit"
-          fi
-        done
-      '';
-
-      # `change` is bulk and atomic, which is what the engine hands it anyway
-      activate = pkgs.writeShellScript "s6-rc-activate" ''
-        export PATH=${lib.makeBinPath [ pkgs.coreutils ]}:$PATH
-
-        ${knownFilter}
-        [ -n "$units" ] || exit 0
-
-        # the live database is the one compiled into the generation that booted, and s6-rc will
-        # not start a service it does not contain - so a unit which is new in this generation
-        # could never come up, however the engine asked. `s6-rc-update` migrates the live state
-        # onto the incoming database, keeping what is running running.
+        # s6 speaks its own protocol natively and has no notion of sd_notify. The waitFor kinds
+        # are turned into an s6 notification by the run script, which waits beside the daemon and
+        # writes the descriptor s6 is already listening on.
         #
-        # In activate rather than deactivate: the engine stops before it starts, and a unit
-        # being removed exists only in the outgoing database. Updating first would take it out
-        # from under the stop.
-        ${lib.getExe' s6rc "s6-rc-update"} -v2 -t 30000 -l ${live} ${database}/db
+        # `waitFor.pidfile` is the exception, and s6 has no notion of a pid file at all: the kind
+        # means the spawned process forks and exits, which s6-supervise reads as the service
+        # dying and restarts, forever. Waiting for the file would work and the supervision would
+        # not, so it is refused.
+        readiness = [
+          "fork"
+          "s6"
+          "waitFor.socket"
+          "waitFor.path"
+          "waitFor.check"
+        ];
 
-        ${lib.getExe' s6rc "s6-rc"} -v2 -t 30000 -l ${live} -u change $units
+        user = true;
+        group = false;
+        path = true;
+      };
 
-        # what is now running, recorded where the next switch will look. After the change, so
-        # a unit which failed to come up is not claimed as this generation's.
-        mkdir -p ${runFingerprints}
-        for unit in $units; do
-          if [ -e ${fingerprintDir}/"$unit" ]; then
-            cp -f ${fingerprintDir}/"$unit" ${runFingerprints}/"$unit"
-          fi
-        done
-      '';
+      providers.services.switch = {
+        list = pkgs.writeShellScript "s6-rc-list" ''
+          # s6-rc decides what is running; the fingerprint only says which definition it was
+          # started from, which the supervisor cannot be asked. A missing record therefore does
+          # not remove the unit from the list - one brought up by hand has none, and omitting it
+          # would leave the engine unable to see, and so unable to stop, something that is
+          # running. `unknown` cannot equal a real fingerprint, so such a unit is reconciled.
+          ${reportUnmanaged}
+          known=" ${lib.concatStringsSep " " (lib.attrNames atomic)} "
 
-      deactivate = pkgs.writeShellScript "s6-rc-deactivate" ''
-        export PATH=${lib.makeBinPath [ pkgs.coreutils ]}:$PATH
+          ${lib.getExe' s6rc "s6-rc"} -l ${live} -a list 2>/dev/null | while read -r unit; do
+            # s6-rc's own internals are in the live state too - `s6rc-oneshot-runner` most of
+            # all - and they are not units. Reporting one puts it in a list the engine reconciles
+            # against the incoming tree, where it can never appear, so the engine would stop it
+            # and take s6-rc's ability to run a oneshot with it.
+            case "$known" in
+              *" $unit "*) ;;
+              *) continue ;;
+            esac
 
-        ${knownFilter}
-        [ -n "$units" ] || exit 0
+            fp="${runFingerprints}/$unit"
+            if [ -e "$fp" ]; then
+              printf '%s\t%s\n' "$unit" "$(cat "$fp")"
+            else
+              printf '%s\tunknown\n' "$unit"
+            fi
+          done
+        '';
 
-        ${lib.getExe' s6rc "s6-rc"} -v2 -t 30000 -l ${live} -d change $units
+        # `change` is bulk and atomic, which is what the engine hands it anyway
+        activate = pkgs.writeShellScript "s6-rc-activate" ''
+          export PATH=${lib.makeBinPath [ pkgs.coreutils ]}:$PATH
 
-        # no longer running, so no longer this generation's
-        for unit in $units; do
-          rm -f ${runFingerprints}/"$unit"
-        done
-      '';
-    };
+          ${knownFilter}
+          [ -n "$units" ] || exit 0
 
-    # s6's boot, as PID 1.
-    #
-    # s6-svscan is what supervises and what reaps, so it has to be the process the kernel is
-    # left with - hence the exec. But a compiled database is not something a scan directory
-    # notices: it has to be initialised against a scan directory which is already live, which
-    # cannot happen before s6-svscan is running. So the initialisation is forked off first and
-    # waits for the supervisor it is about to talk to.
-    #
-    # s6-linux-init exists to do exactly this and would replace the whole script, at the cost
-    # of a generated init directory to keep in step with the contract's own output.
-    # s6-linux-init prepares /run, populates the scandir from its run-image, starts s6-svscan
-    # on it, and only then runs rc.init - so the database is brought up against a scandir which
-    # is already live, with no polling for a control fifo to appear.
-    providers.services.initExecutable = initWrapper;
+          # the live database is the one compiled into the generation that booted, and s6-rc will
+          # not start a service it does not contain - so a unit which is new in this generation
+          # could never come up, however the engine asked. `s6-rc-update` migrates the live state
+          # onto the incoming database, keeping what is running running.
+          #
+          # In activate rather than deactivate: the engine stops before it starts, and a unit
+          # being removed exists only in the outgoing database. Updating first would take it out
+          # from under the stop.
+          ${lib.getExe' s6rc "s6-rc-update"} -v2 -t 30000 -l ${live} ${database}/db
 
-    # s6-linux-init-maker generates these three beside the init it generates, each one talking
-    # to s6-linux-init-shutdownd over the fifo in the run-image. So they are named under the
-    # unpacked directory rather than in the store: the store copy is inside a tarball, because
-    # that fifo cannot be a store path, and ${initBase} is where initWrapper unpacks it.
-    providers.services.shutdownCommands = {
-      poweroff = "${initBase}/bin/poweroff";
-      reboot = "${initBase}/bin/reboot";
-      halt = "${initBase}/bin/halt";
-    };
+          ${lib.getExe' s6rc "s6-rc"} -v2 -t 30000 -l ${live} -u change $units
 
-    # no fingerprints in /etc: see runFingerprints above. Activation replaces /etc before the
-    # engine is ever asked what is running, so /etc can only ever describe the generation being
-    # switched into.
-  };
+          # what is now running, recorded where the next switch will look. After the change, so
+          # a unit which failed to come up is not claimed as this generation's.
+          mkdir -p ${runFingerprints}
+          for unit in $units; do
+            if [ -e ${fingerprintDir}/"$unit" ]; then
+              cp -f ${fingerprintDir}/"$unit" ${runFingerprints}/"$unit"
+            fi
+          done
+        '';
+
+        deactivate = pkgs.writeShellScript "s6-rc-deactivate" ''
+          export PATH=${lib.makeBinPath [ pkgs.coreutils ]}:$PATH
+
+          ${knownFilter}
+          [ -n "$units" ] || exit 0
+
+          ${lib.getExe' s6rc "s6-rc"} -v2 -t 30000 -l ${live} -d change $units
+
+          # no longer running, so no longer this generation's
+          for unit in $units; do
+            rm -f ${runFingerprints}/"$unit"
+          done
+        '';
+      };
+
+      # s6's boot, as PID 1.
+      #
+      # s6-svscan is what supervises and what reaps, so it has to be the process the kernel is
+      # left with - hence the exec. But a compiled database is not something a scan directory
+      # notices: it has to be initialised against a scan directory which is already live, which
+      # cannot happen before s6-svscan is running. So the initialisation is forked off first and
+      # waits for the supervisor it is about to talk to.
+      #
+      # s6-linux-init exists to do exactly this and would replace the whole script, at the cost
+      # of a generated init directory to keep in step with the contract's own output.
+      # s6-linux-init prepares /run, populates the scandir from its run-image, starts s6-svscan
+      # on it, and only then runs rc.init - so the database is brought up against a scandir which
+      # is already live, with no polling for a control fifo to appear.
+      providers.services.initExecutable = initWrapper;
+
+      # s6-linux-init-maker generates these three beside the init it generates, each one talking
+      # to s6-linux-init-shutdownd over the fifo in the run-image. So they are named under the
+      # unpacked directory rather than in the store: the store copy is inside a tarball, because
+      # that fifo cannot be a store path, and ${initBase} is where initWrapper unpacks it.
+      providers.services.shutdownCommands = {
+        poweroff = "${initBase}/bin/poweroff";
+        reboot = "${initBase}/bin/reboot";
+        halt = "${initBase}/bin/halt";
+      };
+
+      # no fingerprints in /etc: see runFingerprints above. Activation replaces /etc before the
+      # engine is ever asked what is running, so /etc can only ever describe the generation being
+      # switched into.
+    })
+  ];
 }
