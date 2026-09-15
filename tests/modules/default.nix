@@ -40,6 +40,15 @@ let
       )
     );
 
+  # a directory is named after its option nearly always; where it is not, this says so. The
+  # mismatch is otherwise silent - the path does not exist, `optional` reads that as "nothing
+  # to turn on", and the module is quietly never checked at all.
+  optionName = {
+    chronyd = "chrony";
+  };
+
+  enableOf = name: optionName.${name} or name;
+
   # a machine with one module turned on and nothing else to distract from it
   nodeFor =
     kind: name: backend:
@@ -64,7 +73,7 @@ let
 
         # `setAttrByPath` rather than a literal: which option turns the module on is computed
         # from where it lives, and Nix takes a dynamic attribute name but not a dynamic path
-        (lib.setAttrByPath [ kind name "enable" ] true)
+        (lib.setAttrByPath [ kind (enableOf name) "enable" ] true)
       ];
     };
 
@@ -212,7 +221,7 @@ let
     kind: name:
     lib.hasAttrByPath [
       kind
-      name
+      (enableOf name)
       "enable"
     ] (testLib.evalNode "machine" (nodeFor "services" "getty" "finit")).options;
 
