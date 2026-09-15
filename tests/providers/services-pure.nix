@@ -57,7 +57,12 @@
         assert status("coldplug") == "done", f"coldplug is {status('coldplug')}"
 
     with subtest("the terminal is plain finit config, not a unit"):
-        machine.wait_for_console_text("getty on /dev/tty1")
+        # `Starting tty-tty1`, not the unit's description: finit turns its progress display
+        # off the moment it reaches the configured runlevel, and the terminal starts after
+        # that - so the `[ ⋯ ] description [ OK ]` line the description would have appeared
+        # in is never printed for it. `wait_for_console_text` has no timeout, so waiting for
+        # that description is a test which hangs rather than one which fails.
+        machine.wait_for_console_text("Starting tty-tty1")
 
     with subtest("every stanza is ours, bar the core boot tasks"):
         # anything finit is running that the contract did not emit is either core boot

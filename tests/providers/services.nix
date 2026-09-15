@@ -120,7 +120,21 @@
     machine.wait_for_console_text("finix - stage 1")
     machine.wait_for_console_text("finix - stage 2")
     machine.wait_for_console_text("entering runlevel 2")
-    machine.wait_for_console_text("getty on /dev/tty1")
+    # and then the trunk itself, rather than the terminal.
+    #
+    # This waited for `getty on /dev/tty1` - the tty unit's description, which finit used to
+    # print through its progress display. It does not any more: the display is turned off the
+    # moment finit reaches the configured runlevel, and the terminal starts after that, so
+    # that text never reaches the console at all. `wait_for_console_text` has no timeout, so
+    # what it produced was a test which hung rather than one which failed.
+    #
+    # `Starting tty-tty1` is the line finit does print, and waiting for that would still be
+    # wrong: these tests attach the terminal to nothing (`requires = [ ]`), so a prompt exists
+    # well before the levels below it are reached, and the assertions here would run against a
+    # trunk which is still coming up. So wait for the top of the trunk, which is what they are
+    # about.
+    machine.wait_until_succeeds("test -f /run/finit/cond/task/running/success", timeout=120)
+
 
     with subtest("trunk levels are reached in order"):
         for level in ["start", "sysinit", "basic", "multi-user", "running"]:
