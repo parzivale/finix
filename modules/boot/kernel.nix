@@ -120,39 +120,23 @@ let
   knownDrivers = lib.attrNames driverConfig;
   unknownDrivers = lib.filter (d: !(driverConfig ? ${d})) config.boot.kernel.builtinDrivers;
 
-  # as with the filesystems: what the nixpkgs kernels already build in, and so what asking for
-  # would cost a build and change nothing. Only nvme and mmc are missing - a machine which
-  # boots off SATA, SCSI, USB or virtio can already be reached by a stock kernel.
-  stockBuiltinDrivers = [
-    "ahci"
-    "scsi"
-    "usb-storage"
-    "virtio-blk"
-  ];
-
-  # what kind of storage a device node is, which is a thing its name says outright. Nothing
-  # else does: a root named by label or by uuid is resolved by the kernel long after this, and
-  # /dev/mapper is a device which does not exist yet at all.
-  driverForDevice =
-    device:
-    if device == null then
-      null
-    else if lib.hasPrefix "/dev/nvme" device then
-      "nvme"
-    else if lib.hasPrefix "/dev/mmcblk" device then
-      "mmc"
-    else if lib.hasPrefix "/dev/sd" device then
-      "scsi"
-    else if lib.hasPrefix "/dev/vd" device then
-      "virtio-blk"
-    else
-      null;
-
-  rootDriver = if root == null then null else driverForDevice root.device;
-
-  derivedDrivers = lib.optional (
-    !config.boot.initrd.enable && rootDriver != null && !(lib.elem rootDriver stockBuiltinDrivers)
-  ) rootDriver;
+  # every one of them, on a machine with no initrd.
+  #
+  # Which of these a particular machine needs is a question about hardware, and the
+  # configuration does not reliably answer it: a root named by label or by uuid says nothing
+  # about what it is on, and those are how most machines name their disks. Guessing from a
+  # /dev path covers the machines which spell it out and quietly fails the rest - and failing
+  # means a kernel which cannot find its root, which is a panic, on hardware, with no way to
+  # ask it anything.
+  #
+  # Building all of them in costs nothing over building one. NVMe and MMC are modules in the
+  # kernel nixpkgs builds, so a no-initrd machine is having a kernel built for it either way,
+  # and the rest - SATA, SCSI, USB, virtio - are already `y` there, which makes naming them
+  # here a no-op with the useful property of not depending on that staying true.
+  #
+  # A machine which knows what it is can still say so, and one whose root is on storage the
+  # stock kernel already reaches can say `[ ]` and keep the cached kernel.
+  allDrivers = lib.optionals (!config.boot.initrd.enable) knownDrivers;
 
   known = lib.attrNames filesystemConfig;
   unknown = lib.filter (fs: !(filesystemConfig ? ${fs})) config.boot.kernel.builtinFilesystems;
@@ -329,10 +313,9 @@ in
 
     boot.kernel.builtinDrivers = lib.mkOption {
       type = with lib.types; listOf str;
-      default = derivedDrivers;
+      default = allDrivers;
       defaultText = lib.literalMD ''
-        the kind of storage {option}`fileSystems."/"`'s device is, on a machine with no
-        initrd, unless the kernel already builds it in - otherwise empty
+        all of them, on a machine with no initrd - otherwise empty
       '';
       example = [ "nvme" ];
       description = ''
@@ -341,18 +324,23 @@ in
 
         The other half of reaching a root without an initrd. Knowing the filesystem is no use
         if nothing in the kernel can talk to the disk it is on, and the kernel nixpkgs builds
-        leaves NVMe and MMC as modules - so on most modern hardware, where the root is on an
-        NVMe disk, {option}`boot.kernel.builtinFilesystems` alone is not enough.
+        leaves NVMe and MMC as modules - so on most modern hardware, where the root is an NVMe
+        disk, {option}`boot.kernel.builtinFilesystems` alone is not enough.
 
-        Defaulted from the root's device node, which says what kind of storage it is:
-        `/dev/nvme0n1p2` is NVMe as plainly as `btrfs` is btrfs. A root named by label or by
-        uuid says nothing - the kernel resolves those long after this - and one on
-        `/dev/mapper` is not a disk at all, so neither derives anything and both are left to
-        the warning below.
+        Defaulted to all of them rather than to whichever one this machine needs, because a
+        configuration does not reliably say which that is: a root named by label or by uuid,
+        which is how most machines name their disks, says nothing about what it is on. The
+        cost of guessing wrong is not a slower boot - it is a kernel which cannot find its
+        root, on hardware, with nothing left to ask.
 
-        As with the filesystems, the default is empty where the kernel already builds the
-        driver in - SATA, SCSI, USB and virtio - and a list set explicitly is taken at face
-        value.
+        Building all of them in costs nothing over building one. A no-initrd machine is having
+        a kernel built for it either way, because NVMe and MMC are modules in the stock one,
+        and the rest are already built in there - so naming them changes nothing except that
+        it stops depending on that remaining true.
+
+        Set this to `[ ]` on a machine whose root is on storage a stock kernel already reaches
+        - SATA, SCSI, USB or virtio - and, if nothing else wants a kernel of its own, it keeps
+        the cached one.
       '';
     };
 
@@ -462,55 +450,37 @@ in
   };
 
   config = lib.mkIf config.boot.kernel.enable {
-    # a patch with no patch in it: `extraStructuredConfig` is how a kernel derivation takes
+    # a patch with no patch in it: `structuredExtraConfig` is how a kernel derivation takes
     # configuration, and boot.kernelPackages already threads boot.kernelPatches into the
     # override. So this needs no second mechanism of its own.
+    #
+    # `structuredExtraConfig`, not `extraStructuredConfig` - the two names differ by a word
+    # order and nixpkgs refuses the older one outright, at build time rather than at
+    # evaluation, which is late enough that nothing which only evaluates a configuration will
+    # notice. See tests/kernel-config.nix, which builds one.
     boot.kernelPatches = lib.optional (structuredConfig != { }) {
       name = "finix-kernel-config";
       patch = null;
-      extraStructuredConfig = structuredConfig;
+      structuredExtraConfig = structuredConfig;
     };
 
     warnings =
-      # a root device this cannot classify, on a machine with nothing else to reach it with.
-      # Said only where the configuration has not answered the question itself: naming a
-      # driver, or setting the symbols directly, is that answer.
       lib.optional
         (
           !config.boot.initrd.enable
           && root != null
-          && rootDriver == null
-          && config.boot.kernel.builtinDrivers == [ ]
-          && config.boot.kernel.structuredExtraConfig == { }
+          && root.fsType != "auto"
+          && !(filesystemConfig ? ${root.fsType})
         )
         ''
-          fileSystems."/" is ${
-            if root.device != null then root.device else "named by label"
-          }, which does not say what kind of storage it is - so with no initrd to load a
-          driver with, nothing here can say whether the kernel can reach the disk at all.
+          fileSystems."/" is ${root.fsType}, which this machine has no initrd to mount for it, and
+          which finix has no kernel configuration for - so nothing here can say whether the kernel
+          is able to mount it at all.
 
-          The kernel nixpkgs builds leaves NVMe and MMC as modules, so a root on either is a
-          machine which panics at boot having found no root filesystem. If that is what this
-          is, name it in boot.kernel.builtinDrivers. A root on SATA, SCSI, USB or virtio
-          needs nothing.
-        ''
-      ++
-        lib.optional
-          (
-            !config.boot.initrd.enable
-            && root != null
-            && root.fsType != "auto"
-            && !(filesystemConfig ? ${root.fsType})
-          )
-          ''
-            fileSystems."/" is ${root.fsType}, which this machine has no initrd to mount for it, and
-            which finix has no kernel configuration for - so nothing here can say whether the kernel
-            is able to mount it at all.
-
-            If it is not, the machine boots to a kernel panic rather than to anything which could
-            report this. Build the filesystem in through boot.kernel.structuredExtraConfig, or give
-            the machine an initrd.
-          '';
+          If it is not, the machine boots to a kernel panic rather than to anything which could
+          report this. Build the filesystem in through boot.kernel.structuredExtraConfig, or give
+          the machine an initrd.
+        '';
 
     assertions = [
       {
