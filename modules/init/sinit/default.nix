@@ -16,13 +16,14 @@
 # This is deliberately a minimal first version: no `notify`/`s6` readiness, no `waitFor.pidfile`
 # (same reasoning as runit refusing it - the thing it means, the spawned process forking and
 # exiting, would be read by a respawn loop as a crash and restarted forever), no start/stop
-# timeout bounds, a fixed respawn backoff rather than crash-loop detection, and no
-# providers.services.switch - reconciling a running system against a new one without a reboot
-# needs a way to reach into an already-supervised unit from a second, later invocation, which
-# is the one thing this genuinely does not have machinery for yet. The contract already has a
-# documented degraded mode for exactly this (`switch.list`/`activate`/`deactivate` all default
-# to `null`, and `switch-to-configuration` falls back to whatever the implementation does on
-# its own rather than erroring), so this leaves them unset rather than half-building them.
+# timeout bounds, a fixed respawn backoff rather than crash-loop detection.
+#
+# providers.services.switch turned out not to need a supervisor to reach into after all: every
+# job here is already a fully self-contained shell loop - wait on requires, touch a latch,
+# supervise - that needs nothing further from rc.init once it is backgrounded. Reaching into a
+# running generation is then just running that same script again: launched detached, it
+# outlives switch-to-configuration's own shell and is reparented straight to sinit, which reaps
+# any of its children regardless of whether rc.init ever knew about this one specifically.
 {
   config,
   pkgs,
@@ -48,6 +49,18 @@ let
   # simply excluded from that set, the same reasoning as runit's - starting it at boot would
   # not be late, it would be wrong.
   bootSide = lib.filterAttrs (name: unit: !(shutdownLib.onShutdownSide cfg.trunk name unit)) enabled;
+  shutdownSide = lib.filterAttrs (name: unit: shutdownLib.onShutdownSide cfg.trunk name unit) enabled;
+
+  # the shutdown side is never started by anything here - it only ever runs once, from
+  # rc.shutdown, on the way down - so it is not something switch can start or stop. Reported as
+  # already matching whatever this generation says it should be, the same reasoning as runit's:
+  # reporting nothing would leave it in the incoming tree forever, and every switch would
+  # resolve to "start the shutdown side" for units that can only ever run once, at the very end.
+  reportShutdownSide = lib.concatStrings (
+    lib.mapAttrsToList (
+      name: _: "printf '%s\\t%s\\n' ${name} ${lib.escapeShellArg cfg.switch.fingerprints.${name}}\n"
+    ) shutdownSide
+  );
 
   shutdownScript = shutdownLib.scriptFor cfg;
 
@@ -102,50 +115,63 @@ let
       done
     '';
 
-  # one backgrounded job per unit, assembled directly into rc.init rather than one file per
-  # unit the way runit's are - nothing here needs to address a unit's job independently of
-  # rc.init the way `sv start`/`sv stop` address a runit service directory, since there is no
-  # switch support to do that from.
-  jobFor =
+  fingerprint = name: "${latchDir}/${name}.fingerprint";
+
+  # one script per unit rather than one job inlined into rc.init - the same shape as runit's
+  # run scripts, and for the same underlying reason: something has to be addressable on its
+  # own, later, independent of however it was first launched. Every job here is already fully
+  # self-contained - wait on requires, touch a latch, supervise - so launching this same script
+  # a second time, after boot, is the whole of what switch.activate needs to do.
+  jobScript =
     name: unit:
     let
       kind = kindOf unit;
       v = variantOf unit;
       command = "${setsid} ${asUser unit}${v.command or ""}";
     in
-    ''
-      (
-        ${waitFor unit}
-        ${lib.optionalString (unit.path != [ ]) "export PATH=${lib.makeBinPath unit.path}:\$PATH"}
-        ${
-          if kind == "anchor" then
-            "${touch} ${latch name}"
-          else if kind == "oneshot" then
-            ''
-              ${asUser unit}${v.command}
-              ${touch} ${latch name}
-            ''
-          else if readinessOf unit == "waitFor" then
-            ''
-              # nothing to latch from once the daemon has been exec'd into, so the wait runs
-              # alongside it and latches when whatever it is waiting for is live - the same
-              # shape as runit's, and for the same reason: nothing here observes a daemon's
-              # readiness on its own either.
-              ( ${readinessLib.scriptFor name v.readiness}
-                ${touch} ${latch name} ) &
-              ${supervise name command}
-            ''
-          else
-            ''
-              # `fork` readiness: up the moment it is running, which is what "supervised"
-              # means here. `notify` and `s6` never reach this - the contract refuses them
-              # against this backend.
-              ${touch} ${latch name}
-              ${supervise name command}
-            ''
-        }
-      ) &
+    pkgs.writeShellScript "${name}-job" ''
+      ${mkdir} -p ${latchDir}
+      printf '%s' ${lib.escapeShellArg cfg.switch.fingerprints.${name}} > ${fingerprint name}
+      ${waitFor unit}
+      ${lib.optionalString (unit.path != [ ]) "export PATH=${lib.makeBinPath unit.path}:\$PATH"}
+      ${
+        if kind == "anchor" then
+          "${touch} ${latch name}"
+        else if kind == "oneshot" then
+          ''
+            ${asUser unit}${v.command}
+            ${touch} ${latch name}
+          ''
+        else if readinessOf unit == "waitFor" then
+          ''
+            # nothing to latch from once the daemon has been exec'd into, so the wait runs
+            # alongside it and latches when whatever it is waiting for is live - the same
+            # shape as runit's, and for the same reason: nothing here observes a daemon's
+            # readiness on its own either.
+            ( ${readinessLib.scriptFor name v.readiness}
+              ${touch} ${latch name} ) &
+            ${supervise name command}
+          ''
+        else
+          ''
+            # `fork` readiness: up the moment it is running, which is what "supervised"
+            # means here. `notify` and `s6` never reach this - the contract refuses them
+            # against this backend.
+            ${touch} ${latch name}
+            ${supervise name command}
+          ''
+      }
     '';
+
+  # named by unit so a name read off stdin - switch.activate's whole input - can reach the
+  # script it means. Built over bootSide only: the shutdown side has no script here to launch,
+  # the same reason it is excluded from rc.init itself.
+  jobDir = pkgs.runCommand "sinit-jobs" { } ''
+    mkdir -p $out
+    ${lib.concatStrings (
+      lib.mapAttrsToList (name: unit: "ln -s ${jobScript name unit} $out/${name}\n") bootSide
+    )}
+  '';
 
   # rc.init never returns - sinit does not restart it if it does, so it has to be the thing
   # that stays alive, the way runsvdir is on runit. Everything it starts is backgrounded, so
@@ -157,7 +183,7 @@ let
   rcInit = pkgs.writeShellScript "rc.init" ''
     ${cfg.activationScript}
     ${mkdir} -p ${latchDir}
-    ${lib.concatStrings (lib.mapAttrsToList jobFor bootSide)}
+    ${lib.concatStrings (lib.mapAttrsToList (name: _: "${jobDir}/${name} &\n") bootSide)}
     while :; do
       wait -n 2>/dev/null || ${sleep} infinity
     done
@@ -255,5 +281,79 @@ in
         halt = signal "USR1";
         reboot = signal "INT";
       };
+
+    providers.services.switch = {
+      # every job writes its own fingerprint the moment it starts, whether or not it has
+      # actually reached readiness yet - "active" here means "a job for this generation's
+      # definition has been launched", the same standard `fork` readiness already treats as
+      # good enough for this backend, not "and is done starting".
+      list = pkgs.writeShellScript "sinit-list" ''
+        ${reportShutdownSide}
+        for f in ${latchDir}/*.fingerprint; do
+          [ -e "$f" ] || continue
+          name=$(${lib.getExe' pkgs.coreutils "basename"} "$f" .fingerprint)
+          printf '%s\t%s\n' "$name" "$(${lib.getExe' pkgs.coreutils "cat"} "$f")"
+        done
+      '';
+
+      # launched detached rather than as a plain background job of this script: this exits as
+      # soon as every name on stdin has been started, and a bare `&` job survives that exit
+      # only because non-interactive bash does not SIGHUP its children on the way out - true
+      # today, but not a guarantee worth depending on. `setsid --fork` forks it into its own
+      # session outright, and `disown` drops it from this shell's job table so nothing about
+      # this shell ending can reach it either way.
+      #
+      # a name not in jobDir is the shutdown side, or a unit this generation no longer has -
+      # neither is something to start, so it is skipped rather than failing the whole batch.
+      #
+      # the stop file is cleared here, not by deactivate once the process it names is gone -
+      # confirming that and removing the file are two different processes racing each other,
+      # and deactivate winning would tell a supervise loop that has not yet checked it to stop
+      # respawning something that was never asked to run again. Clearing it immediately before
+      # a fresh start has no such race: nothing is still running this name at that point to
+      # care whether the file exists.
+      activate = pkgs.writeShellScript "sinit-activate" ''
+        while read -r unit; do
+          [ -e ${jobDir}/"$unit" ] || continue
+          ${rm} -f ${latchDir}/"$unit".stop
+          ${setsid} --fork ${jobDir}/"$unit" </dev/null >/dev/null 2>&1 &
+          disown
+        done
+      '';
+
+      # a service is stopped exactly as rc.shutdown stops one - the stop file first, so the
+      # supervise loop it belongs to does not respawn once the kill below lands, then TERM and
+      # KILL on the same fixed schedule, by process group since setsid made each one its own.
+      # An anchor or oneshot has no pid file to find, having never been supervised in the first
+      # place, so there is nothing to signal - only its latch and fingerprint to take back.
+      #
+      # the stop file is touched unconditionally, before checking for a pid at all: the loop
+      # removes its pid file *before* checking for this one, so a unit between attempts - dead
+      # child reaped, backoff sleep not yet over - would otherwise show no pid to signal here,
+      # and still respawn once more after this returns, since nothing would have told it to stop.
+      #
+      # it is deliberately never removed here - see activate, which is where clearing it is
+      # actually safe.
+      deactivate = pkgs.writeShellScript "sinit-deactivate" ''
+        export PATH=${lib.makeBinPath [ pkgs.coreutils ]}:$PATH
+
+        while read -r unit; do
+          touch ${latchDir}/"$unit".stop
+
+          if [ -e ${latchDir}/"$unit".pid ]; then
+            pid=$(cat ${latchDir}/"$unit".pid)
+            kill -TERM -- -"$pid" 2>/dev/null || :
+
+            for _ in $(seq 1 50); do
+              kill -0 -- -"$pid" 2>/dev/null || break
+              sleep 0.1
+            done
+            kill -KILL -- -"$pid" 2>/dev/null || :
+          fi
+
+          rm -f ${latchDir}/"$unit".ready ${latchDir}/"$unit".fingerprint ${latchDir}/"$unit".pid
+        done
+      '';
+    };
   };
 }
