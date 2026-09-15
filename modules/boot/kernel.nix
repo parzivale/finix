@@ -4,6 +4,58 @@
   lib,
   ...
 }:
+let
+  inherit (lib.kernel) yes;
+
+  # what each filesystem is called in the kernel's own configuration. A filesystem is more
+  # than one symbol often enough - vfat needs the codepages it decodes names with, 9p needs
+  # its transport - that naming them by hand is a trap worth taking away.
+  #
+  # A name missing from here is not a refusal, only an absence: the assertion below points at
+  # `boot.kernel.structuredExtraConfig`, which takes the symbols directly and is how anything
+  # this table has never heard of gets built in.
+  filesystemConfig = {
+    "9p" = {
+      NET_9P = yes;
+      NET_9P_VIRTIO = yes;
+      "9P_FS" = yes;
+    };
+    btrfs.BTRFS_FS = yes;
+    # nixpkgs kernels read ext2 and ext3 with the ext4 driver rather than the standalone ones
+    ext2 = {
+      EXT4_FS = yes;
+      EXT4_USE_FOR_EXT2 = yes;
+    };
+    ext4.EXT4_FS = yes;
+    f2fs.F2FS_FS = yes;
+    fuse.FUSE_FS = yes;
+    iso9660.ISO9660_FS = yes;
+    ntfs3.NTFS3_FS = yes;
+    overlay.OVERLAY_FS = yes;
+    squashfs = {
+      SQUASHFS = yes;
+      SQUASHFS_XZ = yes;
+      SQUASHFS_ZSTD = yes;
+    };
+    tmpfs.TMPFS = yes;
+    vfat = {
+      FAT_FS = yes;
+      VFAT_FS = yes;
+      NLS_CP437 = yes;
+      NLS_ISO8859_1 = yes;
+    };
+    xfs.XFS_FS = yes;
+  };
+
+  known = lib.attrNames filesystemConfig;
+  unknown = lib.filter (fs: !(filesystemConfig ? ${fs})) config.boot.kernel.builtinFilesystems;
+
+  fromFilesystems = lib.foldl lib.recursiveUpdate { } (
+    map (fs: filesystemConfig.${fs} or { }) config.boot.kernel.builtinFilesystems
+  );
+
+  structuredConfig = fromFilesystems // config.boot.kernel.structuredExtraConfig;
+in
 {
   options = {
     boot.kernel.enable =
@@ -128,6 +180,45 @@
       '';
     };
 
+    boot.kernel.builtinFilesystems = lib.mkOption {
+      type = with lib.types; listOf str;
+      default = [ ];
+      example = [ "btrfs" ];
+      description = ''
+        Filesystems to build into the kernel rather than leave as modules, named the way
+        {option}`fileSystems.<name>.fsType` names them.
+
+        What this is for is a root the kernel has to reach unaided. A module cannot be loaded
+        before the filesystem holding it is mounted, so an initrd exists to carry the driver
+        for the root across that gap - and a kernel which already has the driver needs no
+        initrd at all. See {option}`boot.initrd.enable`.
+
+        Only needed for a filesystem the kernel does not already build in: the stock
+        `pkgs.linuxPackages` has ext4, 9p, squashfs and virtio among others, and adding one
+        of those here asks for a kernel build which changes nothing.
+
+        Anything this option has not heard of is named directly in
+        {option}`boot.kernel.structuredExtraConfig`.
+      '';
+    };
+
+    boot.kernel.structuredExtraConfig = lib.mkOption {
+      type = with lib.types; attrsOf raw;
+      default = { };
+      example = lib.literalExpression "{ BCACHEFS_FS = lib.kernel.yes; }";
+      description = ''
+        Kernel configuration symbols to set, in the form {manpage}`Kconfig(5)` names them and
+        with the values `lib.kernel` builds - `yes`, `module`, `no`, `freeform`, `option`.
+
+        The escape hatch behind {option}`boot.kernel.builtinFilesystems`, and the way to build
+        in anything else: whatever is set here is merged over what the filesystem names
+        resolved to, so it also overrides them.
+
+        Setting either means building the kernel, which is not a small thing to ask for. A
+        machine which can boot with a stock kernel should.
+      '';
+    };
+
     boot.resumeDevice = lib.mkOption {
       type = lib.types.str;
       default = "";
@@ -217,6 +308,28 @@
   };
 
   config = lib.mkIf config.boot.kernel.enable {
+    # a patch with no patch in it: `extraStructuredConfig` is how a kernel derivation takes
+    # configuration, and boot.kernelPackages already threads boot.kernelPatches into the
+    # override. So this needs no second mechanism of its own.
+    boot.kernelPatches = lib.optional (structuredConfig != { }) {
+      name = "finix-kernel-config";
+      patch = null;
+      extraStructuredConfig = structuredConfig;
+    };
+
+    assertions = [
+      {
+        assertion = unknown == [ ];
+        message = ''
+          boot.kernel.builtinFilesystems names ${lib.concatStringsSep ", " unknown}, which
+          finix has no kernel configuration for. Known: ${lib.concatStringsSep ", " known}.
+
+          Set the symbols directly in boot.kernel.structuredExtraConfig instead, e.g.
+          { BCACHEFS_FS = lib.kernel.yes; }.
+        '';
+      }
+    ];
+
     # use split output for modules, when available
     system.modulesTree = [
       (config.boot.kernelPackages.kernel.modules or config.boot.kernelPackages.kernel)
