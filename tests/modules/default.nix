@@ -7,7 +7,7 @@
 # by assertions the contract already makes, and until now nothing forced that evaluation for
 # anything but the handful of modules the VM tests happen to enable.
 #
-# 120 modules against 4 implementations is 480 checks. As VM tests that is a day; as
+# 120 modules against 5 implementations is 600 checks. As VM tests that is a day; as
 # evaluations it is minutes, because each one only has to build a configuration and read its
 # assertions back - no kernel, no image, no boot.
 #
@@ -27,6 +27,7 @@ let
     "dinit"
     "runit"
     "s6-rc"
+    "sinit"
   ];
 
   # the option which turns each module on, derived from where it lives rather than guessed:
