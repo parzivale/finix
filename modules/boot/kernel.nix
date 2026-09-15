@@ -47,6 +47,35 @@ let
     xfs.XFS_FS = yes;
   };
 
+  # which of those the kernel nixpkgs builds already has built in, and so which ones asking
+  # for would cost a kernel build and change nothing. Read off the common configuration
+  # shared by the nixpkgs kernels rather than guessed, but it is still a statement about
+  # somebody else's defaults: a machine on a kernel which does not match says so by naming
+  # the filesystem in `builtinFilesystems` itself, which is never second-guessed.
+  stockBuiltin = [
+    "9p"
+    "ext4"
+    "squashfs"
+    "tmpfs"
+    "vfat"
+  ];
+
+  root = config.fileSystems."/" or null;
+
+  # the root is the one filesystem the kernel has to mount unaided, and only when there is no
+  # initrd to mount it instead. Everything else in `fileSystems` is mounted after init starts,
+  # by which time a module is an ordinary thing to load - and an initrd carries the module for
+  # the root itself, which is what it is for.
+  #
+  # `auto` is not a filesystem, so there is nothing to look up; an fsType this has never heard
+  # of is left to the warning below rather than silently dropped.
+  derived = lib.optional (
+    !config.boot.initrd.enable
+    && root != null
+    && filesystemConfig ? ${root.fsType}
+    && !(lib.elem root.fsType stockBuiltin)
+  ) root.fsType;
+
   known = lib.attrNames filesystemConfig;
   unknown = lib.filter (fs: !(filesystemConfig ? ${fs})) config.boot.kernel.builtinFilesystems;
 
@@ -182,11 +211,25 @@ in
 
     boot.kernel.builtinFilesystems = lib.mkOption {
       type = with lib.types; listOf str;
-      default = [ ];
+      default = derived;
+      defaultText = lib.literalMD ''
+        the `fsType` of {option}`fileSystems."/"`, on a machine with no initrd, unless the
+        kernel already builds it in - otherwise empty
+      '';
       example = [ "btrfs" ];
       description = ''
         Filesystems to build into the kernel rather than leave as modules, named the way
         {option}`fileSystems.<name>.fsType` names them.
+
+        Defaulted from the machine's own root filesystem, because on a machine with no initrd
+        that is precisely the one the kernel has to be able to mount unaided - so a btrfs root
+        needs no second statement that the kernel should understand btrfs. The default is
+        empty where the answer is already yes: a kernel is rebuilt by asking for anything at
+        all here, and asking for what it already has would cost that for nothing.
+
+        Setting this replaces the default rather than adding to it, and what is named is taken
+        at face value - including a filesystem the stock kernel builds in, which is how a
+        machine on a kernel that does not build it in says so.
 
         What this is for is a root the kernel has to reach unaided. A module cannot be loaded
         before the filesystem holding it is mounted, so an initrd exists to carry the driver
@@ -316,6 +359,24 @@ in
       patch = null;
       extraStructuredConfig = structuredConfig;
     };
+
+    warnings =
+      lib.optional
+        (
+          !config.boot.initrd.enable
+          && root != null
+          && root.fsType != "auto"
+          && !(filesystemConfig ? ${root.fsType})
+        )
+        ''
+          fileSystems."/" is ${root.fsType}, which this machine has no initrd to mount for it, and
+          which finix has no kernel configuration for - so nothing here can say whether the kernel
+          is able to mount it at all.
+
+          If it is not, the machine boots to a kernel panic rather than to anything which could
+          report this. Build the filesystem in through boot.kernel.structuredExtraConfig, or give
+          the machine an initrd.
+        '';
 
     assertions = [
       {
