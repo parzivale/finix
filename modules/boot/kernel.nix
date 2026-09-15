@@ -47,19 +47,6 @@ let
     xfs.XFS_FS = yes;
   };
 
-  # which of those the kernel nixpkgs builds already has built in, and so which ones asking
-  # for would cost a kernel build and change nothing. Read off the common configuration
-  # shared by the nixpkgs kernels rather than guessed, but it is still a statement about
-  # somebody else's defaults: a machine on a kernel which does not match says so by naming
-  # the filesystem in `builtinFilesystems` itself, which is never second-guessed.
-  stockBuiltin = [
-    "9p"
-    "ext4"
-    "squashfs"
-    "tmpfs"
-    "vfat"
-  ];
-
   root = config.fileSystems."/" or null;
 
   # the root is the one filesystem the kernel has to mount unaided, and only when there is no
@@ -67,13 +54,20 @@ let
   # by which time a module is an ordinary thing to load - and an initrd carries the module for
   # the root itself, which is what it is for.
   #
+  # Derived whether or not the kernel looks like it already has it. There was a filter here
+  # which skipped the ones nixpkgs builds in, to save a machine an unnecessary kernel build,
+  # and the list behind it was read off an aarch64 configuration: on x86_64 ext4, vfat,
+  # squashfs and 9p are every one of them modules. What that filter did there was derive
+  # nothing for an ordinary ext4 root and leave the machine with a kernel which had no block
+  # filesystem at all - `Can't find any bdev filesystem to be used for mount!`, then a panic.
+  #
+  # There is nothing to save anyway: a machine without an initrd builds a kernel regardless,
+  # because the storage drivers are built into it, so this costs it nothing.
+  #
   # `auto` is not a filesystem, so there is nothing to look up; an fsType this has never heard
   # of is left to the warning below rather than silently dropped.
   derived = lib.optional (
-    !config.boot.initrd.enable
-    && root != null
-    && filesystemConfig ? ${root.fsType}
-    && !(lib.elem root.fsType stockBuiltin)
+    !config.boot.initrd.enable && root != null && filesystemConfig ? ${root.fsType}
   ) root.fsType;
 
   # the same idea for the controller the root disk hangs off, which is the other half of what
@@ -93,13 +87,27 @@ let
     };
     mmc = {
       MMC = yes;
+      # MMC_BLOCK depends on `RPMB || !RPMB`, which reads as no dependency at all and is not
+      # one: a tristate cannot be built in while something it depends on is a module, and
+      # RPMB is `m` in the kernel nixpkgs builds. Left out, the config generator refuses the
+      # `y`, asks the same question again, and the build fails on the repeat rather than on
+      # anything which names the reason.
+      RPMB = yes;
       MMC_BLOCK = yes;
       MMC_SDHCI = yes;
       MMC_SDHCI_PCI = yes;
     };
     nvme = {
-      NVME_CORE = yes;
+      # NVME_CORE has no prompt and is `select`ed by this, so it needs no line of its own
       BLK_DEV_NVME = yes;
+
+      # nixpkgs asks for NVME_AUTH as a module, and that is only reachable while the driver
+      # itself is one: NVME_HOST_AUTH is a bool, it is `y` there, and a bool selecting a
+      # tristate under a built-in parent makes it `y` too. So building NVMe in promotes this
+      # whatever anyone wanted, and the kernel's own configuration check fails on the
+      # difference. Forced rather than set, because it is overriding a value nixpkgs states
+      # outright rather than filling in one it left open.
+      NVME_AUTH = lib.mkForce yes;
     };
     scsi = {
       SCSI = yes;
@@ -129,13 +137,13 @@ let
   # means a kernel which cannot find its root, which is a panic, on hardware, with no way to
   # ask it anything.
   #
-  # Building all of them in costs nothing over building one. NVMe and MMC are modules in the
-  # kernel nixpkgs builds, so a no-initrd machine is having a kernel built for it either way,
-  # and the rest - SATA, SCSI, USB, virtio - are already `y` there, which makes naming them
-  # here a no-op with the useful property of not depending on that staying true.
+  # Building all of them in costs nothing over building one, because a machine without an
+  # initrd is having a kernel built for it either way: whatever it needs is a module in the
+  # kernel nixpkgs builds. Which ones exactly varies by architecture - on x86_64 even SATA and
+  # virtio are modules, where on aarch64 they are not - and that is the second reason not to
+  # try to name only the necessary ones.
   #
-  # A machine which knows what it is can still say so, and one whose root is on storage the
-  # stock kernel already reaches can say `[ ]` and keep the cached kernel.
+  # A machine which knows what it is can still say so, `[ ]` included.
   allDrivers = lib.optionals (!config.boot.initrd.enable) knownDrivers;
 
   known = lib.attrNames filesystemConfig;
@@ -279,8 +287,8 @@ in
       type = with lib.types; listOf str;
       default = derived;
       defaultText = lib.literalMD ''
-        the `fsType` of {option}`fileSystems."/"`, on a machine with no initrd, unless the
-        kernel already builds it in - otherwise empty
+        the `fsType` of {option}`fileSystems."/"`, on a machine with no initrd - otherwise
+        empty
       '';
       example = [ "btrfs" ];
       description = ''
@@ -289,13 +297,15 @@ in
 
         Defaulted from the machine's own root filesystem, because on a machine with no initrd
         that is precisely the one the kernel has to be able to mount unaided - so a btrfs root
-        needs no second statement that the kernel should understand btrfs. The default is
-        empty where the answer is already yes: a kernel is rebuilt by asking for anything at
-        all here, and asking for what it already has would cost that for nothing.
+        needs no second statement that the kernel should understand btrfs.
 
-        Setting this replaces the default rather than adding to it, and what is named is taken
-        at face value - including a filesystem the stock kernel builds in, which is how a
-        machine on a kernel that does not build it in says so.
+        Derived whether or not the kernel appears to build it in already, which is not a
+        question worth asking: the answer is different per architecture - on x86_64 ext4,
+        vfat, squashfs and 9p are all modules, on aarch64 none of them are - and a machine
+        without an initrd is building a kernel regardless, since the storage drivers go into
+        it.
+
+        Setting this replaces the default rather than adding to it.
 
         What this is for is a root the kernel has to reach unaided. A module cannot be loaded
         before the filesystem holding it is mounted, so an initrd exists to carry the driver
@@ -333,14 +343,13 @@ in
         cost of guessing wrong is not a slower boot - it is a kernel which cannot find its
         root, on hardware, with nothing left to ask.
 
-        Building all of them in costs nothing over building one. A no-initrd machine is having
-        a kernel built for it either way, because NVMe and MMC are modules in the stock one,
-        and the rest are already built in there - so naming them changes nothing except that
-        it stops depending on that remaining true.
+        Building all of them in costs nothing over building one, because a machine without an
+        initrd is having a kernel built for it either way - whatever it boots off is a module
+        in the kernel nixpkgs builds. Which ones exactly depends on the architecture: on
+        x86_64 even SATA and virtio are modules, where on aarch64 they are not.
 
-        Set this to `[ ]` on a machine whose root is on storage a stock kernel already reaches
-        - SATA, SCSI, USB or virtio - and, if nothing else wants a kernel of its own, it keeps
-        the cached one.
+        Set this to `[ ]` to build none of them, on a machine which has some other reason to
+        believe its kernel can reach its disk.
       '';
     };
 
