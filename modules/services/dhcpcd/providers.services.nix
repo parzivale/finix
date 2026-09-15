@@ -29,7 +29,8 @@ in
         command = pkgs.writeShellScript "dhcpcd" ''
           export PATH=${
             lib.makeBinPath (
-              [ pkgs.coreutils ] ++ lib.optional config.programs.resolvconf.enable config.programs.resolvconf.package
+              [ pkgs.coreutils ]
+              ++ lib.optional config.programs.resolvconf.enable config.programs.resolvconf.package
             )
           }
           exec ${lib.getExe cfg.package} ${lib.escapeShellArgs cfg.extraArgs}

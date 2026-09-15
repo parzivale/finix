@@ -121,7 +121,16 @@ let
               description = ''
                 Change ownership and/or mode on a path which already exists; creates nothing.
               '';
-              type = lib.types.submodule { options = { inherit mode user group recursive; }; };
+              type = lib.types.submodule {
+                options = {
+                  inherit
+                    mode
+                    user
+                    group
+                    recursive
+                    ;
+                };
+              };
             };
 
             remove = lib.mkOption {
