@@ -21,18 +21,22 @@ in
       # iwd runs resolvconf by name when it has one
       path = lib.optional config.programs.resolvconf.enable config.programs.resolvconf.package;
 
-      # iwd keeps its known networks here, and now starts here too rather than in whatever
-      # directory the supervisor happened to leave it in
-      stateDirectory."/var/lib/iwd" = "0700";
-
-      # iwd reads /etc/iwd/main.conf from a fixed path and names it nowhere, so without this
-      # a changed configuration leaves the daemon running with the one it read at boot. The
-      # "standard nixos trick" this replaces was appended to finit.d/iwd.conf, and so reached
-      # finit alone.
+      # iwd reads /etc/iwd/main.conf, but the unit names the file that was generated from, so
+      # that a changed configuration is a changed unit and the daemon is restarted with it.
+      # The "standard nixos trick" this replaces was appended to finit.d/iwd.conf - a trick
+      # only finit ever fell for, leaving every other init running the old configuration.
+      # read from a fixed path and named nowhere else, so a changed configuration would
+      # otherwise leave the daemon running with the old one
       reloadTriggers = [ cfg.configFile ];
 
       type.service.command = "${cfg.package}/libexec/iwd${lib.optionalString cfg.debug " -d"}";
     };
 
+    providers.services.tmpfiles.rules = [
+      {
+        path = "/var/lib/iwd";
+        type.directory.mode = "0700";
+      }
+    ];
   };
 }
