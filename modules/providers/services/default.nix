@@ -303,7 +303,7 @@ in
       '';
       type = lib.types.attrsOf (
         lib.types.submodule (
-          { name, ... }:
+          { name, config, ... }:
           {
             options = {
               enable = lib.mkOption {
@@ -346,8 +346,26 @@ in
                   let
                     command = lib.mkOption {
                       type = program;
+
+                      # `env -C` rather than a shell, and rather than each implementation's own
+                      # way of saying it: `env` execs the command in place, so the process the
+                      # supervisor is watching is still the daemon and a `fork` readiness still
+                      # sees the right pid. finit has no per-service working directory at all -
+                      # it chdirs to the user's home, or nowhere - so something uniform was
+                      # needed regardless, and something uniform is one thing to be right about
+                      # rather than five.
+                      apply =
+                        c:
+                        if config.workingDirectory == null then
+                          c
+                        else
+                          "${lib.getExe' pkgs.coreutils "env"} -C ${config.workingDirectory} ${c}";
+
                       description = ''
                         The command this unit runs.
+
+                        Run from {option}`workingDirectory` where the unit names one, and from
+                        wherever the implementation leaves it otherwise.
                       '';
                     };
 
@@ -652,6 +670,54 @@ in
                 '';
               };
 
+              stateDirectory = lib.mkOption {
+                type = with lib.types; attrsOf (strMatching "[0-7]{3,4}");
+                default = { };
+                example = {
+                  "/var/lib/iwd" = "0700";
+                };
+                description = ''
+                  Directories this unit needs, and the mode each is created with.
+
+                  Written in full rather than relative to anywhere: a unit which keeps state
+                  under `/var/lib` and a cache under `/var/cache` says both, and one which
+                  wants neither says nothing. Each is created before the unit runs and owned by
+                  whoever it runs as - this unit's {option}`user` and {option}`group` - so the
+                  ownership cannot disagree with who is going to write there.
+
+                  This is the same thing {option}`providers.services.tmpfiles.rules` does, said
+                  where it belongs to a unit rather than beside it. Anything with a shape these
+                  do not cover - a file, a symlink, an owner other than the unit's own - is a
+                  rule there like any other path.
+                '';
+              };
+
+              workingDirectory = lib.mkOption {
+                type = with lib.types; nullOr path;
+                default =
+                  let
+                    dirs = lib.attrNames config.stateDirectory;
+                  in
+                  if lib.length dirs == 1 then lib.head dirs else null;
+                defaultText = lib.literalMD ''
+                  the sole {option}`stateDirectory`, where there is exactly one - otherwise null
+                '';
+                example = "/var/lib/iwd";
+                description = ''
+                  The directory this unit's process starts in.
+
+                  A daemon which writes a relative path writes it wherever its working
+                  directory happens to be, and left alone that is whatever the supervisor was
+                  in - `/` on most implementations, and on finit the home directory of the user
+                  it runs as, which is a different answer again. Naming it here makes it the
+                  same everywhere.
+
+                  Defaulted to the unit's state directory when it has exactly one, since that
+                  is nearly always where a daemon's own files belong. With several there is
+                  nothing to pick, so it must be said.
+                '';
+              };
+
               reloadTriggers = lib.mkOption {
                 type = with lib.types; listOf (either path str);
                 default = [ ];
@@ -716,6 +782,25 @@ in
   };
 
   config = {
+    # the state directories, from the units which asked for one.
+    #
+    # Derived rather than written out beside each unit, which is what these were before: a
+    # module declaring `/var/lib/<itself>` by hand, with its own idea of the mode and often no
+    # owner at all, so a daemon dropping privileges found a directory root owned it and
+    # nothing else could write to. Said once here, the ownership follows the unit's own `user`
+    # and `group` by construction, and cannot disagree with them.
+    providers.services.tmpfiles.rules = lib.concatMap (
+      unit:
+      lib.mapAttrsToList (path: mode: {
+        inherit path;
+        type.directory = {
+          inherit mode;
+          user = if unit.user == null then "root" else unit.user;
+          group = if unit.group == null then "root" else unit.group;
+        };
+      }) unit.stateDirectory
+    ) (lib.filter (unit: unit.enable) (lib.attrValues cfg.units));
+
     # selecting a backend is the whole of the choice: the thing supervising the units is the
     # thing the kernel starts, so naming one here is what points stage 2 at it. No fallback -
     # a machine whose backend declares no PID 1 has no business booting.
