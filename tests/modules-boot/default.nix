@@ -85,6 +85,10 @@ let
   # is waiting for. A module here is not excused - it is documented, and the note is what tells
   # the next person whether the entry is still true.
   cannotBoot = {
+    # VirtualBox has no aarch64 build, so on this machine the module cannot be evaluated
+    # at all, let alone booted. Named here rather than left to the catch above, so that
+    # the reason is written where somebody reads it.
+    virtualbox = "an x86_64 host; there is no aarch64 build of VirtualBox";
   };
 
   skipped = needsConfiguration ++ lib.attrNames cannotBoot;
@@ -142,8 +146,26 @@ let
     '';
   };
 
-  row =
-    kind: name: lib.recurseIntoAttrs (lib.genAttrs backends (backend: mkTest (test kind name backend)));
+  # a module which cannot be instantiated on this machine at all - a package with no build for
+  # this system, most often - is one failing check rather than the end of the run.
+  # `--keep-going` keeps going through failed *builds*; an evaluation error is not one of
+  # those, it stops everything, and in a row of 570 machines that means one unsupported
+  # package hides every other result.
+  attempt =
+    kind: name: backend:
+    let
+      r = builtins.tryEval (mkTest (test kind name backend));
+    in
+    if r.success then
+      r.value
+    else
+      pkgs.runCommand "check-${kind}-${name}-${backend}" { } ''
+        echo "${kind}.${name} on ${backend}: cannot be evaluated on this system" >&2
+        echo "  usually a package which does not build here - build it directly to see why" >&2
+        exit 1
+      '';
+
+  row = kind: name: lib.recurseIntoAttrs (lib.genAttrs backends (backend: attempt kind name backend));
 
   rowsFor =
     kind:
