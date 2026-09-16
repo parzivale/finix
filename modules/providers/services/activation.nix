@@ -44,7 +44,30 @@
   };
 
   config.providers.services.activationScript = pkgs.writeShellScript "finix-activate" ''
-    export PATH=${lib.makeBinPath [ pkgs.coreutils ]}:$PATH
+    export PATH=${
+      lib.makeBinPath [
+        pkgs.coreutils
+        pkgs.util-linux
+      ]
+    }:$PATH
+
+    # /proc first, because the next thing this does is read from it.
+    #
+    # An initrd mounts /proc on its way to the root and it survives switch_root, so on a
+    # machine with one this has always been there by now. With no initrd nothing has mounted
+    # anything: the kernel mounts / and execs this, and that is the whole of what has
+    # happened. What that looked like was "no init= on the kernel command line" from a machine
+    # whose command line was perfectly correct - the file simply did not exist.
+    #
+    # finit is the exception, and the reason this went unnoticed: it mounts /proc itself
+    # before its plugins run, and does not use this script at all. Every other implementation
+    # does.
+    #
+    # /sys comes too. Nothing here reads it, but activation's own snippets do - the firmware
+    # search path, the modprobe helper - and each is guarded by a test for the file, so
+    # without it they are skipped in silence rather than failing.
+    [ -e /proc/cmdline ] || mount -t proc -o nosuid,nodev,noexec proc /proc
+    [ -e /sys/kernel ] || mount -t sysfs -o nosuid,nodev,noexec sys /sys
 
     # the kernel was told init=<closure>/init, so the closure is that path's directory. This
     # cannot be a Nix reference: the closure contains the init being run, so naming it here

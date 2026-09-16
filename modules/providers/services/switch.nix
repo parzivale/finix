@@ -31,6 +31,12 @@ let
               stopTimeout
               ;
             path = map toString unit.path;
+
+            # the files the unit reads and does not name. Everything else here is something
+            # the unit says about itself; this is the one thing it cannot, since a daemon
+            # reading /etc/foo.conf at a fixed path leaves no trace of that in its own
+            # definition. See the option for why that matters.
+            restartTriggers = map toString unit.restartTriggers;
           }
 
           # an anchor's edges are deliberately not part of what it is.

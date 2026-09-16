@@ -652,6 +652,31 @@ in
                 '';
               };
 
+              restartTriggers = lib.mkOption {
+                type = with lib.types; listOf (either path str);
+                default = [ ];
+                example = lib.literalExpression "[ config.services.foo.configFile ]";
+                description = ''
+                  Files this unit's process reads which are not named anywhere else in the
+                  unit, listed so that changing one counts as changing the unit.
+
+                  A unit's identity is what {option}`providers.services.switch` compares across
+                  a rebuild: the command, the user, the environment, and the rest of what is
+                  written here. A daemon which reads a configuration file from a fixed path -
+                  `/etc/elogind/logind.conf`, say - names it nowhere, so the file can change
+                  while every one of those stays identical, and the daemon keeps running with
+                  the configuration it started with. Nothing reports it.
+
+                  Naming the file here makes it part of the unit, so a switch restarts the
+                  daemon. Where the daemon can re-read its own configuration instead, give it
+                  {option}`type.service.reload` and the switch will reload rather than restart.
+
+                  Only for what the unit does not otherwise mention. A path which already
+                  appears in the command - as an argument, or in a generated script - is part
+                  of the unit by being there, and needs no second statement.
+                '';
+              };
+
               startTimeout = lib.mkOption {
                 type = with lib.types; nullOr ints.unsigned;
                 default = null;

@@ -27,14 +27,16 @@ in
       # in the one after, so it is already behind both.
       requires = [ "sysinit" ];
 
+      # elogind reads these from fixed paths under /etc and names them nowhere, so without
+      # this a changed configuration leaves the daemon running with the old one. Declared
+      # rather than smuggled into the command as a comment, which is what this used to be.
+      restartTriggers = [
+        cfg.loginConf
+        cfg.sleepConf
+      ];
+
       type.service = {
-        # the config files are named here rather than only in /etc, so that changing one is a
-        # changed unit. That is what the `# reload trigger` comment appended to
-        # finit.d/elogind.conf was for, and it was for finit alone.
-        command = pkgs.writeShellScript "elogind" ''
-          # reload triggers: ${cfg.loginConf} ${cfg.sleepConf}
-          exec ${cfg.package}/libexec/elogind
-        '';
+        command = "${cfg.package}/libexec/elogind";
 
         # elogind speaks sd_notify, which only finit can observe here; everywhere else it is
         # taken as ready once spawned, the same bargain sessiond and mdevd make

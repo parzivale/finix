@@ -21,16 +21,14 @@ in
       # there. syslogd is in that tier too and needs no naming.
       requires = [ "basic" ];
 
+      # keyd reads /etc/keyd and names none of it, so every file the tree was generated
+      # from is listed: a changed keymap is then a changed unit. It has a `reload` below,
+      # so that is a re-read rather than a restart - which matters here, since restarting
+      # keyd drops the grabs on every keyboard.
+      restartTriggers = lib.mapAttrsToList (_: v: v.source) cfg.configTree;
+
       type.service = {
-        # keyd reads /etc/keyd, but the unit names every file that tree was generated from, so
-        # a changed keymap is a changed unit. The same list used to be appended to
-        # finit.d/keyd.conf as `# force a reload on configuration change` - which reached
-        # finit and nothing else, so on any other init a new keymap needed a reboot.
-        command = pkgs.writeShellScript "keyd" ''
-          # reload triggers:
-          ${lib.concatMapAttrsStringSep "\n" (_: v: "# ${v.source}") cfg.configTree}
-          exec ${cfg.package}/bin/keyd
-        '';
+        command = "${cfg.package}/bin/keyd";
 
         # keyd is asked to re-read its own configuration, so a changed keymap no longer drops
         # the grabs on every keyboard

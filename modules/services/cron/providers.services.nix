@@ -18,6 +18,10 @@ in
       description = "cron daemon";
       requires = [ "basic" ];
 
+      # read from a fixed path and named nowhere else, so a changed configuration
+      # would otherwise leave the daemon running with the old one
+      restartTriggers = [ cfg.crontabFile ];
+
       type.service = {
         # `-n` is foreground, so ready-on-fork is the only honest answer - see atd for why
         # `notify = "pid"` does not carry over.
@@ -35,10 +39,7 @@ in
         #   - cronie does notice a crontab changing on its own, by mtime and by inotify - but
         #     the mtime half cannot work here. Every file in the store carries the same mtime,
         #     so a new /etc/crontab is not a newer one.
-        command = pkgs.writeShellScript "cron" ''
-          # restart trigger: ${cfg.crontabFile}
-          exec ${lib.getExe cfg.package} -n ${lib.escapeShellArgs cfg.extraArgs}
-        '';
+        command = "${lib.getExe cfg.package} -n ${lib.escapeShellArgs cfg.extraArgs}";
         readiness = "fork";
       };
     };

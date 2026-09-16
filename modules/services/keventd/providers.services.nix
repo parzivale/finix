@@ -26,15 +26,16 @@ in
       # than declared unsupported - so this says what it wants and nothing about how.
       inherit (cfg) path;
 
+      # read from a fixed path and named nowhere else, so a changed ruleset would
+      # otherwise leave the daemon running with the old one
+      restartTriggers = [ cfg.rules ];
+
       type.service = {
         # the cfg.rules are read from /etc/udev/cfg.rules.d, but the unit names the tree they were
         # generated from, so a changed rule is a changed unit and the daemon is restarted with
         # it. The `# reload trigger` this replaces was appended to finit.d/keventd.conf, and so
         # reached finit alone.
-        command = pkgs.writeShellScript "keventd" ''
-          # reload trigger: ${cfg.rules}
-          exec ${config.finit.package}/libexec/finit/keventd ${lib.escapeShellArgs cfg.extraArgs}
-        '';
+        command = "${config.finit.package}/libexec/finit/keventd ${lib.escapeShellArgs cfg.extraArgs}";
 
         # `notify = "pid"` is gone with the stanza: it asked finit to manage a pid file on the
         # daemon's behalf, which says nothing about readiness and has no equivalent elsewhere.

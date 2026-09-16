@@ -17,15 +17,16 @@ in
     providers.services.units.nix-daemon = {
       description = "nix daemon";
 
+      # read from a fixed path and named nowhere else, so a changed configuration
+      # would otherwise leave the daemon running with the old one
+      restartTriggers = [ cfg.configFile ];
+
       type.service = {
         # the daemon reads /etc/nix/nix.conf, but the unit names the file that was generated
         # from, so a changed configuration is a changed unit and the daemon is restarted with
         # it. The "standard nixos trick" this replaces was appended to finit.d/nix-daemon.conf
         # - a trick only finit ever fell for.
-        command = pkgs.writeShellScript "nix-daemon" ''
-          # restart trigger: ${cfg.configFile}
-          exec ${cfg.package}/bin/nix-daemon --daemon
-        '';
+        command = "${cfg.package}/bin/nix-daemon --daemon";
         readiness = "fork";
       };
 

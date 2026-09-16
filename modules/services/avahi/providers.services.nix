@@ -21,23 +21,13 @@ in
       # beside it, so anything here is after them
       requires = [ "basic" ];
 
+      # the daemon reads /etc/avahi/avahi-daemon.conf from a fixed path and names it
+      # nowhere, so without this a changed configuration leaves it running with what it
+      # read at boot. It has a `reload` below, so the switch re-reads rather than restarts.
+      restartTriggers = [ cfg.configFile ];
+
       type.service = {
-        # the daemon reads /etc/avahi/avahi-daemon.conf, but the unit names the file it was
-        # generated from, so that a changed configuration is a changed unit. That is what the
-        # `# reload trigger` comment appended to finit.d/avahi-daemon.conf was doing, and it
-        # was doing it for finit alone - everywhere else a config change left the daemon
-        # running with what it read at boot.
-        command = pkgs.writeShellScript "avahi-daemon" ''
-          # reload trigger: ${cfg.configFile}
-          exec ${
-            lib.escapeShellArgs (
-              [
-                (lib.getExe' cfg.package "avahi-daemon")
-              ]
-              ++ cfg.extraArgs
-            )
-          }
-        '';
+        command = lib.escapeShellArgs ([ (lib.getExe' cfg.package "avahi-daemon") ] ++ cfg.extraArgs);
 
         # and now it is a reload rather than a restart, which keeps the published records up
         reload = "${lib.getExe' cfg.package "avahi-daemon"} -r";
