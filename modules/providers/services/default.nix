@@ -652,7 +652,7 @@ in
                 '';
               };
 
-              restartTriggers = lib.mkOption {
+              reloadTriggers = lib.mkOption {
                 type = with lib.types; listOf (either path str);
                 default = [ ];
                 example = lib.literalExpression "[ config.services.foo.configFile ]";
@@ -667,9 +667,12 @@ in
                   while every one of those stays identical, and the daemon keeps running with
                   the configuration it started with. Nothing reports it.
 
-                  Naming the file here makes it part of the unit, so a switch restarts the
-                  daemon. Where the daemon can re-read its own configuration instead, give it
-                  {option}`type.service.reload` and the switch will reload rather than restart.
+                  Naming the file here makes it part of the unit, so the switch acts on it.
+                  What it does is reload where it can: a changed unit which declares
+                  {option}`type.service.reload` is asked to re-read its own configuration and
+                  keeps its pid, and only one which cannot is stopped and started. Hence the
+                  name - a restart is the fallback, not the intent. Whether reloading is
+                  enough is the unit's claim to make, which is why it is made there.
 
                   Only for what the unit does not otherwise mention. A path which already
                   appears in the command - as an argument, or in a generated script - is part

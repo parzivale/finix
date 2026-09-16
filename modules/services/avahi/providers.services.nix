@@ -24,7 +24,7 @@ in
       # the daemon reads /etc/avahi/avahi-daemon.conf from a fixed path and names it
       # nowhere, so without this a changed configuration leaves it running with what it
       # read at boot. It has a `reload` below, so the switch re-reads rather than restarts.
-      restartTriggers = [ cfg.configFile ];
+      reloadTriggers = [ cfg.configFile ];
 
       type.service = {
         command = lib.escapeShellArgs ([ (lib.getExe' cfg.package "avahi-daemon") ] ++ cfg.extraArgs);

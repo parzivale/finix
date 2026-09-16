@@ -28,7 +28,7 @@ in
 
       # read from a fixed path and named nowhere else, so a changed ruleset would
       # otherwise leave the daemon running with the old one
-      restartTriggers = [ cfg.rules ];
+      reloadTriggers = [ cfg.rules ];
 
       type.service = {
         # the cfg.rules are read from /etc/udev/cfg.rules.d, but the unit names the tree they were

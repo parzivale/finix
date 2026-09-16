@@ -27,7 +27,7 @@ in
       # only finit ever fell for, leaving every other init running the old configuration.
       # read from a fixed path and named nowhere else, so a changed configuration would
       # otherwise leave the daemon running with the old one
-      restartTriggers = [ cfg.configFile ];
+      reloadTriggers = [ cfg.configFile ];
 
       type.service.command = "${cfg.package}/libexec/iwd${lib.optionalString cfg.debug " -d"}";
     };

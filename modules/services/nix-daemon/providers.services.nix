@@ -19,7 +19,7 @@ in
 
       # read from a fixed path and named nowhere else, so a changed configuration
       # would otherwise leave the daemon running with the old one
-      restartTriggers = [ cfg.configFile ];
+      reloadTriggers = [ cfg.configFile ];
 
       type.service = {
         # the daemon reads /etc/nix/nix.conf, but the unit names the file that was generated

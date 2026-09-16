@@ -30,7 +30,7 @@ in
       # elogind reads these from fixed paths under /etc and names them nowhere, so without
       # this a changed configuration leaves the daemon running with the old one. Declared
       # rather than smuggled into the command as a comment, which is what this used to be.
-      restartTriggers = [
+      reloadTriggers = [
         cfg.loginConf
         cfg.sleepConf
       ];

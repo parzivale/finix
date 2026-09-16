@@ -36,7 +36,7 @@ let
             # the unit says about itself; this is the one thing it cannot, since a daemon
             # reading /etc/foo.conf at a fixed path leaves no trace of that in its own
             # definition. See the option for why that matters.
-            restartTriggers = map toString unit.restartTriggers;
+            reloadTriggers = map toString unit.reloadTriggers;
           }
 
           # an anchor's edges are deliberately not part of what it is.

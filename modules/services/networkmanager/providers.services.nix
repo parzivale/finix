@@ -23,7 +23,7 @@ in
 
       # read from a fixed path and named nowhere else, so a changed configuration
       # would otherwise leave the daemon running with the old one
-      restartTriggers = [ cfg.configFile ];
+      reloadTriggers = [ cfg.configFile ];
 
       type.service = {
         # the config is named here because nothing else in the unit mentions it: NetworkManager
