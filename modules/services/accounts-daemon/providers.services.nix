@@ -25,9 +25,9 @@ in
         "${cfg.package}/libexec/accounts-daemon" + lib.optionalString cfg.debug " --debug";
 
       environment = {
-        GVFS_DISABLE_FUSE = 1;
+        GVFS_DISABLE_FUSE = "1";
         GIO_USE_VFS = "local";
-        GVFS_REMOTE_VOLUME_MONITOR_IGNORE = 1;
+        GVFS_REMOTE_VOLUME_MONITOR_IGNORE = "1";
 
         # accounts daemon looks for dbus interfaces in $XDG_DATA_DIRS/accountsservice
         XDG_DATA_DIRS = "/run/current-system/sw/share"; # "${config.system.path}/share";

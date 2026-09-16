@@ -90,8 +90,31 @@ let
         let
           cfg = (testLib.evalNode "machine" (nodeFor kind name backend)).config;
 
-          # a unit set which is never looked at is one whose edges are never checked
-          units = lib.mapAttrs (_: u: u.requires) cfg.providers.services.units;
+          # a unit set which is never looked at is one whose edges are never checked - and the
+          # edges alone are not enough of a look. A module writing an integer into
+          # `environment`, which is `attrsOf str`, is a type error the module system raises
+          # when that value is demanded and never before: forcing only `requires` meant
+          # services.accounts-daemon passed this check for as long as it existed, and failed
+          # the first time a machine was actually built from it.
+          #
+          # Everything cheap is forced. Not `type`, whose command may be a derivation whose
+          # own attributes are derivations - that is the deep-forcing the portedness check
+          # below has to avoid to stay inside the evaluator.
+          units = lib.mapAttrs (_: u: {
+            inherit (u)
+              requires
+              environment
+              user
+              group
+              ;
+
+            # both hold paths, which may be derivations - and a derivation deep-forced is its
+            # own attributes deep-forced, which is the stack overflow this check exists to
+            # survive rather than cause. The string is what matters here anyway: it is what
+            # the fingerprint hashes.
+            path = map toString u.path;
+            reloadTriggers = map toString u.reloadTriggers;
+          }) cfg.providers.services.units;
           messages = map (a: a.message) (lib.filter (a: !a.assertion) cfg.assertions);
         in
         lib.deepSeq units (lib.deepSeq messages messages)

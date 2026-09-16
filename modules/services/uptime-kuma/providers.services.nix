@@ -38,7 +38,12 @@ in
 
       type.service.command = lib.getExe cfg.package;
 
-      environment = cfg.settings;
+      # the settings are typed as what they are - PORT is a `types.port`, which is a number -
+      # and an environment is strings. Converted here, at the boundary where one becomes the
+      # other, rather than by weakening the option to `str` and losing the check.
+      environment = lib.mapAttrs (
+        _: v: if lib.isBool v then lib.boolToString v else toString v
+      ) cfg.settings;
     };
 
     providers.services.tmpfiles.rules = lib.optional (cfg.settings.DATA_DIR == "/var/lib/uptime-kuma") {
