@@ -89,6 +89,11 @@ let
     # at all, let alone booted. Named here rather than left to the catch above, so that
     # the reason is written where somebody reads it.
     virtualbox = "an x86_64 host; there is no aarch64 build of VirtualBox";
+
+    # incus puts minio on its unit's PATH, and nixpkgs marks minio insecure - so evaluating
+    # this machine at all needs permittedInsecurePackages, which is a machine-wide loosening
+    # of policy to boot one module, and not worth it
+    incus = "nixpkgs.config.permittedInsecurePackages, for the minio on its PATH";
   };
 
   skipped = needsConfiguration ++ lib.attrNames cannotBoot;
@@ -103,16 +108,22 @@ let
         {
           providers.services.backend = backend;
 
-          # a terminal, which finix asserts exists when finit is PID 1, and a device manager,
-          # without which a machine is not the thing being tested here. Attached to nothing:
-          # what this test waits on is the trunk, and a prompt is for looking at a stalled one.
-          services.getty.enable = false;
-          providers.ttys.devices.tty1 = {
-            description = "getty on /dev/tty1";
-            requires = [ ];
-          };
+          # `mkDefault`, because the module under test may be one of these. Turning getty on is
+          # what the getty row does, and a flat `false` here would be a conflict rather than a
+          # default to override.
+          services.getty.enable = lib.mkDefault false;
+          services.mdevd.enable = lib.mkDefault true;
 
-          services.mdevd.enable = true;
+          # a terminal, attached to nothing: what this test waits on is the trunk, and a prompt
+          # is for looking at one which stalled. Not declared when getty is the module under
+          # test - it provides its own, on the same tty, and two units for one terminal is a
+          # conflict about the test rather than about the module.
+          providers.ttys.devices = lib.mkIf (name != "getty") {
+            tty1 = {
+              description = "getty on /dev/tty1";
+              requires = [ ];
+            };
+          };
 
           providers.services.tmpfiles.rules = [
             {
