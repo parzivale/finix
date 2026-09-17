@@ -49,7 +49,7 @@ in
         # nothing else waits on it, so it needs no unit of its own.
         type.service.command = pkgs.writeShellScript "nzbget-server" ''
           if [ ! -f ${configFile} ]; then
-            ${lib.getExe' config.programs.coreutils "install"} -o ${cfg.user} -g ${cfg.group} -m 0700 ${cfg.package}/share/nzbget/nzbget.conf ${configFile}
+            ${lib.getExe' config.programs.coreutils.package "install"} -o ${cfg.user} -g ${cfg.group} -m 0700 ${cfg.package}/share/nzbget/nzbget.conf ${configFile}
           fi
 
           exec ${script} --server
