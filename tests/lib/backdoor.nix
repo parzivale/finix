@@ -84,6 +84,10 @@ in
     environment.systemPackages = [
       pkgs.iproute2
       pkgs.iputils
+
+      # the test driver runs every command as `bash -c ... | base64`
+      pkgs.bashNonInteractive
+      pkgs.coreutils
     ];
 
     # finit has its own stanza vocabulary and this one predates the contract; more to the
