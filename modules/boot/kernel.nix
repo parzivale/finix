@@ -74,9 +74,15 @@ let
   # a kernel needs in order to reach a root unaided: knowing ext4 is no use if nothing can
   # talk to the disk the ext4 is on.
   #
-  # Named for the kind of storage rather than for a symbol, and each entry carries whatever
-  # that kind actually needs - a disk is not reachable through its controller alone, so the
-  # block layer it appears through comes with it.
+  # Keyed by the kernel module's own name, so that a list of modules is what this takes - which
+  # is what everything else which knows the answer already produces. `lsmod` on a running
+  # machine names them this way, and so does nixos-facter: its report gives every storage
+  # controller a `driver_modules`, which is what it feeds to boot.initrd.availableKernelModules
+  # on a machine that has an initrd. A machine with a report can hand the same list here.
+  #
+  # Each entry carries whatever that module actually needs, which is more than the module's own
+  # symbol: a disk is not reachable through its controller alone, so the block layer it appears
+  # through comes with it.
   driverConfig = {
     ahci = {
       ATA = yes;
@@ -85,7 +91,7 @@ let
       SCSI = yes;
       BLK_DEV_SD = yes;
     };
-    mmc = {
+    mmc_block = {
       MMC = yes;
       # MMC_BLOCK depends on `RPMB || !RPMB`, which reads as no dependency at all and is not
       # one: a tristate cannot be built in while something it depends on is a module, and
@@ -109,16 +115,16 @@ let
       # outright rather than filling in one it left open.
       NVME_AUTH = lib.mkForce yes;
     };
-    scsi = {
+    sd_mod = {
       SCSI = yes;
       BLK_DEV_SD = yes;
     };
-    usb-storage = {
+    usb_storage = {
       USB_STORAGE = yes;
       SCSI = yes;
       BLK_DEV_SD = yes;
     };
-    virtio-blk = {
+    virtio_blk = {
       VIRTIO = yes;
       VIRTIO_PCI = yes;
       VIRTIO_BLK = yes;
@@ -327,26 +333,40 @@ in
       defaultText = lib.literalMD ''
         all of them, on a machine with no initrd - otherwise empty
       '';
-      example = [ "nvme" ];
+      example = [
+        "nvme"
+        "ahci"
+      ];
       description = ''
-        Storage drivers to build into the kernel rather than leave as modules: `nvme`, `mmc`,
-        `ahci`, `scsi`, `usb-storage`, `virtio-blk`.
+        Kernel modules to build into the kernel rather than leave as modules, named the way
+        the kernel names them: `nvme`, `ahci`, `sd_mod`, `mmc_block`, `usb_storage`,
+        `virtio_blk`.
 
         The other half of reaching a root without an initrd. Knowing the filesystem is no use
         if nothing in the kernel can talk to the disk it is on, and the kernel nixpkgs builds
         leaves NVMe and MMC as modules - so on most modern hardware, where the root is an NVMe
         disk, {option}`boot.kernel.builtinFilesystems` alone is not enough.
 
-        Defaulted to all of them rather than to whichever one this machine needs, because a
-        configuration does not reliably say which that is: a root named by label or by uuid,
-        which is how most machines name their disks, says nothing about what it is on. The
-        cost of guessing wrong is not a slower boot - it is a kernel which cannot find its
-        root, on hardware, with nothing left to ask.
+        Named after the modules because that is what everything which knows the answer already
+        produces. `lsmod` says `nvme`; so does nixos-facter, whose report gives each storage
+        controller a `driver_modules` and which feeds exactly that list to
+        {option}`boot.initrd.availableKernelModules` on a machine which has an initrd. A
+        machine with a report can hand the same list to this:
 
-        Building all of them in costs nothing over building one, because a machine without an
-        initrd is having a kernel built for it either way - whatever it boots off is a module
-        in the kernel nixpkgs builds. Which ones exactly depends on the architecture: on
-        x86_64 even SATA and virtio are modules, where on aarch64 they are not.
+        ```nix
+        boot.kernel.builtinDrivers = config.facter.detected.boot.disk.kernelModules;
+        ```
+
+        A module this has no configuration for is an assertion rather than a silent omission,
+        which is the point of naming them rather than deriving them: a machine whose disk hangs
+        off something unusual is told so while it can still be fixed, instead of booting to a
+        kernel which cannot see it.
+
+        Defaulted to all of them rather than to whichever this machine needs, because a
+        configuration does not reliably say which that is: a root named by label or by uuid,
+        which is how most machines name their disks, says nothing about what it is on. Building
+        all of them in costs nothing over building one, since a machine without an initrd is
+        having a kernel built for it either way.
 
         Set this to `[ ]` to build none of them, on a machine which has some other reason to
         believe its kernel can reach its disk.

@@ -34,9 +34,105 @@ let
 
   rootflags = lib.filter (opt: !(lib.elem opt ownFlags)) root.options;
 
-  # by label where one is given, since that is what the machine was described by - the kernel
-  # resolves LABEL= itself, no different from a device node
-  device = if root.label != null then "LABEL=${root.label}" else root.device;
+  # what the kernel is handed as root=, which is not always what the machine wrote down.
+  #
+  # root= is parsed before any userspace exists, by early_lookup_bdev in block/early-lookup.c,
+  # and what it understands is a device node, a major:minor pair, PARTUUID= and PARTLABEL= -
+  # the last two read straight out of the partition table. Everything else is a symlink under
+  # /dev/disk, and those are made by udev or mdevd once they are running, which with no initrd
+  # is long after this. A machine which says /dev/disk/by-uuid/... is handing the kernel a path
+  # that does not exist yet, and what comes back is "Cannot open root device ... or
+  # unknown-block(0,0)": a machine which appears to have no disk, from a configuration which
+  # named its root perfectly well.
+  #
+  # Two of those forms are the partition table's own, so they are translated rather than
+  # refused. The rest are the filesystem's, which means reading the filesystem to find out
+  # where it is, which is exactly the work an initrd exists to do.
+  byDiskPrefixes = {
+    "/dev/disk/by-partuuid/" = "PARTUUID=";
+    "/dev/disk/by-partlabel/" = "PARTLABEL=";
+  };
+
+  translate =
+    d:
+    let
+      hit = lib.filter (p: lib.hasPrefix p d) (lib.attrNames byDiskPrefixes);
+    in
+    if hit == [ ] then d else byDiskPrefixes.${lib.head hit} + lib.removePrefix (lib.head hit) d;
+
+  # the ones nothing here can translate: a filesystem label or uuid, or a link made from what
+  # the hardware says about itself
+  needsUserspace =
+    d:
+    d != null
+    && lib.any (p: lib.hasPrefix p d) [
+      "/dev/disk/by-uuid/"
+      "/dev/disk/by-label/"
+      "/dev/disk/by-id/"
+      "/dev/disk/by-path/"
+      "/dev/disk/by-diskseq/"
+    ];
+
+  # other names for the same device, so that what a machine wrote down and what the kernel can
+  # use need not be the same thing.
+  #
+  # Every group here is one device under all the names it answers to. Given one, this finds the
+  # rest - so a root written as /dev/disk/by-uuid/... becomes the PARTUUID or the device node
+  # beside it in the same group, which is a thing the kernel resolves on its own.
+  #
+  # Where the groups come from is not this module's business. nixos-facter reports them: every
+  # entry under `hardware.disk` carries a `unix_device_names` listing exactly this, which is
+  # one line to wire up:
+  #
+  #     boot.deviceAliases = map (d: d.unix_device_names or [ ])
+  #       (config.facter.report.hardware.disk or [ ]);
+  #
+  # and a machine without a report can write the group out by hand, or say nothing and name its
+  # root the way the kernel wants.
+  aliasesFor =
+    d:
+    let
+      group = lib.filter (names: lib.elem d names) config.boot.deviceAliases;
+    in
+    lib.unique (lib.concatLists group);
+
+  # what the kernel can resolve before userspace exists: a device node which is not one of
+  # udev's symlinks, and the two partition-table forms.
+  kernelResolvable =
+    d:
+    lib.hasPrefix "PARTUUID=" d
+    || lib.hasPrefix "PARTLABEL=" d
+    || (lib.hasPrefix "/dev/" d && !(lib.hasPrefix "/dev/disk/by-" d))
+    || lib.any (p: lib.hasPrefix p d) (lib.attrNames byDiskPrefixes);
+
+  # PARTUUID first: it is the partition's own name, and survives the disk being renamed or
+  # reordered, which a device node does not. The node is the fallback because it is what a
+  # machine which was given no aliases would have had to say itself.
+  preferred =
+    candidates:
+    let
+      partition = lib.filter (
+        d: lib.hasPrefix "/dev/disk/by-part" d || lib.hasPrefix "PART" d
+      ) candidates;
+      nodes = lib.filter (d: lib.hasPrefix "/dev/" d && !(lib.hasPrefix "/dev/disk/" d)) candidates;
+      usable = partition ++ nodes;
+    in
+    if usable == [ ] then null else lib.head usable;
+
+  # what the root is finally called: what it says, if the kernel can use it; otherwise whatever
+  # else the same device is known by.
+  resolved =
+    if root == null || root.device == null then
+      null
+    else if kernelResolvable root.device then
+      translate root.device
+    else
+      let
+        other = preferred (lib.filter (d: d != root.device) (aliasesFor root.device));
+      in
+      if other == null then null else translate other;
+
+  device = resolved;
 
   params = [
     "root=${device}"
@@ -70,6 +166,38 @@ let
     ];
 in
 {
+  options.boot.deviceAliases = lib.mkOption {
+    type = with lib.types; listOf (listOf str);
+    default = [ ];
+    example = lib.literalExpression ''
+      map (d: d.unix_device_names or [ ]) (config.facter.report.hardware.disk or [ ])
+    '';
+    description = ''
+      Groups of names which refer to the same block device.
+
+      A machine names its root however it likes - `/dev/disk/by-uuid/...` is what a NixOS
+      hardware scan writes, and what most configurations carry. The kernel cannot use that: it
+      reads `root=` before any userspace exists, and those paths are symlinks udev or mdevd
+      make once they are running. Telling this module which names mean the same device lets it
+      hand the kernel one it can resolve, instead of refusing the configuration.
+
+      Each element is one device under all of its names. nixos-facter reports exactly that, as
+      `unix_device_names` on each entry under `hardware.disk`:
+
+      ```nix
+      boot.deviceAliases = map (d: d.unix_device_names or [ ])
+        (config.facter.report.hardware.disk or [ ]);
+      ```
+
+      Nothing here depends on facter - a group written by hand does as well, and `lsblk -o
+      NAME,PATH,PARTUUID,UUID` is where the names come from either way.
+
+      Only consulted when there is no initrd and the root is named as something the kernel
+      cannot resolve. A machine with an initrd resolves its own root in stage 1, as it always
+      has.
+    '';
+  };
+
   config = lib.mkIf (!config.boot.initrd.enable) {
     boot.kernelParams = lib.mkIf (root != null && !virtualRoot) params;
 
@@ -138,12 +266,42 @@ in
       }
 
       {
-        assertion = root == null || root.device != null || root.label != null;
+        assertion = root == null || root.device != null;
         message = ''
-          boot.initrd.enable is false, so the root filesystem is named to the kernel as
-          root= on the command line. fileSystems."/" has neither a device nor a label to
-          name it by.
+          boot.initrd.enable is false, so the root filesystem is named to the kernel as root=
+          on the command line, and fileSystems."/" has no device to name it by.
+
+          A label is not enough: the kernel reads root= before any userspace exists, and a
+          filesystem label means reading the filesystem to find out where it is.
+
+          Set fileSystems."/".device: /dev/nvme0n1p2, or PARTUUID=<uuid>, or PARTLABEL=<name>.
         '';
+      }
+
+      {
+        # only when nothing could be resolved: a device named as one of udev's symlinks is
+        # fine if something said what else that device is called.
+        assertion = root == null || root.device == null || device != null;
+        message = ''
+          fileSystems."/".device is ${toString root.device}, which is a symlink udev or mdevd
+          makes once it is running - and with no initrd, nothing is running when the kernel
+          mounts the root.
+
+          What the kernel resolves on its own is a device node, a major:minor pair, and
+          PARTUUID= or PARTLABEL=, which it reads out of the partition table. A filesystem uuid
+          or label is not among them: finding the filesystem to ask it means having mounted
+          something already, which is what an initrd is for.
+
+          Three ways out, in the order they are worth taking:
+
+            - tell this module what else that device is called, in boot.deviceAliases, and it
+              will pick one the kernel can use. nixos-facter reports them, or `lsblk -o
+              NAME,PATH,PARTUUID,UUID` will tell you.
+            - name the partition here instead: PARTUUID=<uuid>, or the device node itself.
+            - set boot.initrd.enable = true and keep the uuid, since stage 1 runs the udev
+              which makes these paths.
+        '';
+
       }
 
       {
