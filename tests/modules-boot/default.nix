@@ -57,16 +57,36 @@ let
 
   enableOf = name: optionName.${name} or name;
 
-  # a module with no `enable` at all is one a machine always has - coreutils, the shell - or
-  # one shaped differently enough that turning it on is not a thing. There is nothing here to
-  # boot for those.
+  # a module with no `enable` at all is one a machine always has - coreutils, the shell -
+  # or one shaped differently enough that turning it on is not a thing. There is nothing
+  # here to boot for those.
+  # whether a module has something to turn on.
+  #
+  # Usually that is `<kind>.<name>.enable`, declared by the module itself. A module which is an
+  # alias for another has no options of its own though - mkAliasOptionModule renames the whole
+  # subtree, so `services.lix-daemon` is one option standing for `services.nix-daemon` rather
+  # than an attribute set with an `enable` inside it. Asking only for the `enable` misses those
+  # entirely, which is a module silently never checked - and `services.lix-daemon.enable = true`
+  # works perfectly well, forwarding to the module it renames.
+  hasEnableAt =
+    opts: kind: name:
+    let
+      path = [
+        kind
+        (enableOf name)
+      ];
+      here = lib.attrByPath path null opts;
+    in
+    if here == null then
+      false
+    else if here._type or null == "option" then
+      true # an alias for a module which has one
+    else
+      here ? enable;
+
   hasEnable =
     kind: name:
-    lib.hasAttrByPath [
-      kind
-      (enableOf name)
-      "enable"
-    ] (testLib.evalNode "machine" (machine "services" "getty" "finit")).options;
+    hasEnableAt (testLib.evalNode "machine" (machine "services" "getty" "finit")).options kind name;
 
   # modules which cannot be turned on without being told something first. The same list
   # tests/modules keeps, and for the same reason: a module which refuses to evaluate is a

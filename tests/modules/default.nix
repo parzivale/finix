@@ -240,13 +240,33 @@ let
 
   # a module with no `enable` is one a machine always has - coreutils, modprobe, the shell -
   # and there is nothing to turn on and therefore nothing here to check
+  # whether a module has something to turn on.
+  #
+  # Usually that is `<kind>.<name>.enable`, declared by the module itself. A module which is an
+  # alias for another has no options of its own though - mkAliasOptionModule renames the whole
+  # subtree, so `services.lix-daemon` is one option standing for `services.nix-daemon` rather
+  # than an attribute set with an `enable` inside it. Asking only for the `enable` misses those
+  # entirely, which is a module silently never checked - and `services.lix-daemon.enable = true`
+  # works perfectly well, forwarding to the module it renames.
+  hasEnableAt =
+    opts: kind: name:
+    let
+      path = [
+        kind
+        (enableOf name)
+      ];
+      here = lib.attrByPath path null opts;
+    in
+    if here == null then
+      false
+    else if here._type or null == "option" then
+      true # an alias for a module which has one
+    else
+      here ? enable;
+
   optional =
     kind: name:
-    lib.hasAttrByPath [
-      kind
-      (enableOf name)
-      "enable"
-    ] (testLib.evalNode "machine" (nodeFor "services" "getty" "finit")).options;
+    hasEnableAt (testLib.evalNode "machine" (nodeFor "services" "getty" "finit")).options kind name;
 
   checksFor =
     kind:

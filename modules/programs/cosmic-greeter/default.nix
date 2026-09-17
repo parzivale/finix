@@ -20,6 +20,8 @@ let
 in
 {
   imports = [
+    ./providers.services.nix
+
     modules.accounts-daemon
     modules.cosmic-comp
     modules.greetd
@@ -57,29 +59,6 @@ in
       user = lib.mkForce "cosmic-greeter";
       command = ''${lib.getExe' pkgs.coreutils "env"} XCURSOR_THEME="''${XCURSOR_THEME:-Pop}" ${lib.getExe' cfg.package "cosmic-greeter-start"}'';
     };
-
-    finit.services.cosmic-greeter-daemon = {
-      description = "COSMIC greeter D-Bus daemon";
-      command = lib.getExe' cfg.package "cosmic-greeter-daemon";
-      conditions = [
-        "service/dbus/ready"
-      ];
-      restart = 10;
-      notify = "none";
-    };
-
-    finit.services.greetd.conditions = [
-      "service/accounts-daemon/ready"
-      "service/cosmic-greeter-daemon/ready"
-    ]
-    ++ lib.optionals config.services.sessiond.enable [ "service/sessiond/ready" ]
-    ++ lib.optionals config.services.elogind.enable [ "service/elogind/ready" ]
-    ++ lib.optionals config.services.seatd.enable [ "service/seatd/ready" ];
-
-    finit.tmpfiles.rules = [
-      "d /run/cosmic-greeter 0755 cosmic-greeter cosmic-greeter -"
-      "d /var/lib/cosmic-greeter 0750 cosmic-greeter cosmic-greeter -"
-    ];
 
     users.groups.cosmic-greeter = { };
     users.users.cosmic-greeter = {
