@@ -46,8 +46,14 @@ in
     # the bracket keeps pgrep's own command line from matching itself - `bash -c "pgrep -f
     # 'agetty.*tty1'"` contains the literal text of the pattern, which the pattern then matches
     # against its own invocation, same pitfall `coreLib.pid_of` works around for the same reason.
+    #
+    # Anchored at the start, because a supervisor which execs nothing itself still carries the
+    # command line of what it supervises: openrc's `supervise-daemon tty-tty1 --start
+    # .../agetty -- ... tty1` matches an unanchored pattern just as well as the agetty does,
+    # and two pids is not something the rest of this can do anything sensible with. The process
+    # being asked about is the one which *is* agetty, so the match is on argv[0].
     def agetty_pid():
-        return machine.succeed("pgrep -f '[a]getty.*tty1'").strip()
+        return machine.succeed("pgrep -f '^[^ ]*[a]getty.*tty1'").strip()
 
     def ctty_state(pid):
         # tty, sid and pgid in one call, so the three are read from a single consistent
@@ -74,7 +80,7 @@ in
         first_pid = agetty_pid()
         machine.succeed(f"kill -9 {first_pid}")
         machine.wait_until_succeeds(
-            f"pgrep -f '[a]getty.*tty1' | grep -qxv {first_pid}",
+            f"pgrep -f '^[^ ]*[a]getty.*tty1' | grep -qxv {first_pid}",
             timeout=datetime.timedelta(seconds=30),
         )
         second_pid = agetty_pid()
