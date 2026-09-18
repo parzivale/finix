@@ -36,6 +36,7 @@ let
     "runit"
     "s6-rc"
     "sinit"
+    "openrc"
   ];
 
   # the same derivation of the enable option from the directory layout that tests/modules uses:

@@ -30,6 +30,7 @@ let
     "runit"
     "s6-rc"
     "sinit"
+    "openrc"
   ];
 
   core = {

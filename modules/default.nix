@@ -92,6 +92,7 @@ in
   s6-rc = ./init/s6-rc;
   runit = ./init/runit;
   sinit = ./init/sinit;
+  openrc = ./init/openrc;
 
   # virtualisation
 

@@ -28,6 +28,7 @@ let
     "runit"
     "s6-rc"
     "sinit"
+    "openrc"
   ];
 
   # the option which turns each module on, derived from where it lives rather than guessed:
