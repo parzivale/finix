@@ -3,6 +3,18 @@
 
   outputs =
     { self }:
+    let
+      sources = import ./lon.nix;
+      lib = import (sources.nixpkgs + "/lib");
+
+      pkgsFor = system: import sources.nixpkgs { inherit system; };
+
+      forAllSystems =
+        f:
+        lib.genAttrs' [ "aarch64-linux" "x86_64-linux" ] (
+          system: lib.nameValuePair system (f (pkgsFor system))
+        );
+    in
     {
       nixosModules = import ./modules;
 
@@ -26,15 +38,23 @@
           inherit lib;
         };
 
-      formatter =
-        let
-          sources = import ./lon.nix;
-          lib = import (sources.nixpkgs + "/lib");
+      formatter = forAllSystems (pkgs: pkgs.nixfmt-tree);
 
-          pkgsFor = system: import sources.nixpkgs { inherit system; };
-        in
-        lib.genAttrs' [ "aarch64-linux" "x86_64-linux" ] (
-          system: lib.nameValuePair system (pkgsFor system).nixfmt-tree
-        );
+      # opt-in: `nix develop .#rust`, or `nix-shell -A devShells.<system>.rust`
+      devShells = forAllSystems (pkgs: {
+        rust = pkgs.mkShell {
+          name = "finix-rust";
+
+          packages = [
+            pkgs.cargo
+            pkgs.rustc
+            pkgs.clippy
+            pkgs.rustfmt
+            pkgs.rust-analyzer
+          ];
+
+          env.RUST_SRC_PATH = "${pkgs.rustPlatform.rustLibSrc}";
+        };
+      });
     };
 }
