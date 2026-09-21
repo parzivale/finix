@@ -60,9 +60,26 @@ let
   mkVmScript =
     name: config:
     let
-      qemuArgs = config.virtualisation.qemu.argv;
+      qemu = config.virtualisation.qemu;
+
+      qemuArgs = qemu.argv;
       vlan = config.testing.network.vlan;
       mac = config.testing.network.mac;
+
+      # images qemu expects to find already there. a disk may be shared between
+      # machines, so whichever starts first is the one that creates it.
+      prepareImages =
+        lib.optionalString (qemu.bootMode == "uefi") ''
+          if [ ! -e ${lib.escapeShellArg qemu.efiVariablesFile} ]; then
+            ${pkgs.coreutils}/bin/install -m 0644 \
+              ${qemu.firmware.variables} ${lib.escapeShellArg qemu.efiVariablesFile}
+          fi
+        ''
+        + lib.concatMapStrings (disk: ''
+          if [ ! -e ${lib.escapeShellArg disk.file} ]; then
+            ${pkgs.coreutils}/bin/truncate -s ${disk.size} ${lib.escapeShellArg disk.file}
+          fi
+        '') (lib.attrValues qemu.disks);
     in
     pkgs.writeShellScript "run-${name}-vm" ''
       set -e
@@ -75,6 +92,8 @@ let
       if [ -n "$SHARED_DIR" ]; then
         mkdir -p "$SHARED_DIR"
       fi
+
+      ${prepareImages}
 
       exec ${lib.escapeShellArgs qemuArgs} \
         -name "${name}" \

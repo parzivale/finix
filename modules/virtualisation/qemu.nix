@@ -118,6 +118,15 @@ let
       "-append"
       (toString (config.boot.kernelParams ++ [ "init=${config.system.topLevel}/init" ]))
     ];
+
+    # the firmware boots whatever it finds on the disks configured below; the
+    # variable store is a writable per-run copy, made by whoever starts the VM.
+    uefi = [
+      "-drive"
+      "if=pflash,format=raw,unit=0,readonly=on,file=${cfg.firmware.firmware}"
+      "-drive"
+      "if=pflash,format=raw,unit=1,file=${cfg.efiVariablesFile}"
+    ];
   };
 in
 {
@@ -128,11 +137,65 @@ in
       package = lib.mkPackageOption pkgs [ "qemu" ] { };
 
       bootMode = lib.mkOption {
-        type = lib.types.enum [ "kernel" ]; # ++ [ "bios" "uefi" ];
+        type = lib.types.enum [
+          "kernel"
+          "uefi"
+        ];
         default = "kernel";
         description = ''
           Boot method used to load the guest.
         '';
+      };
+
+      firmware = lib.mkOption {
+        type = lib.types.package;
+        default = pkgs.OVMF.fd;
+        defaultText = lib.literalExpression "pkgs.OVMF.fd";
+        description = ''
+          UEFI firmware for {option}`virtualisation.qemu.bootMode` `"uefi"`,
+          providing `firmware` and `variables` images.
+        '';
+      };
+
+      efiVariablesFile = lib.mkOption {
+        type = lib.types.str;
+        default = "efi-vars.fd";
+        description = ''
+          Where the guest's EFI variable store lives, relative to the directory
+          the VM is started in. Copied from the firmware's template by whoever
+          starts the VM, so that NVRAM writes do not reach the Nix store.
+        '';
+      };
+
+      disks = lib.mkOption {
+        default = { };
+        example = lib.literalExpression ''
+          { esp = { file = "../esp.img"; size = "512M"; }; }
+        '';
+        description = ''
+          Raw disk images to attach. Each is created at `size` by whoever starts
+          the VM if it does not exist yet, so a path outside the VM's own run
+          directory can be used to hand a disk from one machine to another.
+        '';
+        type = lib.types.attrsOf (
+          lib.types.submodule (
+            { name, ... }:
+            {
+              options.file = lib.mkOption {
+                type = lib.types.str;
+                default = "${name}.img";
+                defaultText = lib.literalExpression ''"''${name}.img"'';
+                description = "Path to the image, relative to the VM's run directory.";
+              };
+
+              options.size = lib.mkOption {
+                type = lib.types.str;
+                default = "1G";
+                description = "Size to create the image at, if it is not there already.";
+              };
+            }
+          )
+        );
       };
 
       argv = lib.mkOption {
@@ -272,6 +335,12 @@ in
           "local,path=${share.source},mount_tag=${tag},security_model=${share.securityModel},readonly=on"
         ]) cfg.sharedDirectories
       ))
+      ++ lib.flatten (
+        lib.mapAttrsToList (_: disk: [
+          "-drive"
+          "file=${disk.file},format=raw,if=virtio"
+        ]) cfg.disks
+      )
       ++ lib.flatten (
         lib.mapAttrsToList (
           name:
