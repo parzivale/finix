@@ -7,6 +7,8 @@
 let
   cfg = config.programs.limine;
 
+  limine-install = pkgs.callPackage ../../../pkgs/limine-install { };
+
   limineInstallConfig = pkgs.writeText "limine-install.json" (
     builtins.toJSON {
       inherit (cfg)
@@ -42,13 +44,10 @@ in
   };
 
   config = lib.mkIf (config.providers.bootloader.backend == "limine") {
-    providers.bootloader.installHook = pkgs.replaceVarsWith {
-      src = ./limine-install.py;
-      isExecutable = true;
-      replacements = {
-        python3 = pkgs.python3.withPackages (python-packages: [ python-packages.psutil ]);
-        configPath = limineInstallConfig;
-      };
-    };
+    # the toplevel the hook is called with is not needed: everything the
+    # install reads comes from the config below or from the nix profiles.
+    providers.bootloader.installHook = pkgs.writeShellScript "limine-install" ''
+      exec ${lib.getExe limine-install} ${limineInstallConfig}
+    '';
   };
 }

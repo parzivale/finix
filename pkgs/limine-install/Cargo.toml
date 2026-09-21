@@ -2,7 +2,50 @@
 name = "limine-install"
 version = "0.1.0"
 edition = "2024"
+# matches the pinned toolchain in rust-toolchain.toml, and is what every build
+# actually uses; cargo passes it to clippy as its msrv too. the language floor
+# is lower -- 1.85 for edition 2024, 1.88 for the let-chains -- but nothing
+# builds at it, so claiming it would be decoration.
+rust-version = "1.97"
+description = "Installs the limine bootloader for the system generations nix knows about"
+license = "MIT"
+publish = false
 
 [dependencies]
-serde = "1.0.229"
+blake2 = "0.11.0"
+efivar = "2.0.0"
+gpt = "4.1.0"
+jiff = "0.2.37"
+rustix = { version = "1.1.5", features = ["fs", "process"] }
+serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
+snafu = "0.9.2"
+these = "2.0.0"
+
+[lints.rust]
+unsafe_code = "warn"
+missing_docs = "warn"
+unused_qualifications = "warn"
+unused_crate_dependencies = "warn"
+trivial_casts = "warn"
+trivial_numeric_casts = "warn"
+unreachable_pub = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
+future_incompatible = { level = "warn", priority = -1 }
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+cargo = { level = "warn", priority = -1 }
+
+# clippy::cargo wants publishing metadata this internal crate has no use for,
+# and bitflags/syn each land at two majors through transitive dependencies.
+cargo_common_metadata = "allow"
+multiple_crate_versions = "allow"
+# contradicts rustc unreachable_pub, which this crate follows: in a binary every
+# pub item is unreachable, so items are pub(crate) and fields are plain pub.
+redundant_pub_crate = "allow"
+
+[dev-dependencies]
+tempfile = "3.27.0"

@@ -1,0 +1,6 @@
+# For rustup users working outside the nix devshell. Inside it, and in CI, the
+# toolchain comes from the nixpkgs revision pinned in lon.lock instead, so keep
+# this in step with `nix-shell -A devShells.<system>.rust --run 'rustc -V'`.
+[toolchain]
+channel = "1.97.1"
+components = ["clippy", "rustfmt", "rust-src"]
