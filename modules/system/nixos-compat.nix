@@ -29,6 +29,23 @@
     };
   };
 
+  # Said in the vocabulary nixos tooling expects, so that tooling can ask and
+  # get an answer rather than an undefined variable. deploy-rs' `activate.nixos`
+  # is the case in hand: it reads `boot.loader.systemd-boot.enable` through a
+  # `with`, to decide whether to strip the `default` line out of loader.conf,
+  # and a missing attribute there is an eval error rather than a falsy value -
+  # so the activation script fails to build at all, for a machine that was
+  # never going to boot that way.
+  options.boot.loader.systemd-boot.enable = lib.mkOption {
+    type = lib.types.bool;
+    default = false;
+    internal = true;
+    description = ''
+      Always false: finix does not boot through systemd-boot. Declared so that
+      tools written against nixos can read it and find out.
+    '';
+  };
+
   config = {
     environment.systemPackages = [
       # nixos-enter and nixos-install depend on a systemd-tmpfiles implementation
