@@ -102,6 +102,23 @@ in
       '';
     };
 
+    hostKeyPath = lib.mkOption {
+      type = lib.types.path;
+      default = "/var/lib/sshd/ssh_host_ed25519_key";
+      description = ''
+        Where this machine's host key lives.
+
+        One option rather than three copies of a path: it is the default for
+        {option}`services.openssh.settings.HostKey`, the file the generator
+        writes, and - through its parent - the directory the generator needs.
+        Moving the key moves all three together, so a host which keeps its key
+        beside the rest of /etc, or on a filesystem it preserves, says so once
+        here.
+
+        The generated key is ed25519 whatever the file is called.
+      '';
+    };
+
     sftp = {
       enable = lib.mkOption {
         type = lib.types.bool;
@@ -303,8 +320,7 @@ in
   config = lib.mkIf cfg.enable {
     services.openssh.sftp.executable = lib.mkDefault "${cfg.package}/libexec/sftp-server";
     services.openssh.settings = {
-      # TODO: fixup host key generation
-      HostKey = [ "/var/lib/sshd/ssh_host_ed25519_key" ];
+      HostKey = [ cfg.hostKeyPath ];
 
       "Subsystem sftp" =
         lib.mkIf cfg.sftp.enable "${cfg.sftp.executable} ${lib.concatStringsSep " " cfg.sftp.flags}";

@@ -21,8 +21,8 @@ in
       requires = [ "sysinit" ];
 
       type.oneshot.command = pkgs.writeShellScript "ssh-keygen.sh" ''
-        if ! [ -s "/var/lib/sshd/ssh_host_ed25519_key" ]; then
-          ${cfg.package}/bin/ssh-keygen -t ed25519 -f "/var/lib/sshd/ssh_host_ed25519_key" -N ""
+        if ! [ -s "${cfg.hostKeyPath}" ]; then
+          ${cfg.package}/bin/ssh-keygen -t ed25519 -f "${cfg.hostKeyPath}" -N ""
         fi
       '';
     };
@@ -58,7 +58,7 @@ in
 
     providers.services.tmpfiles.rules = [
       {
-        path = "/var/lib/sshd";
+        path = builtins.dirOf cfg.hostKeyPath;
         type.directory.mode = "0755";
       }
     ];
