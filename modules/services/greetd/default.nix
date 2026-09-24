@@ -59,7 +59,13 @@ in
       terminal.vt = lib.mkDefault "next";
       default_session = {
         command = lib.mkDefault "${pkgs.greetd}/bin/agreety";
-        user = "greeter";
+
+        # A default like the command above it, and for the same reason: the pair only
+        # means anything together. `default_session` is the greeter, so running it as
+        # `greeter` is right for a greeter - and a configuration which replaces the
+        # command with a session and the user with whoever is logging in is how greetd
+        # is told to log that person straight in. Pinned, that was unsayable.
+        user = lib.mkDefault "greeter";
       };
     };
 
