@@ -65,7 +65,10 @@ let
     '';
 in
 {
-  imports = [ ./providers.services.nix ];
+  imports = [
+    ./providers.services.nix
+    ./remote-build.nix
+  ];
 
   options.services.nix-daemon = {
     enable = lib.mkOption {
