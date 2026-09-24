@@ -45,11 +45,30 @@ let
   };
 
   # A package set this module built, from `source` and the declared platforms.
-  constructedPkgs = import cfg.source {
-    inherit (cfg) config overlays;
-    localSystem = cfg.buildPlatform;
-    crossSystem = cfg.hostPlatform;
-  };
+  #
+  # `crossSystem` only when the platforms actually differ. Passing it always - even
+  # equal to `localSystem` - puts nixpkgs in cross mode regardless, and a package
+  # reaching for another set from inside that one can then chase itself: gamemode's
+  # `postPatch` asks for `pkgsi686Linux.gamemode.lib` and never comes back. nixos'
+  # own module branches the same way, for the same reason.
+  constructedPkgs =
+    let
+      isCross = cfg.buildPlatform != cfg.hostPlatform;
+    in
+    import cfg.source (
+      {
+        inherit (cfg) config overlays;
+      }
+      // (
+        if isCross then
+          {
+            localSystem = cfg.buildPlatform;
+            crossSystem = cfg.hostPlatform;
+          }
+        else
+          { localSystem = cfg.hostPlatform; }
+      )
+    );
 
   # A package set handed in whole takes precedence, and can only be extended:
   # its `config` and its platform were fixed when whoever made it imported
