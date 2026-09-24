@@ -21,7 +21,12 @@ in
 
     services.dbus.packages = [
       pkgs.gnome-keyring
-      pkgs.gcr_3
+
+      # `gcr`, not `gcr_3`: that attribute is gone from nixpkgs, so this module
+      # stopped evaluating at all. It is the prompter's service file that is wanted
+      # here - gcr owns `org.gnome.keyring.SystemPrompter` - and `gcr` is the
+      # attribute nixos' own gnome-keyring module names for it.
+      pkgs.gcr
     ];
 
     xdg.portal.portals = [
