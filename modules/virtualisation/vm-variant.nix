@@ -95,7 +95,20 @@ in
               device = "tmpfs";
               fsType = "tmpfs";
               inherit (fs) neededForBoot;
-              options = [ "mode=755" ];
+
+              # X-mount.mkdir because the root is a fresh tmpfs: every one of these mount points
+              # has to be created before anything can be mounted on it, and `mount -a` will not
+              # do that by itself. This is util-linux' own option, not a systemd one. Without it
+              # the first stand-in fails, `mount-filesystems` fails with it, and the trunk stops
+              # there - which is how this was found, on /boot.
+              #
+              # The machine's own options are not carried across: they describe the filesystem it
+              # named - a btrfs subvolume, a vfat umask - and none of that means anything to a
+              # tmpfs.
+              options = [
+                "mode=755"
+                "X-mount.mkdir"
+              ];
             }
           else
             fs
@@ -137,6 +150,45 @@ in
     # The kernel talks to the terminal the runner is attached to, and qemu is told not to open a
     # window. Together these are what make `run-<host>-vm` behave like a program rather than
     # like a desktop application.
+
+    # Syslog to the console, where a machine sends it to files.
+    #
+    # Without this the boot log stops the moment syslogd starts: finit logs to /dev/log from
+    # then on, syslogd writes that to /var/log, and the console shows nothing more. Which reads
+    # exactly like a hung boot and is not one - three separate stalls were diagnosed through
+    # this window before it was closed, and each time the evidence was on a filesystem that
+    # only existed inside the machine that would not finish booting.
+    #
+    # The kernel is already talking to this console, so joining it there is not a new kind of
+    # noise. The test harness does the same thing for the same reason.
+    environment.etc."syslog.conf" = lib.mkIf config.services.sysklogd.enable (
+      lib.mkVMOverride {
+        text = ''
+          *.* /dev/console
+
+          include /etc/syslog.d/*.conf
+        '';
+      }
+    );
+
+    # A login on the serial console, which is the terminal `run-<host>-vm` is attached to.
+    #
+    # Without this the runner is write-only. A machine's gettys are on tty1..tty6, the kernel
+    # console is the uart, and nothing here generates a terminal from `console=` the way
+    # systemd's getty generator does on nixos - so the boot log scrolls past and then stops,
+    # because syslogd takes finit's logging once it starts, and there is no way in.
+    #
+    # `mkDefault`, so a machine's vmVariant can claim the same device for something else - a
+    # display manager, or an autologin.
+    #
+    # Worth knowing: this is the machine's own user database, password hashes included. A
+    # virtual machine built from a real configuration is as good as that configuration's
+    # credentials, and should be treated the way the machine is.
+    providers.ttys.devices.${serial} = lib.mkDefault {
+      description = "login on the serial console";
+      requires = [ "multi-user" ];
+    };
+
     boot.kernelParams = [ "console=${serial},115200n8" ];
     virtualisation.qemu.extraArgs = [ "-nographic" ];
 
@@ -154,7 +206,12 @@ in
     # wrong here, where the point is to run someone else's machine on this one.
     virtualisation.qemu.package = lib.mkDefault hostPkgs.qemu;
 
-    virtualisation.memorySize = lib.mkDefault 2048;
+    # 2048 is not enough, and the way it fails is worth knowing: nothing reports being short of
+    # memory. dbus never becomes ready, `sysinit` never completes, and the machine sits there -
+    # which reads as a readiness bug in dbus and is not one. 4096 gets a full desktop
+    # configuration past it; a minimal machine would be happy with far less, and `mkDefault` is
+    # so that it can say so.
+    virtualisation.memorySize = lib.mkDefault 4096;
     virtualisation.cores = lib.mkDefault 2;
 
     system.build.vm =
