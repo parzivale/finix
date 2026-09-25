@@ -16,7 +16,10 @@ let
   sleepConf = format.generate "sleep.conf" { inherit (cfg.settings) Sleep; };
 in
 {
-  imports = [ ./providers.services.nix ];
+  imports = [
+    ./providers.services.nix
+    ./providers.resume-and-suspend.nix
+  ];
 
   options.services.elogind = {
     enable = lib.mkOption {

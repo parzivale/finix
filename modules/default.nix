@@ -104,6 +104,10 @@ in
   # blobs.
   firmware = ./hardware/all-firmware.nix;
 
+  # the cpu frequency governor. Sleep and resume hooks are not here - they are
+  # `providers.resumeAndSuspend`, which elogind implements.
+  power-management = ./system/power-management.nix;
+
   # virtualisation
 
   android = ./virtualisation/android.nix;
