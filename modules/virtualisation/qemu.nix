@@ -264,7 +264,11 @@ in
     ]
     ++ lib.optional (cfg.sharedDirectories != { }) "9pnet_virtio";
 
-    fileSystems = lib.mkMerge (
+    # Into `virtualisation.fileSystems`, not `fileSystems` - and then straight back out again
+    # at ordinary priority, so that what this module produces is unchanged. The indirection is
+    # for `vm-variant.nix`, which needs one definition it can override a real machine's disks
+    # with, and cannot have the store mount discarded along with them.
+    virtualisation.fileSystems = lib.mkMerge (
       [
         (lib.mapAttrs' (tag: share: {
           name = share.target;
@@ -286,6 +290,8 @@ in
         };
       }
     );
+
+    fileSystems = config.virtualisation.fileSystems;
 
     virtualisation.qemu.argv =
       (qemuCommand cfg.package)
