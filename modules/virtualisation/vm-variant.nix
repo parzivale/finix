@@ -18,7 +18,14 @@
   ...
 }:
 let
-  hostPkgs = config.virtualisation.host.pkgs;
+  cfg = config.virtualisation;
+
+  hostPkgs = cfg.host.pkgs;
+
+  # Whether a mount names storage a virtual machine does not have: a block device, or a
+  # filesystem label - anything findable only on the machine the configuration was written for.
+  # Everything else is a pseudo-filesystem, a bind, or a share, and works here unchanged.
+  namesADisk = fs: fs.label != null || (fs.device != null && lib.hasPrefix "/dev/" fs.device);
 
   # The console the kernel is told to use, which is the console the runner below reads. Chosen
   # by architecture because qemu's `virt` machine wires a different uart depending: an amba
@@ -61,19 +68,56 @@ in
   imports = [ ./qemu.nix ];
 
   config = {
-    # The root, and nothing else. A machine's other mounts are not translated into anything -
-    # `/persistent`, `/boot` and the rest simply are not there, and a service which wants one
-    # finds an ordinary directory on the tmpfs instead. Which is usually what a test of that
-    # service wants; where it is not, name the mount:
+    # The machine's mounts, with the ones that name a disk backed by a tmpfs where they stood,
+    # and everything else left exactly as the machine declared it.
     #
-    #   virtualisation.vmVariant.virtualisation.fileSystems."/persistent" = {
-    #     device = "tmpfs"; fsType = "tmpfs"; neededForBoot = true;
-    #   };
-    virtualisation.fileSystems."/" = {
-      device = "tmpfs";
-      fsType = "tmpfs";
-      options = [ "mode=755" ];
-    };
+    # Removing them outright was the first thing tried, and it does not work: a mount which is
+    # `neededForBoot` and then is simply not there does not fail, it waits. The macbook spent a
+    # hundred and twenty seconds in stage 1 on precisely that - preservation waiting for
+    # /persistent, giving up with a warning, and then running the rest of the boot with every
+    # preserved path missing. Standing in for the mount costs nothing and keeps the shape of the
+    # machine, which is the thing under test.
+    #
+    # Only the disks, though. A pseudo-filesystem is not a thing a virtual machine lacks:
+    # `/proc/sys/fs/binfmt_misc` has to stay binfmt_misc or the registrations written to it fail,
+    # and a bind mount or a 9p share is as valid here as anywhere. Turning those into tmpfs was
+    # the second thing tried, and it is how that was found out.
+    #
+    # The stand-ins are volatile, which is the point: every boot starts from an empty
+    # /persistent, so what a service does on a machine it has never run on before is what gets
+    # exercised.
+    virtualisation.fileSystems = lib.mkMerge [
+      (lib.mapAttrs
+        (
+          _: fs:
+          if namesADisk fs then
+            {
+              device = "tmpfs";
+              fsType = "tmpfs";
+              inherit (fs) neededForBoot;
+              options = [ "mode=755" ];
+            }
+          else
+            fs
+        )
+        (
+          lib.filterAttrs (
+            mountPoint: _:
+            # The root is replaced below whatever it was, so it is not up for pass-through here -
+            # a machine whose root is already a tmpfs would otherwise define it twice and conflict.
+            mountPoint != "/" && !(lib.hasPrefix "/nix" mountPoint)
+          ) cfg.hostFileSystems
+        )
+      )
+
+      {
+        "/" = {
+          device = "tmpfs";
+          fsType = "tmpfs";
+          options = [ "mode=755" ];
+        };
+      }
+    ];
 
     # The override, in one definition, for the reason `virtualisation.fileSystems` exists: a
     # definition at this priority discards every lower-priority one rather than merging, so

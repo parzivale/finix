@@ -16,7 +16,17 @@
 }:
 let
   vmVariant = extendModules {
-    modules = [ ./vm-variant.nix ];
+    modules = [
+      ./vm-variant.nix
+
+      {
+        # The machine's own mounts, named so that the variant can stand in for each one rather
+        # than simply losing it. Read from the outer evaluation, which does not depend on this
+        # one - `system.build.vm` is the only thing here which reaches into the variant, and
+        # nothing computes `fileSystems` from that.
+        virtualisation.hostFileSystems = config.fileSystems;
+      }
+    ];
   };
 in
 {

@@ -47,6 +47,18 @@ in
       '';
     };
 
+    virtualisation.hostFileSystems = mkOption {
+      type = types.raw;
+      default = { };
+      internal = true;
+      description = ''
+        The mounts the machine itself declares, handed to its virtual-machine variant by
+        `build-vm.nix` so that the variant can stand in for them.
+
+        Internal because it is plumbing rather than a setting: the variant is replacing these
+        and so cannot read them from `fileSystems`, that being the option it is defining.
+      '';
+    };
     virtualisation.host.pkgs = mkOption {
       type = types.raw;
       default = pkgs;
