@@ -64,5 +64,13 @@ in
       # override wayland session with one that includes absolute paths + dbus-run-session invocation
       (lib.hiPrio sessionFile)
     ];
+
+    # A compositor with no GL context is a compositor which does not start. nixos gets this
+    # from niri-flake, whose module sets the same default, so a machine moving from there
+    # would otherwise lose it silently: niri would build, install, and fail to open a display.
+    #
+    # mkDefault, because whether a machine wants a graphics stack is the machine's to say - a
+    # niri driven entirely through the software renderer is unusual, not absurd.
+    hardware.graphics.enable = lib.mkDefault true;
   };
 }
