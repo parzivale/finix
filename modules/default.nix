@@ -94,6 +94,16 @@ in
   sinit = ./init/sinit;
   openrc = ./init/openrc;
 
+  # hardware
+
+  # a nixos-facter report, turned into the settings it implies. `reportPath` arms it.
+  facter = ./hardware/facter;
+
+  # linux-firmware and friends, which `hardware.firmware` has had no way to be filled from.
+  # facter imports this itself; named here for a machine with no report which still needs
+  # blobs.
+  firmware = ./hardware/all-firmware.nix;
+
   # virtualisation
 
   android = ./virtualisation/android.nix;
