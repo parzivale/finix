@@ -20,10 +20,44 @@ in
       # before anything can serve with them, and before the tier which completes `basic`
       requires = [ "sysinit" ];
 
+      # Generated beside the path and then written into it, rather than generated at it.
+      #
+      # Two things make the obvious version fail. The guard is `-s`, false for an empty file,
+      # while ssh-keygen's own check is for the path existing at all - so a zero-byte key file
+      # falls between them, and ssh-keygen asks
+      #
+      #   /etc/ssh/ssh_host_ed25519_key already exists.
+      #   Overwrite (y/n)?
+      #
+      # on a stdin nothing is attached to, reads EOF, and exits 1. Silently, as far as the
+      # console is concerned: the task is simply `done (status=1)`, its readiness companion waits
+      # for a success which will not come, and `sysinit` never completes. The machine stops with
+      # the whole trunk behind it and nothing saying why.
+      #
+      # And clearing the path first does not fix it, because the path is not always the machine's
+      # to unlink: a machine which preserves its host key across reboots has that file bind
+      # mounted from wherever it persists them, so `rm` gets EBUSY. Which is exactly the machine
+      # that hits the zero-byte case, on the first boot, before there is anything to restore.
+      #
+      # Writing through the path works either way - a bind mount is a file, and `>` truncates
+      # and fills whatever is on the other side of it.
       type.oneshot.command = pkgs.writeShellScript "ssh-keygen.sh" ''
-        if ! [ -s "${cfg.hostKeyPath}" ]; then
-          ${cfg.package}/bin/ssh-keygen -t ed25519 -f "${cfg.hostKeyPath}" -N ""
+        set -eu
+
+        if [ -s "${cfg.hostKeyPath}" ]; then
+          exit 0
         fi
+
+        tmp="$(${lib.getExe' pkgs.coreutils "mktemp"} -d)"
+        trap '${lib.getExe' pkgs.coreutils "rm"} -rf "$tmp"' EXIT
+
+        ${cfg.package}/bin/ssh-keygen -q -t ed25519 -f "$tmp/key" -N ""
+
+        ${lib.getExe' pkgs.coreutils "cat"} "$tmp/key" > "${cfg.hostKeyPath}"
+        ${lib.getExe' pkgs.coreutils "cat"} "$tmp/key.pub" > "${cfg.hostKeyPath}.pub"
+
+        ${lib.getExe' pkgs.coreutils "chmod"} 0600 "${cfg.hostKeyPath}"
+        ${lib.getExe' pkgs.coreutils "chmod"} 0644 "${cfg.hostKeyPath}.pub"
       '';
     };
 
