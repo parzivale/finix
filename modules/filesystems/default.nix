@@ -115,6 +115,7 @@ in
     ./options.nix
 
     ./9p.nix
+    ./binfmt_misc.nix
     ./btrfs.nix
     ./efivarfs.nix
     ./ext2.nix
