@@ -77,6 +77,26 @@ in
         type.remove.recursive = true;
       }
 
+      # The profile roots. Every other directory a nix installation needs is above; this was the
+      # one missing, and what a machine without it looks like is a user profile operation failing
+      # with
+      #
+      #   error: creating directory "/nix/var/nix/profiles": Permission denied
+      #
+      # because nothing made it and the user running the operation cannot. `per-user` too, since
+      # a per-user profile is created inside it and the same applies.
+      #
+      # Easy to miss on a machine converted from another distribution, which already has these
+      # from whatever installed nix in the first place. A machine finix installed does not.
+      {
+        path = "/nix/var/nix/profiles";
+        type.directory.mode = "0755";
+      }
+      {
+        path = "/nix/var/nix/profiles/per-user";
+        type.directory.mode = "0755";
+      }
+
       # so the running and booted systems are not garbage-collected out from under the machine
       {
         path = "/nix/var/nix/gcroots/booted-system";
