@@ -48,15 +48,25 @@ in
           exit 0
         fi
 
+        # Before anything is written, not fixed up afterwards. `>` creates a file under this
+        # process's umask, and a private key that is 0644 for even a moment is 0644 - the
+        # window is not the whole of the problem either, because `set -e` on any later line
+        # leaves it that way for good. ssh-keygen writing to its own path got this right by
+        # itself; writing through someone else's path means saying so.
+        umask 0077
+
         tmp="$(${lib.getExe' pkgs.coreutils "mktemp"} -d)"
         trap '${lib.getExe' pkgs.coreutils "rm"} -rf "$tmp"' EXIT
 
         ${cfg.package}/bin/ssh-keygen -q -t ed25519 -f "$tmp/key" -N ""
 
+        # Each mode set against the file it belongs to, immediately. An existing path keeps
+        # whatever mode it had - `>` does not change one - and on a machine which preserves its
+        # host key that path exists before this runs, so neither of these is redundant.
         ${lib.getExe' pkgs.coreutils "cat"} "$tmp/key" > "${cfg.hostKeyPath}"
-        ${lib.getExe' pkgs.coreutils "cat"} "$tmp/key.pub" > "${cfg.hostKeyPath}.pub"
-
         ${lib.getExe' pkgs.coreutils "chmod"} 0600 "${cfg.hostKeyPath}"
+
+        ${lib.getExe' pkgs.coreutils "cat"} "$tmp/key.pub" > "${cfg.hostKeyPath}.pub"
         ${lib.getExe' pkgs.coreutils "chmod"} 0644 "${cfg.hostKeyPath}.pub"
       '';
     };
