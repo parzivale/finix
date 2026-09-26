@@ -178,6 +178,59 @@ in
       }
     );
 
+    # A writable store, by stacking an overlay over the read-only one.
+    #
+    # The host's store arrives as a 9p mount and is bound to /nix/store, and a bind of a
+    # read-only filesystem is read-only. Enough to boot - stage 1 only reads the closure - but
+    # the first thing wanting to write a store path fails:
+    #
+    #   error: opening lock file "/nix/store/...-env-manifest.nix.lock": Read-only file system
+    #
+    # from home-manager's `installPackages`, which builds a profile and cannot.
+    #
+    # Mounted by a unit rather than declared as a filesystem, for two reasons. overlayfs wants
+    # its upper and work directories to exist already, as siblings on one filesystem, and there
+    # is no pre-mount hook - as a `neededForBoot` filesystem this would mount in stage 1, before
+    # anything had created them, whereas by the second stage `tmpfiles-setup` has. And it has to
+    # come after `mount-filesystems`, because that mounts /nix/store from fstab again: an overlay
+    # stacked before it is simply shadowed by the bind that lands on top, which looks exactly
+    # like an overlay that failed to mount.
+    #
+    # The upper layer is on the root, a tmpfs here, so what the machine writes to its store
+    # lasts as long as the machine - the right lifetime for something discarded after a boot.
+    providers.services.tmpfiles.rules = [
+      {
+        path = "/nix/.rw-store";
+        type.directory.mode = "0755";
+      }
+      {
+        path = "/nix/.rw-store/upper";
+        type.directory.mode = "0755";
+      }
+      {
+        path = "/nix/.rw-store/work";
+        type.directory.mode = "0755";
+      }
+    ];
+
+    providers.services.units.nix-store-writable = {
+      description = "overlay a writable layer over the store";
+
+      requires = [
+        (lib.head config.providers.services.trunk.levels)
+        "tmpfiles-setup"
+        "mount-filesystems"
+      ];
+
+      type.oneshot.command = toString (
+        pkgs.writeShellScript "nix-store-writable" ''
+          ${lib.getExe' pkgs.util-linux "mount"} -t overlay overlay \
+            -o lowerdir=/nix/.ro-store,upperdir=/nix/.rw-store/upper,workdir=/nix/.rw-store/work \
+            /nix/store
+        ''
+      );
+    };
+
     # The guest's nix database, which is otherwise empty.
     #
     # A machine's /nix is a real filesystem and a VM cannot have that one, so the mount is
@@ -207,6 +260,7 @@ in
       requires = [
         (lib.head config.providers.services.trunk.levels)
         "tmpfiles-setup"
+        "nix-store-writable"
       ];
 
       type.oneshot.command = toString (
