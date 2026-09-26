@@ -174,6 +174,25 @@ let
       runlevels = runlevelsFor name unit;
       conditions = (chainFor name unit).conditions;
       environment = unit.environment;
+
+      # Everything a unit writes goes to the system log.
+      #
+      # finit does not redirect a stanza's stdout or stderr unless asked, and nothing asked - so
+      # a unit's own account of itself went nowhere at all. What finit records is that a task
+      # ended and with which status, which turns every failure into the same sentence regardless
+      # of cause, and leaves a unit that failed indistinguishable from one still running: both
+      # are simply a `Starting` line with no companion after it.
+      #
+      # That cost real time. An ssh host key that could not be generated, secrets that could not
+      # be decrypted, home-manager activation dying before it linked anything, a polkit agent
+      # unable to find its session, a portal rejecting its own configuration - each of them said
+      # exactly why, to a pipe with nothing on the end of it, and each was diagnosed instead by
+      # inference from the outside or by running the command by hand.
+      #
+      # `log` is finit's own answer, implemented with logit, and this is the behaviour every
+      # other init gives by default. Applied to companions and anchors as well, which run `true`
+      # and have nothing to say - there is no reason to make the rule conditional.
+      log = true;
     }
     // lib.optionalAttrs (unit.path != [ ]) { inherit (unit) path; }
     // lib.optionalAttrs (unit.user != null) { inherit (unit) user; }
