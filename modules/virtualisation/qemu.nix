@@ -129,7 +129,9 @@ let
     ]
     ++ [
       "-append"
-      (toString (config.boot.kernelParams ++ [ "init=${config.system.topLevel}/init" ]))
+      (toString (
+        config.boot.kernelParams ++ cfg.kernelParams ++ [ "init=${config.system.topLevel}/init" ]
+      ))
     ];
   };
 in
@@ -239,6 +241,20 @@ in
           disk.
 
           Writes go to a temporary overlay rather than to the image, which is in the store.
+        '';
+      };
+
+      kernelParams = lib.mkOption {
+        type = with lib.types; listOf str;
+        default = [ ];
+        description = ''
+          Extra kernel parameters, appended to the ones the machine itself asks for.
+
+          These reach the guest only through qemu's command line, never through
+          `boot.kernelParams` - which is the point. A parameter naming a store path derived from
+          the system closure cannot go in the machine's own configuration, because the closure
+          is built from it: the path would depend on the parameter and the parameter on the path.
+          The guest reads what it needs out of /proc/cmdline instead.
         '';
       };
 

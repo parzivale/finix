@@ -117,7 +117,14 @@ in
           lib.filterAttrs (
             mountPoint: _:
             # The root is replaced below whatever it was, so it is not up for pass-through here -
-            # a machine whose root is already a tmpfs would otherwise define it twice and conflict.
+            # a machine whose root is already a tmpfs would otherwise define it twice and
+            # conflict.
+            #
+            # And /nix with it, because the store arrives here by its own route and a machine's
+            # /nix names a disk this machine does not have. What that costs is /nix/var, which
+            # the dropped mount is what makes persistent: it lands on the volatile root instead,
+            # so the nix database starts empty every boot. `nix-register-closure` above is why
+            # that is survivable.
             mountPoint != "/" && !(lib.hasPrefix "/nix" mountPoint)
           ) cfg.hostFileSystems
         )
@@ -170,6 +177,71 @@ in
         '';
       }
     );
+
+    # The guest's nix database, which is otherwise empty.
+    #
+    # A machine's /nix is a real filesystem and a VM cannot have that one, so the mount is
+    # dropped below and /nix/var lands on the volatile root - which means the database is
+    # recreated, empty, on every boot. The store's *files* are all there over 9p; nix just has
+    # no record of any of them, so every path is invalid and nothing can be built, substituted
+    # or set as a profile. `nix-env -q` fails, and anything built on it - home-manager
+    # activation, most obviously - fails with it.
+    #
+    # And it fails in a way that reads as something else entirely:
+    #
+    #   don't know how to build these paths:
+    #     /nix/store/...-home-manager-generation
+    #   error: path '...' is required, but there is no substituter that can build it
+    #
+    # which sounds like a missing path or a read-only store, and is neither. `nix path-info
+    # --all` in such a machine returns nothing at all.
+    #
+    # So the closure is registered, the way nixos' own VMs do it. `NIX_REMOTE=` because this
+    # writes the database directly rather than asking a daemon to - there is no daemon yet, and
+    # the point is that it is running before one needs the answer.
+    providers.services.units.nix-register-closure = {
+      description = "register the system closure in the nix database";
+
+      # `tmpfiles-setup` makes /nix/var and the directories under it, and this writes into
+      # them. Both are in the head tier, and a tier starts together, so the edge is named.
+      requires = [
+        (lib.head config.providers.services.trunk.levels)
+        "tmpfiles-setup"
+      ];
+
+      type.oneshot.command = toString (
+        pkgs.writeShellScript "nix-register-closure" ''
+          # Only when there is nothing there: a machine whose /nix/var does persist has this
+          # already, and re-registering a whole system closure is not free.
+          if [ -s /nix/var/nix/db/db.sqlite ]; then
+            exit 0
+          fi
+
+          # The path comes off the kernel command line rather than being written into this
+          # script, because this script is part of the closure being registered. Naming the
+          # registration here would make the closure depend on a path derived from the closure,
+          # which is an evaluation that does not terminate.
+          reg=$(${lib.getExe' pkgs.gnused "sed"} -n 's/.*regInfo=\([^ ]*\).*/\1/p' /proc/cmdline)
+
+          if [ -z "$reg" ] || [ ! -e "$reg" ]; then
+            echo "nix-register-closure: no regInfo= on the kernel command line" >&2
+            exit 0
+          fi
+
+          # NIX_REMOTE= to write the database directly instead of asking a daemon to: there is
+          # no daemon yet, and the point is to be finished before anything needs one.
+          NIX_REMOTE= ${lib.getExe' pkgs.nix "nix-store"} --load-db < "$reg"
+        ''
+      );
+    };
+
+    # The registration itself, named where it cannot become part of what it registers.
+    virtualisation.qemu.kernelParams = [
+      "regInfo=${pkgs.closureInfo { rootPaths = [ config.system.topLevel ]; }}/registration"
+    ];
+
+    # Nothing may ask nix anything before the database says the store exists.
+    providers.services.units.nix-daemon.requires = [ "nix-register-closure" ];
 
     # A login on the serial console, which is the terminal `run-<host>-vm` is attached to.
     #
