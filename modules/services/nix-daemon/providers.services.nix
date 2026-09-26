@@ -27,7 +27,23 @@ in
         # it. The "standard nixos trick" this replaces was appended to finit.d/nix-daemon.conf
         # - a trick only finit ever fell for.
         command = "${cfg.package}/bin/nix-daemon --daemon";
-        readiness = "fork";
+
+        # Ready when it answers, not when it has forked.
+        #
+        # `fork` meant the daemon was called ready the moment it existed, which is well before it
+        # accepts anything - and a client starting in that window does not wait, it fails:
+        #
+        #   error: cannot connect to socket at '/nix/var/nix/daemon-socket/socket':
+        #   Connection refused
+        #
+        # which is what home-manager activation hit, and because a display manager was ordered
+        # behind that activation the whole session was lost with it. Intermittently, since it is a
+        # race the daemon usually wins.
+        #
+        # `waitFor.socket` connects rather than testing that a path exists, which is the
+        # difference that matters here: the socket file appears at bind(), before anything is
+        # listening on it, so `[ -S ... ]` is true during exactly the window that breaks clients.
+        readiness = [ { waitFor.socket.path = "/nix/var/nix/daemon-socket/socket"; } ];
       };
 
       environment.CURL_CA_BUNDLE = config.security.pki.caBundle;
@@ -38,21 +54,15 @@ in
       requires = [ "basic" ];
     };
 
+    # Kept as a name for consumers to require, now that `nix-daemon` itself means "answering":
+    # its readiness is the connect above, so requiring either is the same gate. It was this unit
+    # doing the waiting before, with `[ -S ... ]`, which is the test that let clients through
+    # early - see the note on readiness.
     providers.services.units.nix-daemon-socket = {
-      description = "wait for the nix daemon socket";
+      description = "the nix daemon is accepting connections";
       requires = [ "nix-daemon" ];
 
-      type.oneshot.command = pkgs.writeShellScript "nix-daemon-wait" ''
-        for _ in $(${lib.getExe' pkgs.coreutils "seq"} 1 100); do
-          if [ -S /nix/var/nix/daemon-socket/socket ]; then
-            exit 0
-          fi
-          ${lib.getExe' pkgs.coreutils "sleep"} 0.1
-        done
-
-        echo "nix-daemon-socket: the daemon never started listening" >&2
-        exit 1
-      '';
+      type.oneshot.command = lib.getExe' pkgs.coreutils "true";
     };
 
     providers.services.tmpfiles.rules = [
