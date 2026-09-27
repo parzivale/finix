@@ -1,6 +1,6 @@
 # the initramfs as the root, rather than as a stage on the way to one
 #
-# With `boot.initrd.pivot = false` there is no handover: the kernel's rootfs - a tmpfs, which
+# In this mode there is no handover: the kernel's rootfs - a tmpfs, which
 # is where an initramfs is unpacked - is the root the machine keeps. `/init` is this script,
 # and all it does is the one thing that has to happen before any init can read its own
 # configuration: mount the filesystems the store is on, so that the paths in that configuration
@@ -15,7 +15,7 @@
 # in the initramfs, which is not.
 #
 # Deliberately not a stage. It waits for nothing, opens nothing, assembles nothing - a machine
-# needing any of that wants `pivot = true`, which is the default and is untouched by this.
+# needing any of that wants the `stage` mode, which is the default and is untouched by this.
 {
   config,
   pkgs,
@@ -194,7 +194,7 @@ let
   '';
 in
 {
-  config = lib.mkIf (cfg.enable && !cfg.pivot) {
+  config = lib.mkIf (cfg.role == "root") {
     # `/init` is the script, and the packages it names have to be in the image for it to run.
     # makeInitrdNG copies a closure for whatever is in `boot.initrd.path`, and copies a single
     # file for a source given a target - so the script arrives on its own, and its interpreter
@@ -227,11 +227,12 @@ in
       {
         assertion = early != [ ];
         message = ''
-          boot.initrd.pivot is false, so the initramfs is the root and /init mounts what the
-          store is on - but no filesystem other than / is marked neededForBoot, so there is
-          nothing for it to mount and ${config.boot.init} will not be there to exec.
+          boot.initrd.enable is false and fileSystems."/" is a ${config.fileSystems."/".fsType}, so the initramfs is the root - but no filesystem other than / is marked
+          neededForBoot, so /init has nothing to mount and ${config.boot.init} will not be there
+          to exec.
 
-          Either mark the filesystem holding /nix as neededForBoot, or leave pivot on.
+          Either mark the filesystem holding /nix as neededForBoot, or set
+          boot.initrd.enable = true so that a stage mounts the root and hands over to it.
         '';
       }
     ];

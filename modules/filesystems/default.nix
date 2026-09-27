@@ -178,7 +178,7 @@ in
         ]
         # `/` too, when the initramfs is the root.
         #
-        # With `boot.initrd.pivot = false` there is no stage which mounts a root and hands over
+        # With `boot.initrd.role == "root"` there is no stage which mounts a root and hands over
         # to it: the kernel's rootfs is the root, and by the time anything reads this file the
         # store has already been mounted into it. An entry for `/` then describes something to
         # be mounted which is already mounted, and what is being asked for is worse than
@@ -186,9 +186,9 @@ in
         # empty filesystem over the running root and takes /nix, /etc and /bin out of view with
         # it. finit acts on fstab before anything else, so that is the first thing it does.
         #
-        # This is the other half of `boot.initrd.pivot`. /init already excludes `/` from what it
+        # This is the other half of that mode. /init already excludes `/` from what it
         # mounts, for the same reason and by the same test; nothing was telling this file.
-        && !(fs.mountPoint == "/" && config.boot.initrd.enable && !config.boot.initrd.pivot)
+        && !(fs.mountPoint == "/" && config.boot.initrd.role == "root")
       ) fileSystems) { }}
 
       # swap devices (random-encrypted swap is set up by a unit - see providers.services.nix)
