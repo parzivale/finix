@@ -137,7 +137,18 @@ let
       echo "" >&2
       echo "initramfs-root: $1" >&2
       echo "initramfs-root: ${config.boot.init} was not started. dropping to a shell." >&2
-      echo "initramfs-root: the store is $([ -d /nix/store ] && echo mounted || echo NOT mounted)." >&2
+      # whether the store is actually usable, not whether a directory called /nix/store exists.
+      #
+      # `[ -d /nix/store ]` was the first version of this and it lied: /init mkdirs the mount
+      # points, so the directory is there whether or not anything was mounted onto it. A VM built
+      # without the host store shared reported "the store is mounted" over an empty one, which is
+      # the opposite of what a rescue message is for. The activation script is the thing that has
+      # to be reachable, so ask about that.
+      if [ -x ${config.providers.services.activationScript} ]; then
+        echo "initramfs-root: the store is mounted and reachable." >&2
+      else
+        echo "initramfs-root: the store is NOT usable - /nix/store has $(${lib.getExe' pkgs.coreutils "ls"} /nix/store 2>/dev/null | ${lib.getExe' pkgs.coreutils "wc"} -l) entries." >&2
+      fi
       echo "" >&2
       exec ${lib.getExe pkgs.bashNonInteractive} -i
     }
