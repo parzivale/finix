@@ -292,6 +292,30 @@ let
           // lib.optionalAttrs (unit.environment != { }) {
             env-file = envFormat.generate "${user}-${name}.env" unit.environment;
           }
+
+          # somewhere for the unit's own account of itself to go.
+          #
+          # dinit's default log type is `none` - output discarded - and nothing was setting
+          # otherwise, so a user unit that failed said only that it had. A session daemon dying
+          # with `exit status: 255` and no line anywhere explaining it is the whole cost: the tree
+          # is the part of the machine least visible from a terminal and it was the only part with
+          # no log at all.
+          #
+          # `buffer` rather than `file`: a file wants a path the user can write, which means
+          # inventing one per user and creating it before the tree starts, and its contents would
+          # then outlive the session that produced them. A buffer needs neither - it lives as long
+          # as the instance does, which is as long as the session does, and `dinitctl catlog
+          # <unit>` reads it back.
+          #
+          # This is the same thing `log = true` does for the system tree on finit, arrived at
+          # differently because dinit's route to it is a per-service property rather than a global.
+          // {
+            log-type = "buffer";
+            # 4k is not many lines, and the lines worth having are the ones from a daemon that is
+            # about to exit - which are the first ones out, so the buffer has to be large enough
+            # not to have wrapped past them by the time anyone looks.
+            log-buffer-size = 65536;
+          }
         );
       }
     ) u.units
