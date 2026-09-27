@@ -64,7 +64,17 @@ let
 
   # an edge naming a unit which has a wait unit means the wait, not the service: the service is
   # up as soon as it is running, which is the thing the wait exists because it is not enough.
-  edgeTo = dep: if (enabled ? ${dep}) && needsWaitUnit enabled.${dep} then waitNameOf dep else dep;
+  # an edge, resolved against the scope the unit lives in.
+  #
+  # Scoped rather than always `enabled`, because a user's tree is a graph of its own: its units
+  # are not in `enabled` at all, so a lookup there found nothing and every edge was left pointing
+  # at the service instead of at its readiness companion. Which is silent - dinit calls a
+  # `process` started once it has forked - so `wireplumber` began the moment `pipewire` existed
+  # rather than when it would answer, reinstating exactly the race `waitFor.socket` was chosen to
+  # close.
+  edgeIn = scope: dep: if (scope ? ${dep}) && needsWaitUnit scope.${dep} then waitNameOf dep else dep;
+
+  edgeTo = edgeIn enabled;
 
   typeOf =
     unit:
@@ -177,10 +187,10 @@ let
   true' = lib.getExe' pkgs.coreutils "true";
 
   mkBootSide =
-    name: unit:
+    scope: name: unit:
     {
       type = typeOf unit;
-      depends-ms = map edgeTo unit.requires;
+      depends-ms = map (edgeIn scope) unit.requires;
 
       # pulled in through `default` (waits-for) rather than `boot` (depends-on), so that a
       # unit which nothing else requires is still started without becoming a hard dependency
@@ -233,15 +243,24 @@ let
 
   # ---- the user role ----------------------------------------------------------------
   #
-  # Reached when providers.services.user.backend names dinit and the system supervisor is
-  # something else. The system supervisor then runs one dinit per user, and that dinit owns
-  # the user's tree; the two cannot observe each other's state, which is why the contract
-  # refuses an edge leaving a user's tree in this case.
+  # Reached when providers.services.user.backend names dinit, whatever is running the system -
+  # including dinit. A user's tree is supervised by an instance started by their session, so it is
+  # never the same instance as PID 1 even when it is the same implementation: PID 1 began before
+  # the session and outlives it, and could hold neither its environment nor its lifetime.
   #
-  # Nothing here is specific to what the system supervisor happens to be: the per-user trees
-  # are written out, and one ordinary unit per user is added to the system graph to run them,
-  # so finit - or anything else - runs a command it does not have to understand.
+  # The two instances cannot observe each other's state, which is why the contract refuses an edge
+  # leaving a user's tree.
+  #
+  # Nothing here is specific to what the system supervisor happens to be: the per-user trees are
+  # written out and the session starts one, so finit - or anything else - runs a command it does
+  # not have to understand.
   settingsFormat = import ./format.nix { inherit pkgs lib; };
+
+  # the same one `dinit.services` uses for its own `env-file`. `NAME=value`, one per line, which
+  # is what dinit reads - not the quoted shell assignments `keyValue` writes by default.
+  envFormat = pkgs.formats.keyValue {
+    mkKeyValue = k: v: "${k}=${toString v}";
+  };
 
   userDir = user: "dinit-user/${user}";
   socketDir = user: "/run/user-services/${user}";
@@ -257,36 +276,65 @@ let
         # the same bookkeeping keys the system tree strips: they are ours, not dinit's, and
         # it exits rather than ignoring one it does not recognise
         source = settingsFormat.generate name (
-          builtins.removeAttrs (mkBootSide name unit) [
+          builtins.removeAttrs (mkBootSide u.units name unit) [
             "enable"
             "environment"
             "path"
             "boot"
             "default"
           ]
+
+          # `environment` is one of those keys, and turning it into the file dinit does read is
+          # what the system tree's settings submodule does on the way past - which this does not
+          # go through, so it has to do it here. Left out, a unit's environment was accepted,
+          # stripped, and never reached the process: `ALSA_CONFIG_UCM2` naming a machine's mixer
+          # topology was set on pipewire and wireplumber and arrived at neither.
+          // lib.optionalAttrs (unit.environment != { }) {
+            env-file = envFormat.generate "${user}-${name}.env" unit.environment;
+          }
         );
       }
     ) u.units
+
+    # the readiness companions, one per unit whose readiness dinit cannot observe for itself.
+    #
+    # The same units the system tree gets and for the same reason: dinit calls a `process`
+    # started once it has forked, so without these a dependent begins when the service exists
+    # rather than when it answers. `edgeIn u.units` above points this user's edges at them.
+    // lib.mapAttrs' (
+      name: unit:
+      lib.nameValuePair "${userDir user}/${waitNameOf name}" {
+        source = settingsFormat.generate (waitNameOf name) {
+          type = "scripted";
+          command = "${readinessLib.scriptFor name (variantOf unit).readiness}";
+          depends-ms = [ name ];
+        };
+      }
+    ) (lib.filterAttrs (_: needsWaitUnit) u.units)
+
     // {
+      # everything in the tree, so that starting `boot` starts all of it - and the readiness
+      # companions too, since a unit nothing else waits for would otherwise never have its
+      # readiness observed at all.
       "${userDir user}/boot".source = settingsFormat.generate "boot" {
         type = "internal";
-        waits-for = lib.attrNames u.units;
+        waits-for =
+          lib.attrNames u.units
+          ++ map waitNameOf (lib.attrNames (lib.filterAttrs (_: needsWaitUnit) u.units));
       };
-    };
 
-  # the unit the system supervisor runs. it is an ordinary unit of the system graph, so it may
-  # depend on system units - and everything in that user's tree sits transitively behind
-  # whatever it depends on. that is the only cross-scope dependency this rule offers.
-  supervisorUnit = user: {
-    description = "dinit service manager for ${user}";
-    user = user;
-    # the socket directory must exist and be hers before her instance can open a socket in it
-    requires = [
-      "multi-user"
-      "user-services-dir--${user}"
-    ];
-    type.service.command = "${config.dinit.package}/bin/dinit --user -d /etc/${userDir user} -p ${socketDir user}/dinitctl boot";
-  };
+      # the head of the trunk, in this user's namespace.
+      #
+      # `requires` defaults to the head of the tree a unit is in, and the unit type is shared with
+      # the system's, so a user unit which said nothing about ordering named this. It is an anchor
+      # there and an anchor here: something to attach to, which is reached immediately because it
+      # waits for nothing.
+      "${userDir user}/${lib.head cfg.trunk.levels}".source =
+        settingsFormat.generate (lib.head cfg.trunk.levels)
+          {
+            type = "internal";
+          };
+    };
 
 in
 {
@@ -383,7 +431,7 @@ in
       };
 
       dinit.services =
-        lib.mapAttrs mkBootSide (lib.filterAttrs (n: u: !(onShutdownSide n u)) enabled)
+        lib.mapAttrs (mkBootSide enabled) (lib.filterAttrs (n: u: !(onShutdownSide n u)) enabled)
         // lib.listToAttrs (map (unit: lib.nameValuePair unit.name (mkShutdownSide unit)) shutdownOrdered)
 
         # one per unit whose readiness dinit cannot observe: a scripted unit which blocks until
@@ -483,30 +531,41 @@ in
       };
     })
 
-    # dinit as the per-user supervisor, with something else running the system
-    (lib.mkIf (cfg.user.backend == "dinit" && cfg.user.backend != cfg.backend) {
-      # dinit has a per-user mode, so it can serve this role
-      providers.services.user.supported = true;
+    # dinit supervising a user's tree, started by their session
+    #
+    # not gated on the system's backend being something else. dinit as PID 1 and a dinit per
+    # session is two processes, and that is correct rather than redundant: PID 1 started before
+    # any session existed and will outlive it, so it can have neither the session's environment
+    # nor its lifetime. systemd does the same thing for the same reason, one `systemd --user` per
+    # user beside PID 1 - and pays for the shared-across-sessions part with
+    # `import-environment`, which per-session starting is what avoids.
+    (lib.mkIf (cfg.user.backend == "dinit") {
+      providers.services.user.manager.supervisor.command =
+        user:
+        "${config.dinit.package}/bin/dinit --user -d /etc/${userDir user} -p ${socketDir user}/dinitctl boot";
 
       environment.etc = lib.concatMapAttrs userFiles cfg.users;
 
-      # the socket directory has to exist and belong to the user before their instance can
-      # open a control socket in it
-      providers.services.units =
-        lib.mapAttrs' (
-          user: _:
-          lib.nameValuePair "user-services-dir--${user}" {
-            description = "control socket directory for ${user}";
-            requires = [ "sysinit" ];
-            type.oneshot.command = pkgs.writeShellScript "user-services-dir-${user}" ''
-              ${lib.getExe' pkgs.coreutils "mkdir"} -p ${socketDir user}
-              ${lib.getExe' pkgs.coreutils "chown"} ${user} ${socketDir user}
-            '';
-          }
-        ) cfg.users
-        // lib.mapAttrs' (
-          user: _: lib.nameValuePair "user-services--${user}" (supervisorUnit user)
-        ) cfg.users;
+      # `-d` above, rather than dinit's own user-mode search path. the default list
+      # (`$XDG_CONFIG_HOME/dinit.d`, `$HOME/.config/dinit.d`, `/etc/dinit.d/user`, ...) has one
+      # shared directory per system, not one per user, so two users' trees would be the same
+      # tree. passing a directory suppresses the defaults, which is also what keeps a stray
+      # description in a home directory out of a generated tree.
+      #
+      # the socket directory has to exist and belong to the user before their instance can open a
+      # control socket in it - and it is still boot work, because it is the one part of this that
+      # needs root and so cannot happen inside the session.
+      providers.services.units = lib.mapAttrs' (
+        user: _:
+        lib.nameValuePair "user-services-dir--${user}" {
+          description = "control socket directory for ${user}";
+          requires = [ "sysinit" ];
+          type.oneshot.command = pkgs.writeShellScript "user-services-dir-${user}" ''
+            ${lib.getExe' pkgs.coreutils "mkdir"} -p ${socketDir user}
+            ${lib.getExe' pkgs.coreutils "chown"} ${user} ${socketDir user}
+          '';
+        }
+      ) cfg.users;
     })
   ];
 }

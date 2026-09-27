@@ -419,10 +419,15 @@ in
         path = true;
       };
 
-      # finit has no per-user mode. it runs a unit as a given user, which is what the first rule
-      # for user units uses, but there is no per-user finit to be one user's own supervisor - so
-      # it never claims the user scope.
-      providers.services.user.supported = lib.mkDefault false;
+      # nothing said about the user scope, which is how an implementation says it cannot serve
+      # it: `providers.services.user.manager` is `none` until something claims otherwise.
+      #
+      # finit runs a unit as a given user, which is what `providers.services.units` with `user`
+      # is for, but it has no per-user instance to be one user's own supervisor - a finit whose
+      # pid is not 1 and whose euid is not root returns EX_NOPERM. the design for one is written
+      # down beside that check, reading ~/.config/finit.conf with its api socket in
+      # /run/user/$UID, so this is a "not yet" rather than a "never" - and when it arrives it
+      # sets the tag and nothing else here changes.
 
       finit.services = lib.mapAttrs mkService services;
 
