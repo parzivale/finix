@@ -123,6 +123,25 @@ let
     #
     # Bounded, and the bound is the honest part: unmounted after this long is a machine that is
     # not going to boot, and saying so beats a hang with no output.
+    # a shell, rather than a reboot, when there is nothing else to be done.
+    #
+    # Reaching this means the machine cannot boot, and rebooting to the same entry means it
+    # cannot boot again - a loop with a ten-second window to read the reason in. A shell is the
+    # one thing that turns that into something diagnosable from the machine itself: the store may
+    # well be mounted, so its whole closure is there to look with.
+    #
+    # It is also the only way this mode reports anything at all. There is no log: syslog is a
+    # unit, units are the init's, and the init is what did not start - so /var/log has nothing
+    # from a boot which failed here, and cannot have.
+    rescue() {
+      echo "" >&2
+      echo "initramfs-root: $1" >&2
+      echo "initramfs-root: ${config.boot.init} was not started. dropping to a shell." >&2
+      echo "initramfs-root: the store is $([ -d /nix/store ] && echo mounted || echo NOT mounted)." >&2
+      echo "" >&2
+      exec ${lib.getExe pkgs.bashNonInteractive} -i
+    }
+
     deadline=$(( $(${lib.getExe' pkgs.coreutils "date"} +%s) + 30 ))
 
     while :; do
@@ -133,13 +152,7 @@ let
       [ "$fail" -eq 0 ] && break
 
       if [ "$(${lib.getExe' pkgs.coreutils "date"} +%s)" -ge "$deadline" ]; then
-        echo "" >&2
-        echo "initramfs-root: after 30s, still not mounted:$missing" >&2
-        echo "initramfs-root: so ${config.boot.init} is not reachable, and there is no stage to" >&2
-        echo "initramfs-root: fall back to. the device may need a module which is not in" >&2
-        echo "initramfs-root: boot.initrd.availableKernelModules." >&2
-        ${lib.getExe' pkgs.coreutils "sleep"} 10
-        exec ${pkgs.util-linux}/bin/reboot -f
+        rescue "after 30s, still not mounted:$missing - the device may need a module which is not in boot.initrd.availableKernelModules"
       fi
 
       ${lib.getExe' pkgs.coreutils "sleep"} 0.2
@@ -161,7 +174,17 @@ let
     #
     # Backends that also run it will run it twice. That is redundant rather than wrong: an
     # activation script is idempotent, and the symlinks it places are `ln -sfn`.
-    ${config.providers.services.activationScript}
+    #
+    # Its status is checked, which it was not. Activation failing leaves no /etc, so the init
+    # then starts with no configuration to read - and finit's account of that is a complaint
+    # about /etc/fstab, which sends whoever reads it looking at filesystems rather than at the
+    # script which was supposed to write the file. An activation script reports a non-zero status
+    # if any of its snippets failed, so this is deliberately loud rather than fatal on its own:
+    # `activate` carries on past a failed snippet, and some of what it does is not needed to
+    # reach a shell.
+    if ! ${config.providers.services.activationScript}; then
+      rescue "activation reported failure - see the snippet names above"
+    fi
 
     # execed, not run: this is PID 1, and whatever it hands over to has to stay PID 1. The
     # command line still carries init=, which the kernel ignored in favour of this script but
