@@ -27,7 +27,10 @@ in
     };
   };
 
-  config.boot.initrd = {
+  # the whole of this is stage one: the finit that runs it, the configuration it reads, the tty
+  # it opens on failure, and the switch-root that ends it. With `pivot = false` there is no
+  # stage, and `/init` is supplied by boot/initramfs-root.nix instead.
+  config.boot.initrd = lib.mkIf cfg.pivot {
     # finit's own binary in the initramfs PATH
     path = [ config.finit.package ];
 

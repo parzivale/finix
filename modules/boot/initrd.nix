@@ -45,6 +45,39 @@ in
       '';
     };
 
+    pivot = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = ''
+        Whether the initramfs hands the machine over to a root filesystem, or is that root
+        itself.
+
+        With it on, which is how every machine here has booted so far, the initramfs is a first
+        stage: it arranges whatever the real root needs - a device to appear, a volume to open,
+        a tmpfs to create and populate - and then `switch_root`s into it, execing
+        {option}`boot.init` there. Two inits, two configurations, and `/` is whatever stage one
+        mounted.
+
+        With it off there is no handover. The kernel's own rootfs - already a tmpfs, which is
+        where an initramfs is unpacked - is the root the machine keeps, and `/init` is a small
+        program that mounts the filesystems marked {option}`fileSystems.<name>.neededForBoot`
+        and then execs {option}`boot.init` in place. One init, one configuration, and `/` from
+        the first instruction.
+
+        What it is for is a machine whose root is a tmpfs anyway. Such a root cannot be reached
+        without an initramfs - it has no device to name and nothing to populate it - so the
+        handover creates a second tmpfs and moves into it, having already been in one. Turning
+        this off skips that.
+
+        What it cannot do is anything stage one does beyond mounting: no LUKS to open, no
+        volume group to import, no device to wait for. A machine needing any of those wants the
+        stage, which is why this is an option rather than a replacement.
+
+        Not the same as {option}`boot.initrd.enable` being off - that means no initramfs at all
+        and a root the kernel mounts from `root=`, which a tmpfs cannot be.
+      '';
+    };
+
     compressor = lib.mkOption {
       default =
         if lib.versionAtLeast config.boot.kernelPackages.kernel.version "5.9" then "zstd" else "gzip";

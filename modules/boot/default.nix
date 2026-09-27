@@ -10,6 +10,7 @@
     ./bootspec.nix
     ./efi.nix
     ./initrd.nix
+    ./initramfs-root.nix
     ./kernel.nix
     ./root.nix
     ./sysctl.nix
