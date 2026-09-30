@@ -53,6 +53,15 @@ struct Config {
     /// The service manager and its arguments. The last thing this process does.
     exec: Vec<String>,
 
+    /// What `/` is declared to be, when the kernel could not mount that itself.
+    #[serde(default)]
+    root: Option<Root>,
+
+    /// Where the store's filesystem is declared to be mounted - normally /nix. The old root
+    /// lands here after the pivot, which is where every store path already expects it.
+    #[serde(rename = "storeMount", default = "default_store_mount")]
+    store_mount: String,
+
     /// Filesystems to mount before activation, shallowest first.
     #[serde(default)]
     mounts: Vec<Mount>,
@@ -60,6 +69,97 @@ struct Config {
     /// Steps to take before the exec. Absent in a file from a configuration that needed none.
     #[serde(default)]
     pre: Vec<PreOp>,
+}
+
+/// What `/` is declared to be, when that differs from what the kernel mounted.
+///
+/// Only meaningful on the direct path. The kernel cannot mount a tmpfs from `root=` - there is no
+/// device to name and nothing to populate it with - so a machine whose `/` is a tmpfs names the
+/// filesystem holding its *store* instead, and arrives here with that mounted at `/`. Turning
+/// that into the declared arrangement is this binary's job, and is the last thing a stage 1 was
+/// still needed for.
+#[derive(Deserialize)]
+struct Root {
+    #[serde(rename = "fsType")]
+    fs_type: String,
+    #[serde(default)]
+    options: Vec<String>,
+}
+
+const TMPFS_MAGIC: i64 = 0x0102_1994;
+
+/// Make every mount below `/` private.
+///
+/// `pivot_root` refuses - EINVAL - if the new root or its parent is shared, and what makes them
+/// shared is not anything here: it is whatever the kernel or a previous stage set up. Asking for
+/// private propagation first costs nothing when they already are.
+fn make_root_private() {
+    // `mount_change` rather than `mount`: propagation is its own operation with its own flag set,
+    // not a flag on a mount. Asking for it through MountFlags is a compile error rather than a
+    // silent no-op, which is the good outcome.
+    if let Err(e) = rustix::mount::mount_change(
+        "/",
+        rustix::mount::MountPropagationFlags::REC | rustix::mount::MountPropagationFlags::PRIVATE,
+    ) {
+        say!("cannot make / private: {e} - pivot_root may refuse");
+    }
+}
+
+fn is_tmpfs(path: &str) -> bool {
+    rustix::fs::statfs(path)
+        .map(|s| s.f_type as i64 == TMPFS_MAGIC)
+        .unwrap_or(false)
+}
+
+/// Put the declared root in place, with what the kernel mounted moved to where the store lives.
+///
+/// The sequence matters and each step is there for a reason:
+///
+///   - the tmpfs is mounted on a directory *of the current root*, which is the store device. That
+///     leaves an empty `/.finix-root` behind on it, which is the price of having somewhere to
+///     stand: pivot_root needs both paths to exist before either is the root.
+///   - the old root has to be moved somewhere inside the new one, and where it belongs is where
+///     the store is declared to be mounted - normally /nix. So the directory made for it is the
+///     store's own mount point, and after the pivot the device is exactly where every store path
+///     already expects it.
+///   - `chdir("/")` after, because pivot_root leaves the working directory on the old root, and a
+///     process holding that would keep it busy.
+fn pivot_to_declared_root(root: &Root, store_mount: &str) {
+    if root.fs_type != "tmpfs" {
+        return;
+    }
+    if is_tmpfs("/") {
+        // a stage already built this, or the kernel did. Nothing to do.
+        return;
+    }
+
+    say!("/ is not the declared tmpfs; pivoting");
+
+    let new_root = "/.finix-root";
+    let old_root = format!("{new_root}{store_mount}");
+
+    if let Err(e) = fs::create_dir_all(new_root) {
+        rescue(&format!("cannot create {new_root}: {e}"));
+    }
+
+    let data = root.options.join(",");
+    if let Err(e) = mount("tmpfs", new_root, "tmpfs", MountFlags::empty(), data.as_str()) {
+        rescue(&format!("cannot mount the declared tmpfs on {new_root}: {e}"));
+    }
+
+    if let Err(e) = fs::create_dir_all(&old_root) {
+        rescue(&format!("cannot create {old_root}: {e}"));
+    }
+
+    if let Err(e) = rustix::process::pivot_root(new_root, &old_root) {
+        rescue(&format!(
+            "pivot_root({new_root}, {old_root}) failed: {e} - / may still be shared"
+        ));
+    }
+
+    if let Err(e) = rustix::process::chdir("/") {
+        say!("cannot chdir to the new root: {e}");
+    }
 }
 
 /// A filesystem the configuration wants mounted before the service manager starts.
@@ -246,29 +346,46 @@ fn main() {
     //
     // With an initrd this has been mounted since stage 1 and survived the switch_root. With none,
     // nothing has mounted anything, and the failure that produces is misleading: reading
-    // /proc/cmdline gets ENOENT, which looks like a kernel that was passed no command line
-    // rather than a /proc that is not there.
+    // /proc/cmdline gets ENOENT, which looks like a kernel that was passed no command line rather
+    // than a /proc that is not there.
     ensure_mount("proc", "/proc", "proc", MountFlags::NOSUID | MountFlags::NODEV | MountFlags::NOEXEC);
 
     let system = match find_system() {
         Some(s) => s,
         None => rescue("cannot tell which system to activate: no finix_system= or init= on the kernel command line"),
     };
+
+    let config = match read_config(&system) {
+        Ok(c) => c,
+        Err(e) => rescue(&format!("{e}")),
+    };
+
+    // step 2: propagation, before anything tries to pivot on it
+    make_root_private();
+
+    // step 3: the declared root, where the kernel could not mount it itself
+    if let Some(root) = &config.root {
+        pivot_to_declared_root(root, &config.store_mount);
+    }
+
+    // where the closure is *now*, which the pivot may have changed.
+    //
+    // On the direct path the kernel mounted the store's own filesystem at `/`, so a store path was
+    // reachable without the prefix it is named with - /store/... rather than /nix/store/... . The
+    // pivot puts that filesystem where it is declared to be, and every absolute path in the
+    // configuration starts resolving. Asked rather than assumed, because the same binary serves
+    // the path where no pivot happened at all.
+    let system = relocate(&system, &config.store_mount);
     say!("system is {}", system.display());
 
     // step 4: the rest of the virtual filesystems.
     //
     // /dev before anything names a device node, which activation does. CONFIG_DEVTMPFS_MOUNT
     // sounds like it covers this and does not: the kernel mounts devtmpfs for a root it mounted
-    // itself, and only after `/` is in place - not for a root handed over by an initramfs.
+    // itself, and only after `/` is in place.
     ensure_mount("sys", "/sys", "sysfs", MountFlags::NOSUID | MountFlags::NODEV | MountFlags::NOEXEC);
     ensure_mount("devtmpfs", "/dev", "devtmpfs", MountFlags::NOSUID);
     ensure_mount("tmpfs", "/run", "tmpfs", MountFlags::NOSUID | MountFlags::NODEV);
-
-    let config = match read_config(&system) {
-        Ok(c) => c,
-        Err(e) => rescue(&format!("{e}")),
-    };
 
     // step 5: the filesystems the configuration says have to be there first
     mount_all(&config.mounts);
@@ -276,9 +393,9 @@ fn main() {
     // step 6: activation, and its status.
     //
     // The service manager's own configuration is in /etc, and /etc is what this puts there, so
-    // there is no ordering in which the manager could do it for itself. Running it and not
-    // looking at the result was how a failure here turned into the manager complaining about a
-    // missing /etc/fstab three steps later.
+    // there is no ordering in which the manager could do it for itself. Running it and not looking
+    // at the result was how a failure here turned into the manager complaining about a missing
+    // /etc/fstab three steps later.
     activate(&system);
 
     // step 7: whatever the backend needs in place first
@@ -286,6 +403,26 @@ fn main() {
 
     // step 8: the service manager, exec'd rather than spawned, because PID 1 is what it has to be
     exec_manager(&config, &system)
+}
+
+/// The closure's path after whatever step 3 did, found by asking rather than by remembering.
+///
+/// Both candidates are tried in the order that makes the no-pivot case free: a machine which
+/// pivoted finds its closure under the store's mount point, one which did not finds it where it
+/// was named.
+fn relocate(system: &Path, store_mount: &str) -> PathBuf {
+    if system.join("activate").exists() {
+        return system.to_path_buf();
+    }
+
+    let stripped = system.strip_prefix("/").unwrap_or(system);
+    let moved = Path::new(store_mount).join(stripped);
+    if moved.join("activate").exists() {
+        return moved;
+    }
+
+    // neither, which activate() will report against the more useful of the two
+    system.to_path_buf()
 }
 
 /// Mount `target` unless something is already there.
@@ -435,3 +572,7 @@ fn count_store() -> usize {
     fs::read_dir("/nix/store").map(|d| d.count()).unwrap_or(0)
 }
 
+
+fn default_store_mount() -> String {
+    "/nix".to_string()
+}

@@ -32,7 +32,9 @@ let
     "rw"
   ];
 
-  rootflags = lib.filter (opt: !(lib.elem opt ownFlags)) root.options;
+  rootflags = lib.filter (opt: !(lib.elem opt ownFlags)) (
+    if kernelRoot == null then [ ] else kernelRoot.options
+  );
 
   # what the kernel is handed as root=, which is not always what the machine wrote down.
   #
@@ -122,22 +124,42 @@ let
   # what the root is finally called: what it says, if the kernel can use it; otherwise whatever
   # else the same device is known by.
   resolved =
-    if root == null || root.device == null then
+    if kernelRoot == null || kernelRoot.device == null then
       null
-    else if kernelResolvable root.device then
-      translate root.device
+    else if kernelResolvable kernelRoot.device then
+      translate kernelRoot.device
     else
       let
-        other = preferred (lib.filter (d: d != root.device) (aliasesFor root.device));
+        other = preferred (lib.filter (d: d != kernelRoot.device) (aliasesFor kernelRoot.device));
       in
       if other == null then null else translate other;
 
   device = resolved;
 
+  # what the kernel is told to mount as `/`.
+  #
+  # Normally that is `/` itself. Where `/` is a tmpfs it cannot be: there is no device to name
+  # and nothing to populate it with, so the kernel is given the filesystem holding the *store*
+  # instead, and finix-init pivots to the declared tmpfs once it is running. That filesystem is
+  # the one thing which must be there before anything else can be, being where the binary and
+  # everything it runs live.
+  kernelRoot =
+    if !virtualRoot then
+      root
+    else
+      let
+        holders = lib.filter (fs: lib.hasPrefix fs.mountPoint "/nix/store") (
+          lib.attrValues config.fileSystems
+        );
+      in
+      lib.foldl' (
+        a: b: if a == null || lib.stringLength b.mountPoint > lib.stringLength a.mountPoint then b else a
+      ) null holders;
+
   params = [
     "root=${device}"
   ]
-  ++ lib.optional (root.fsType != "auto") "rootfstype=${root.fsType}"
+  ++ lib.optional (kernelRoot.fsType != "auto") "rootfstype=${kernelRoot.fsType}"
   ++ lib.optional (rootflags != [ ]) "rootflags=${lib.concatStringsSep "," rootflags}"
 
   # read-write from the first instruction, unless the machine asked for otherwise.
@@ -148,7 +170,7 @@ let
   # is /etc, so on a read-only root there is no /etc for finit to read its fstab out of and the
   # boot ends in sulogin. There is nothing to remount with before the thing which does the
   # remounting exists.
-  ++ [ (if lib.elem "ro" root.options then "ro" else "rw") ]
+  ++ [ (if lib.elem "ro" kernelRoot.options then "ro" else "rw") ]
 
   # `rootwait`, always.
   #
@@ -229,7 +251,9 @@ in
   };
 
   config = lib.mkIf (!config.boot.initrd.enable) {
-    boot.kernelParams = lib.mkIf (root != null && !virtualRoot) params;
+    # `device != null` as well: with nothing resolved there is no `root=` to write, and the
+    # assertions below are what should report that rather than a coercion error from this string.
+    boot.kernelParams = lib.mkIf (kernelRoot != null && device != null) params;
 
     # and never checked at boot, which the fstab has to say out loud.
     #
@@ -288,7 +312,7 @@ in
 
     assertions = [
       {
-        assertion = root != null;
+        assertion = virtualRoot || root != null;
         message = ''
           boot.initrd.enable is false, so the kernel mounts the root filesystem itself and
           has to be told which one. Declare fileSystems."/".
@@ -296,7 +320,7 @@ in
       }
 
       {
-        assertion = root == null || root.device != null;
+        assertion = virtualRoot || root == null || root.device != null;
         message = ''
           boot.initrd.enable is false, so the root filesystem is named to the kernel as root=
           on the command line, and fileSystems."/" has no device to name it by.
@@ -311,7 +335,7 @@ in
       {
         # only when nothing could be resolved: a device named as one of udev's symlinks is
         # fine if something said what else that device is called.
-        assertion = root == null || root.device == null || device != null;
+        assertion = virtualRoot || root == null || root.device == null || device != null;
         message = ''
           fileSystems."/".device is ${toString root.device}, which is a symlink udev or mdevd
           makes once it is running - and with no initrd, nothing is running when the kernel
@@ -333,13 +357,27 @@ in
         '';
 
       }
+      # no assertion against a tmpfs root here any more.
+      #
+      # It used to say the kernel cannot mount one - true - and conclude that such a machine needs
+      # an initrd, which stopped being true when finix-init learned to pivot. The kernel is given
+      # the filesystem holding the store instead, and the binary puts the declared tmpfs in place
+      # once it is running. What has to hold is that something *does* hold the store, which is the
+      # assertion below.
 
+      # the tmpfs root's one prerequisite
       {
-        assertion = root == null || !virtualRoot;
+        assertion = !virtualRoot || kernelRoot != null;
         message = ''
-          fileSystems."/" is ${root.fsType}, which the kernel cannot mount as a root: there
-          is no device to name and nothing to populate it with. A root of that shape is
-          created by an initrd, so this machine needs boot.initrd.enable = true.
+          fileSystems."/" is ${root.fsType} and boot.initrd.enable is false, so the kernel has
+          nothing it can mount as a root: a tmpfs has no device to name and nothing to populate
+          it with.
+
+          What it is given instead is the filesystem holding the store, and finix-init pivots to
+          the declared tmpfs once it is running - but no fileSystems entry covers /nix/store, so
+          there is nothing to name and nothing for the binary to be run out of.
+
+          Give the store a filesystem of its own, or enable the initrd so a stage builds the root.
         '';
       }
 

@@ -802,6 +802,41 @@ in
           exec = cfg.exec;
           pre = cfg.pre;
 
+          # what `/` is declared to be, when the kernel cannot mount that itself.
+          #
+          # Emitted only for a tmpfs root, because that is the only case where what the kernel
+          # mounted and what the configuration asked for differ. finix-init checks anyway - it
+          # compares `/`'s statfs type against this - so a machine whose stage 1 already built the
+          # tmpfs passes straight through.
+          root =
+            let
+              r = config.fileSystems."/" or null;
+            in
+            lib.optionalAttrs
+              (
+                r != null
+                && lib.elem r.fsType [
+                  "tmpfs"
+                  "ramfs"
+                ]
+              )
+              {
+                inherit (r) fsType options;
+              };
+
+          # where the store's filesystem is declared to live, which is where the old root goes
+          # when finix-init pivots: after it, every absolute store path in this file resolves.
+          storeMount =
+            let
+              holders = lib.filter (fs: lib.hasPrefix fs.mountPoint "/nix/store") (
+                lib.attrValues config.fileSystems
+              );
+              deepest = lib.foldl' (
+                a: b: if lib.stringLength b.mountPoint > lib.stringLength a.mountPoint then b else a
+              ) { mountPoint = "/"; } holders;
+            in
+            deepest.mountPoint;
+
           # `neededForBoot`, shallowest first - which is the ordering that matters and not an
           # alphabetical one: a path cannot be mounted over a parent which is not there yet. Sorted
           # here because this is where the depths are known, so the binary can walk the list.
