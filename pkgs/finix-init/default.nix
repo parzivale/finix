@@ -29,6 +29,13 @@ pkgsStatic.rustPlatform.buildRustPackage {
   # there is no way to be PID 1 in a build sandbox, so what tests exist are the VM tests
   doCheck = false;
 
+  # `--strip-all`, not the `--strip-debug` the fixup phase does by default. Most of what is left
+  # in a release build is the symbol table, and nothing here reads it: a backtrace would need a
+  # panic handler that unwinds, and this aborts. 634k to 463k, which is 27% - more than any
+  # opt-level is worth here. `opt-level = "z"` was measured and made it *bigger* (652k): it turns
+  # off loop vectorisation, and with LTO on that costs more elsewhere than it saves.
+  stripAllList = [ "bin" ];
+
   meta = {
     description = "finix PID 1 preamble: prepare /, activate the configuration, exec the service manager";
     license = lib.licenses.mit;

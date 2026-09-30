@@ -14,9 +14,13 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 [profile.release]
-# a panic in PID 1 that unwinds is a kernel panic with a worse message. Abort, and let the
-# handler installed in main say something useful first.
+# a panic in PID 1 that unwinds is a kernel panic with a worse message. Abort, and let the hook
+# installed in main say something useful first.
 panic = "abort"
+
+# `s`, measured against `z`. `z` is the more aggressive of the two and made this *larger* -
+# 652k against 634k - because it turns off loop vectorisation, and with LTO on that costs more
+# elsewhere than it saves. Stripping is where the size actually is: see stripAllList in
+# default.nix, which takes 634k to 463k.
 opt-level = "s"
 lto = true
-strip = true
