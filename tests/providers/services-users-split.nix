@@ -1,19 +1,20 @@
-# per-user service graphs under a separate user supervisor
+# per-user service graphs, started by a session
 #
-# the second of the two rules. `providers.services.user.backend` names a different
-# implementation from the system one, so the system supervisor no longer owns the user's units:
-# it runs one user supervisor per user, and that supervisor owns them.
+# `providers.services.user.backend` names the implementation which supervises a user's tree, and
+# an instance of it is started by that user's session rather than at boot. finit is PID 1 and
+# dinit is alice's supervisor here, which is the combination worth testing: the session runs a
+# command nothing on the system side has to understand, so nothing about finit knows what a dinit
+# is.
 #
-# finit is PID 1 and dinit supervises each user here, which is the combination worth testing -
-# the system side runs a command it does not have to understand, so nothing about finit knows
-# what a dinit is. systemd is the awkward case rather than this one: `systemd --user` expects
-# PID 1 systemd to have prepared its cgroup and bus, so it can serve both scopes only as a
-# matched pair.
+# What it costs is that the two supervisors cannot observe each other, so a user unit may only
+# depend on other units of the same user. The contract asserts against a crossing edge rather than
+# letting it quietly stop meaning what it said. What the whole tree waits for is whatever started
+# the session.
 #
-# what this costs is the freedom rule 1 has. The two supervisors cannot observe each other, so
-# a user unit may only depend on other units of the same user; what the whole tree waits for is
-# whatever the unit running that user's supervisor waits for. The contract asserts against a
-# crossing edge rather than letting it quietly stop meaning what it said.
+# There used to be a second rule, where a user's units were emitted into the system supervisor and
+# owned by that user - ordinary system units wearing a name. It is gone, and so is the test for it:
+# a supervisor already running when a session begins cannot inherit anything from it, which is the
+# whole reason to have one per session.
 {
   name = "providers.services-users-split";
 
@@ -74,48 +75,60 @@
       };
     };
 
-  testScript = ''
-    import json
+  testScript =
+    { nodes, ... }:
+    ''
+      from datetime import timedelta
 
-    def status(name):
-        out = machine.execute(f"initctl -j status {name}")[1]
-        try:
-            return json.loads(out)["status"]
-        except Exception:
-            return "absent"
+      machine.start()
+      machine.wait_for_console_text("entering runlevel 2")
 
-    machine.start()
-    machine.wait_for_console_text("entering runlevel 2")
+      with subtest("her tree was written out for her own supervisor"):
+          for unit in ["agent", "helper", "boot", "start"]:
+              machine.succeed(f"test -e /etc/dinit-user/alice/{unit}")
 
-    with subtest("the system supervisor runs one user supervisor"):
-        machine.wait_until_succeeds(
-            "initctl -j status user-services--alice | grep -q running", timeout=90
-        )
+          # and not into the system supervisor's own configuration
+          machine.fail("test -e /etc/finit.d/agent--alice.conf")
+          machine.fail("test -e /etc/finit.d/agent.conf")
 
-    with subtest("alice's tree was written out for her own supervisor"):
-        for unit in ["agent", "helper", "boot"]:
-            machine.succeed(f"test -e /etc/dinit-user/alice/{unit}")
+      with subtest("the socket directory is hers before any session starts"):
+          # the one part of this which needs root, and so the one part left at boot
+          machine.wait_until_succeeds("test -d /run/user-services/alice", timeout=90)
+          assert machine.succeed("stat -c %U /run/user-services/alice").strip() == "alice"
 
-        # and not into the system supervisor's own configuration
-        machine.fail("test -e /etc/finit.d/agent--alice.conf")
+      with subtest("nothing of hers is running yet"):
+          # which is the point of the rule: her units belong to a session, and there is not one
+          machine.fail("dinitctl -p /run/user-services/alice/dinitctl status agent")
+          machine.fail("test -f /run/svc-test/alice-agent.user")
 
-    with subtest("her units are running, owned by her"):
-        machine.wait_until_succeeds("test -f /run/svc-test/alice-agent.user", timeout=90)
-        machine.wait_until_succeeds("test -f /run/svc-test/alice-helper.user", timeout=90)
-        assert machine.succeed("cat /run/svc-test/alice-agent.user").strip() == "alice"
-        assert machine.succeed("cat /run/svc-test/alice-helper.user").strip() == "alice"
+      with subtest("a session starts her supervisor"):
+          # what greetd does: run the launcher as the user, with the session as its payload. No
+          # `--session-env`, there being no compositor here to wait for.
+          machine.succeed(
+              "setpriv --reuid=3001 --regid=100 --clear-groups "
+              "${nodes.machine.config.providers.services.user.sessionLauncher} --user alice -- sleep infinity >/dev/null 2>&1 &"
+          )
+          machine.wait_until_succeeds(
+              "dinitctl -p /run/user-services/alice/dinitctl status agent | grep -q STARTED",
+              timeout=90,
+          )
 
-    with subtest("her supervisor is reachable, and hers alone"):
-        machine.succeed(
-            "dinitctl -p /run/user-services/alice/dinitctl status agent | grep -q STARTED"
-        )
+      with subtest("her units are running, owned by her"):
+          machine.wait_until_succeeds("test -f /run/svc-test/alice-agent.user", timeout=90)
+          machine.wait_until_succeeds("test -f /run/svc-test/alice-helper.user", timeout=90)
+          assert machine.succeed("cat /run/svc-test/alice-agent.user").strip() == "alice"
+          assert machine.succeed("cat /run/svc-test/alice-helper.user").strip() == "alice"
 
-    with subtest("stopping her supervisor takes the whole tree with it"):
-        # this is what makes logout tractable under this rule: one unit, not a subtree
-        machine.succeed("initctl stop user-services--alice")
-        machine.sleep(3)
-        machine.fail("dinitctl -p /run/user-services/alice/dinitctl status agent")
+      with subtest("ending the session takes the whole tree with it"):
+          # the payload exiting is what a logout is, and the launcher stops the supervisor behind
+          # it. This is what the boot-started arrangement could not do at all: nothing told it a
+          # session had ended.
+          machine.succeed("pkill -u alice -x sleep")
+          machine.wait_until_fails(
+              "dinitctl -p /run/user-services/alice/dinitctl status agent",
+            timeout=timedelta(seconds=30),
+          )
 
-    machine.shutdown()
-  '';
+      machine.shutdown()
+    '';
 }
