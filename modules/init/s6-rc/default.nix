@@ -310,20 +310,33 @@ let
   # every script the maker writes. Not under /run: s6-linux-init mounts its own tmpfs there.
   initBase = "/s6-linux-init";
 
-  # a tarball rather than a directory, because run-image contains two fifos - one of them the
-  # channel s6-linux-init-shutdownd listens on - and a Nix store cannot hold a fifo at all.
-  # Archiving preserves them; the wrapper below unpacks it before the real init runs.
+  # the two channels which cannot be in the store, and so cannot be in `initTree`.
   #
-  # fakeroot because the maker chowns run-image/uncaught-logs to the catch-all logger's user,
-  # which a build cannot do - it reports that as "unable to mkdir", which is misleading enough
-  # to be worth writing down.
-  initImage =
-    pkgs.runCommand "s6-linux-init-image"
+  # A derivation output holds regular files, directories and symlinks. A fifo is none of those, and
+  # these two are: the catch-all logger's, and the one s6-linux-init-shutdownd listens on. That is
+  # the whole reason this used to be a tarball - archiving preserves the node type, and a wrapper
+  # unpacked it before the real init ran.
+  #
+  # Named rather than discovered, because `pre` is data and discovery happens at build time. The
+  # build asserts these are the only two, so a layout change in s6-linux-init breaks it with
+  # something to read rather than leaving a boot to fail on a missing channel.
+  initFifos = [
+    "run-image/service/s6-svscan-log/fifo"
+    "run-image/service/s6-linux-init-shutdownd/fifo"
+  ];
+
+  # the generated tree, as a directory.
+  #
+  # fakeroot because the maker calls chown. `-u root` means the catch-all logger is root, so there
+  # is no ownership to preserve - but the call itself fails with EPERM in a build sandbox whatever
+  # the target uid, and it reports that as "unable to mkdir", which is misleading enough to be
+  # worth writing down. Faking the call is enough; nothing needs to survive into the output.
+  initTree =
+    pkgs.runCommand "s6-linux-init-tree"
       {
         nativeBuildInputs = [
           s6-linux-init
           pkgs.fakeroot
-          pkgs.gnutar
         ];
       }
       ''
@@ -343,23 +356,19 @@ let
             -u root \
             "$TMPDIR/gen"
 
-          tar -C "$TMPDIR/gen" -cf $out .
+          ${lib.concatMapStringsSep "\n          " (f: ''rm -f "$TMPDIR/gen/${f}"'') initFifos}
+
+          left=$(find "$TMPDIR/gen" -type p -printf "%P\n")
+          if [ -n "$left" ]; then
+            echo "s6-linux-init-maker made fifos this module does not name:" >&2
+            echo "$left" >&2
+            echo "add them to initFifos in modules/init/s6-rc/default.nix" >&2
+            exit 1
+          fi
+
+          cp -a "$TMPDIR/gen" $out
         '
       '';
-
-  initWrapper = pkgs.writeShellScript "s6-init" ''
-    export PATH=${
-      lib.makeBinPath [
-        pkgs.coreutils
-        pkgs.gnutar
-      ]
-    }:$PATH
-
-    mkdir -p ${initBase}
-    tar -xf ${initImage} -C ${initBase}
-
-    exec ${initBase}/bin/init "$@"
-  '';
 in
 {
   # enabling an implementation is what selects it: this names itself into the contract
@@ -519,21 +528,34 @@ in
       # s6-linux-init prepares /run, populates the scandir from its run-image, starts s6-svscan
       # on it, and only then runs rc.init - so the database is brought up against a scandir which
       # is already live, with no polling for a control fifo to appear.
-      # the argv is the unpack wrapper rather than s6's init directly.
+      # s6's own init, directly. There is no wrapper any more.
       #
-      # run-image holds two fifos - one is s6-linux-init-shutdownd's channel - and a store cannot
-      # hold a fifo, so what is in the store is a tarball and something has to unpack it. That is
-      # all the wrapper still does: activation and the fingerprint copy have moved out.
-      #
-      # Making it a directory plus `mkfifo` ops is possible and is not free: the maker also chowns
-      # run-image/uncaught-logs to the logger's user, which a build cannot do either, so it wants a
-      # `chown` op and a way to name fifos found at build time. Worth doing on its own.
-      providers.services.exec = [ "${initWrapper}" ];
+      # What the wrapper did was untar the generated tree, because two of its entries are fifos and
+      # a store path cannot hold one. `pre` does that as data now: the tree is an ordinary store
+      # directory, copied where the maker baked its own location, and the two channels made
+      # afterwards. gnutar and coreutils leave the boot path with it.
+      providers.services.exec = [ "${initBase}/bin/init" ];
 
-      # the generation about to be started, recorded as the running one. Before the exec rather
-      # than in activation, which runs on every switch too: rewriting these then would tell the
-      # next `list` that whatever is running was already what is being switched into.
       providers.services.pre = [
+        # the generated tree, where every script in it expects to be. Writable because s6 writes
+        # into run-image as it runs, and dereferenced because a copy of store symlinks would be a
+        # tree of read-only paths.
+        {
+          op = "copyTree";
+          from = initTree;
+          to = initBase;
+          writable = true;
+        }
+      ]
+      ++ map (f: {
+        op = "mkfifo";
+        path = "${initBase}/${f}";
+        mode = 384; # 0600, as the maker makes them
+      }) initFifos
+      ++ [
+        # the generation about to be started, recorded as the running one. Before the exec rather
+        # than in activation, which runs on every switch too: rewriting these then would tell the
+        # next `list` that whatever is running was already what is being switched into.
         {
           op = "copyTree";
           from = fingerprintDir;
@@ -545,7 +567,7 @@ in
       # s6-linux-init-maker generates these three beside the init it generates, each one talking
       # to s6-linux-init-shutdownd over the fifo in the run-image. So they are named under the
       # unpacked directory rather than in the store: the store copy is inside a tarball, because
-      # that fifo cannot be a store path, and ${initBase} is where initWrapper unpacks it.
+      # that fifo cannot be a store path, and ${initBase} is where `pre` copies the tree.
       providers.services.shutdownCommands = {
         poweroff = "${initBase}/bin/poweroff";
         reboot = "${initBase}/bin/reboot";
