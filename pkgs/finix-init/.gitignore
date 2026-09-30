@@ -1,0 +1,3 @@
+# cargo's build directory. The Nix build uses its own, and a local `cargo build` for a quick
+# syntax check should not leave 200 files of artefacts in the tree.
+/target

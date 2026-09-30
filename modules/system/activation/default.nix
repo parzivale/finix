@@ -188,6 +188,11 @@ in
           + lib.optionalString (config.boot.initrd.role != "none") ''
             ${coreutils}/bin/ln -s ${config.boot.initrd.package}/initrd $out/initrd
           ''
+          + lib.optionalString (config.providers.services.initConfig != null) ''
+            # what the kernel's init reads to find the service manager. Beside `activate`,
+            # because the two are the pair every boot needs and neither is any use alone.
+            cp ${config.providers.services.initConfig} $out/finix-init.json
+          ''
           + ''
             cp ${../../init/finit/switch-to-configuration.sh} $out/bin/switch-to-configuration
             substituteInPlace $out/bin/switch-to-configuration \

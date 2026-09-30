@@ -260,11 +260,10 @@ in
       # activation has to happen before runit-init rather than in stage 1, because the stage
       # scripts are themselves at /etc/runit/[123] - they are among the things activation puts
       # there, so runit could not find stage 1 to run it from.
-      providers.services.initExecutable = pkgs.writeShellScript "runit-init" ''
-        ${cfg.activationScript}
-        exec ${pkgs.runit}/bin/runit-init
-      '';
-
+      # an argv rather than a wrapper: `runit-init` needs nothing before it but the preamble
+      # every backend needs, and finix-init is that. What this used to be was that preamble
+      # written out again here - activation, then exec - which is the shape all of them had.
+      providers.services.exec = [ "${pkgs.runit}/bin/runit-init" ];
       # runit is the only backend which ships nothing under these names. `runit-init` is the
       # whole interface: it writes /etc/runit/stopit, sets or clears the executable bit on
       # /etc/runit/reboot, and sends SIGCONT to PID 1, which wakes runit into stage 3.

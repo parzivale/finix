@@ -7,6 +7,9 @@
 let
   cfg = config.providers.services;
 
+  # the preamble the kernel runs before any backend: see pkgs/finix-init
+  finixInit = pkgs.callPackage ../../../pkgs/finix-init { };
+
   pathOrStr = with lib.types; coercedTo path (x: "${x}") str;
   program =
     lib.types.coercedTo (
@@ -225,6 +228,42 @@ in
         `enable`, so `dinit.enable = true` is the whole of selecting dinit. Each does so as
         a default, which is what leaves this option able to override the choice, and what
         makes enabling two of them a conflict rather than one of them quietly winning.
+      '';
+    };
+
+    exec = lib.mkOption {
+      type = with lib.types; nullOr (listOf str);
+      default = null;
+      internal = true;
+
+      description = ''
+        The service manager and its arguments, as an argv rather than a command line.
+
+        An implementation sets this instead of {option}`providers.services.initExecutable`. What
+        the kernel then runs is `finix-init`, which prepares the filesystems, runs the
+        generation's activation, and execs this - so the argv is data in the toplevel rather than
+        a shell script generated per backend, and the work every backend does before its first
+        instruction happens once, in one place.
+
+        An argv, because whatever reads it is not a shell. Each implementation splits a command
+        line by its own rules - dinit on whitespace honouring double quotes, finit otherwise - so
+        a string meant every wrapper had to know which one would be reading it.
+
+        Implementations still declaring `initExecutable` keep working: this is checked first, and
+        that is the fallback until they have all moved.
+      '';
+    };
+
+    initConfig = lib.mkOption {
+      type = with lib.types; nullOr path;
+      default = null;
+      internal = true;
+
+      description = ''
+        What `exec` becomes: a JSON file installed in the toplevel as `finix-init.json`, which
+        `finix-init` reads to find what to hand the machine over to.
+
+        Null while the selected implementation still declares `initExecutable`.
       '';
     };
 
@@ -719,7 +758,25 @@ in
     # selecting a backend is the whole of the choice: the thing supervising the units is the
     # thing the kernel starts, so naming one here is what points stage 2 at it. No fallback -
     # a machine whose backend declares no PID 1 has no business booting.
-    boot.init = cfg.initExecutable;
+    # Where the backend gives an argv, what the kernel starts is finix-init and the backend is
+    # what that execs. The preamble - /proc, /sys, /dev, /run, activation, the symlinks naming
+    # the generation - is the same work whichever init comes next, and was being written out per
+    # backend as a shell script each one got slightly differently.
+    boot.init = if cfg.exec != null then lib.getExe finixInit else cfg.initExecutable;
+
+    # the argv, as data beside `activate` in the toplevel.
+    #
+    # Not in `boot.json`: that name belongs to the bootspec, which bootloader installers parse and
+    # which names the toplevel - so putting this there would intrude on a format that is not ours
+    # and make the file describing the toplevel a dependency of it.
+    providers.services.initConfig = lib.mkIf (cfg.exec != null) (
+      pkgs.writeText "finix-init.json" (
+        builtins.toJSON {
+          version = 1;
+          exec = cfg.exec;
+        }
+      )
+    );
 
     # switching between init systems is not something a switch can do. Everything else in a
     # generation can be replaced while the machine runs, but PID 1 is the one process that
