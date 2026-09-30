@@ -148,7 +148,12 @@ let
       root
     else
       let
-        holders = lib.filter (fs: lib.hasPrefix fs.mountPoint "/nix/store") (
+        # `/` excluded, and leaving it out let an unbootable configuration through: `/` is an
+        # ancestor of /nix/store like any other path, so a tmpfs root matched its own search and
+        # became the thing named to the kernel. Its device is `none`, which resolves to nothing,
+        # so no `root=` was emitted and the assertion below - which asks whether anything holds
+        # the store - was satisfied by the root it was trying to replace.
+        holders = lib.filter (fs: fs.mountPoint != "/" && lib.hasPrefix fs.mountPoint "/nix/store") (
           lib.attrValues config.fileSystems
         );
       in
