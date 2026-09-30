@@ -198,7 +198,7 @@ in
     '';
   };
 
-  config = lib.mkIf (config.boot.initrd.role == "none") {
+  config = lib.mkIf (!config.boot.initrd.enable) {
     boot.kernelParams = lib.mkIf (root != null && !virtualRoot) params;
 
     # and never checked at boot, which the fstab has to say out loud.

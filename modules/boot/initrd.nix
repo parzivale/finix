@@ -45,51 +45,6 @@ in
       '';
     };
 
-    # what the initramfs is for, which is not the same question as whether there is one.
-    #
-    #   stage  it mounts a root and hands the machine over to it. The usual arrangement, and
-    #          what `enable` on its own means.
-    #   root   it *is* the root. Nothing is handed over: the kernel's rootfs is the root the
-    #          machine keeps, /init mounts what the store is on, and `boot.init` is PID 1 from
-    #          the first instruction.
-    #   none   there is no initramfs. The kernel mounts the root itself from `root=`, so the root
-    #          has to be something it can mount and every driver it needs has to be built in.
-    #
-    # Defaulted from `enable` rather than inferred from the root's shape, and that is a deliberate
-    # retreat from something which looked better. `enable = false` with a tmpfs root has exactly
-    # one possible meaning - the kernel cannot mount a root with no device and nothing to
-    # populate it with - so the role can be read off those two facts and for a while it was.
-    #
-    # What that costs is a dependency loop. Reading the root's shape means reading
-    # `fileSystems`, and the modules which most need to know the role are the ones which *define*
-    # fileSystems: `boot/root.nix` sets noCheck on `/`, and qemu's `mountHostNixStore` decides
-    # whether the host store is shared, which becomes a mount. Gate either on an inferred role and
-    # the module system reports `infinite recursion encountered` naming `fileSystems` and the role
-    # and nothing about which definition tied them together.
-    #
-    # Defaulting from `enable` alone depends on nothing, so those gates are free - and the
-    # contradictions the inference would have made unrepresentable are caught by the assertions
-    # below instead. Which is the honest trade: an assertion says the same thing as an inference,
-    # a moment later and out loud.
-    role = lib.mkOption {
-      type = lib.types.enum [
-        "stage"
-        "root"
-        "none"
-      ];
-      default = if config.boot.initrd.enable then "stage" else "none";
-      defaultText = lib.literalMD ''`"stage"` if {option}`boot.initrd.enable`, otherwise `"none"`'';
-      description = ''
-        What the initramfs is for: to mount a root and hand over to it (`stage`), to be the root
-        (`root`), or nothing, because there is not one (`none`).
-
-        `root` is the one worth setting by hand. It suits a machine whose root is a tmpfs and
-        whose store is on a filesystem that needs no assembling - nothing to unlock, nothing to
-        wait for - where a stage that mounts a root and switches into it is a step with nothing
-        in it. The image stays; what goes is the handover.
-      '';
-    };
-
     compressor = lib.mkOption {
       default =
         if lib.versionAtLeast config.boot.kernelPackages.kernel.version "5.9" then "zstd" else "gzip";
@@ -167,55 +122,6 @@ in
   };
 
   config = lib.mkMerge [
-    {
-      assertions =
-        let
-          root = config.fileSystems."/" or null;
-          virtualRoot =
-            root != null
-            && lib.elem root.fsType [
-              "tmpfs"
-              "ramfs"
-            ];
-        in
-        [
-          # the pairs the role can be in disagreement with, each of which the old inference could
-          # not have expressed. An assertion is where they go now.
-          {
-            assertion = cfg.role == "root" -> cfg.enable;
-            message = ''
-              boot.initrd.role is "root", so the initramfs is the root filesystem - but
-              boot.initrd.enable is false, so there is no initramfs to be it.
-
-              Leave enable alone: in this role there is still an image, and the bootloader still
-              loads it. What is absent is the handover to something else.
-            '';
-          }
-
-          {
-            assertion = cfg.role != "none" -> cfg.enable;
-            message = ''
-              boot.initrd.role is "${cfg.role}", which describes an initramfs, but
-              boot.initrd.enable is false. Set the role to "none" if this machine has no
-              initramfs, or leave enable on.
-            '';
-          }
-
-          {
-            assertion = cfg.role == "root" -> virtualRoot;
-            message = ''
-              boot.initrd.role is "root", so the initramfs is the root - but fileSystems."/" is
-              ${if root == null then "not set" else root.fsType}, which is a filesystem to be
-              mounted, and mounting one over the root the machine is already running from would
-              take the store with it.
-
-              This role wants a root the kernel brought into being and nothing else claims: a
-              tmpfs or a ramfs. Name the filesystem the store is on as neededForBoot instead, and
-              /init will mount it.
-            '';
-          }
-        ];
-    }
 
     {
       warnings = lib.optionals (cfg.fileSystemImportCommands != "") [
@@ -227,7 +133,7 @@ in
     # modules/boot/root.nix for what happens instead. It does mean something in `root`, where the
     # image is not a stage on the way to a root but the root itself, so this is the mode rather
     # than `enable`: that is off in `root` mode and an image is still wanted.
-    (lib.mkIf (cfg.role != "none") {
+    (lib.mkIf cfg.enable {
       boot.initrd.supportedFilesystems = lib.mapAttrs' (
         _: v: lib.nameValuePair v.fsType { enable = true; }
       ) (lib.filterAttrs (_: fs: fs.neededForBoot) config.fileSystems);

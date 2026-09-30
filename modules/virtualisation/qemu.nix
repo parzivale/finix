@@ -117,7 +117,7 @@ let
     # a machine with no initrd is handed nothing but the kernel: the root parameters
     # modules/boot/root.nix derives are already in `boot.kernelParams` below, and the kernel
     # mounts the disk attached by `rootImage` itself.
-    ++ lib.optionals (config.boot.initrd.role != "none") [
+    ++ lib.optionals (config.boot.initrd.enable) [
       "-initrd"
       "${config.boot.initrd.package}/initrd"
     ]
@@ -260,8 +260,8 @@ in
 
       mountHostNixStore = lib.mkOption {
         type = lib.types.bool;
-        default = !useBootLoader && config.boot.initrd.role != "none";
-        defaultText = lib.literalExpression ''config.virtualisation.qemu.bootMode == "kernel" && config.boot.initrd.role != "none"'';
+        default = !useBootLoader && config.boot.initrd.enable;
+        defaultText = lib.literalExpression ''config.virtualisation.qemu.bootMode == "kernel" && config.boot.initrd.enable'';
         description = ''
           Mount the host Nix store as a 9p mount.
         '';

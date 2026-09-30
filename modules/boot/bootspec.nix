@@ -26,7 +26,7 @@ let
                 # label = "${config.system.nixos.distroName} ${config.system.nixos.codeName} ${config.system.nixos.label} (Linux ${config.boot.kernelPackages.kernel.modDirVersion})";
                 label = "finix (Linux ${config.boot.kernelPackages.kernel.modDirVersion})";
               }
-              // lib.optionalAttrs (config.boot.initrd.role != "none") {
+              // lib.optionalAttrs (config.boot.initrd.enable) {
                 initrd = "${config.boot.initrd.package}/initrd";
               };
             }

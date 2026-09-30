@@ -27,10 +27,10 @@ in
     };
   };
 
-  # the whole of this is stage one: the finit that runs it, the configuration it reads, the tty
-  # it opens on failure, and the switch-root that ends it. In the `root` mode there is no
-  # stage, and `/init` is supplied by boot/initramfs-root.nix instead.
-  config.boot.initrd = lib.mkIf (cfg.role == "stage") {
+  # the whole of this is stage one: the finit that runs it, the configuration it reads, the tty it
+  # opens on failure, and the switch-root that ends it. With `boot.initrd.enable = false` there is
+  # no stage at all - the kernel mounts the root itself and execs finix-init out of it.
+  config.boot.initrd = lib.mkIf cfg.enable {
     # finit's own binary in the initramfs PATH
     path = [ config.finit.package ];
 

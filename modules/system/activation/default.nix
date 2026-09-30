@@ -185,7 +185,7 @@ in
             ${coreutils}/bin/ln -s ${config.system.modulesTree} $out/kernel-modules
             ${coreutils}/bin/ln -s ${config.hardware.firmware}/lib/firmware $out/firmware
           ''
-          + lib.optionalString (config.boot.initrd.role != "none") ''
+          + lib.optionalString (config.boot.initrd.enable) ''
             ${coreutils}/bin/ln -s ${config.boot.initrd.package}/initrd $out/initrd
           ''
           + lib.optionalString (config.providers.services.initConfig != null) ''

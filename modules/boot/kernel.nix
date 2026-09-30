@@ -67,7 +67,7 @@ let
   # `auto` is not a filesystem, so there is nothing to look up; an fsType this has never heard
   # of is left to the warning below rather than silently dropped.
   derived = lib.optional (
-    config.boot.initrd.role == "none" && root != null && filesystemConfig ? ${root.fsType}
+    !config.boot.initrd.enable && root != null && filesystemConfig ? ${root.fsType}
   ) root.fsType;
 
   # the same idea for the controller the root disk hangs off, which is the other half of what
@@ -150,7 +150,7 @@ let
   # try to name only the necessary ones.
   #
   # A machine which knows what it is can still say so, `[ ]` included.
-  allDrivers = lib.optionals (config.boot.initrd.role == "none") knownDrivers;
+  allDrivers = lib.optionals (!config.boot.initrd.enable) knownDrivers;
 
   known = lib.attrNames filesystemConfig;
   unknown = lib.filter (fs: !(filesystemConfig ? ${fs})) config.boot.kernel.builtinFilesystems;
@@ -496,7 +496,7 @@ in
     warnings =
       lib.optional
         (
-          config.boot.initrd.role == "none"
+          !config.boot.initrd.enable
           && root != null
           && root.fsType != "auto"
           && !(filesystemConfig ? ${root.fsType})
