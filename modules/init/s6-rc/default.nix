@@ -265,14 +265,10 @@ let
       ]
     }:$PATH
 
-    ${cfg.activationScript}
-
-    # the generation about to be started, recorded as the running one. Here rather than in
-    # activation, which runs on every switch too - rewriting these then would tell the next
-    # `list` that whatever is running was already what is being switched into.
-    rm -rf ${runFingerprints}
-    cp -rL ${fingerprintDir} ${runFingerprints}
-    chmod -R u+w ${runFingerprints}
+      # activation and the fingerprint copy are finix-init's, not this script's: it runs before
+      # s6's init, so /etc is there by the time anything reads it. That only works because the
+      # maker is given `-n` above - otherwise s6 would replace the /run finix-init had just put
+      # the generation's symlinks in.
 
     s6-rc-init -c ${database}/db -l ${live} ${scanDir}
     exec s6-rc -l ${live} -v2 -up change everything
@@ -343,6 +339,7 @@ let
             } \
             -f ${skeleton} \
             -1 \
+            -n \
             -u root \
             "$TMPDIR/gen"
 
@@ -522,7 +519,28 @@ in
       # s6-linux-init prepares /run, populates the scandir from its run-image, starts s6-svscan
       # on it, and only then runs rc.init - so the database is brought up against a scandir which
       # is already live, with no polling for a control fifo to appear.
-      providers.services.initExecutable = initWrapper;
+      # the argv is the unpack wrapper rather than s6's init directly.
+      #
+      # run-image holds two fifos - one is s6-linux-init-shutdownd's channel - and a store cannot
+      # hold a fifo, so what is in the store is a tarball and something has to unpack it. That is
+      # all the wrapper still does: activation and the fingerprint copy have moved out.
+      #
+      # Making it a directory plus `mkfifo` ops is possible and is not free: the maker also chowns
+      # run-image/uncaught-logs to the logger's user, which a build cannot do either, so it wants a
+      # `chown` op and a way to name fifos found at build time. Worth doing on its own.
+      providers.services.exec = [ "${initWrapper}" ];
+
+      # the generation about to be started, recorded as the running one. Before the exec rather
+      # than in activation, which runs on every switch too: rewriting these then would tell the
+      # next `list` that whatever is running was already what is being switched into.
+      providers.services.pre = [
+        {
+          op = "copyTree";
+          from = fingerprintDir;
+          to = runFingerprints;
+          writable = true;
+        }
+      ];
 
       # s6-linux-init-maker generates these three beside the init it generates, each one talking
       # to s6-linux-init-shutdownd over the fifo in the run-image. So they are named under the

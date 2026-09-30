@@ -109,7 +109,6 @@ let
 in
 {
   imports = [
-    ./activation.nix
     ./graph.nix
     ./mounts.nix
     ./switch.nix
