@@ -383,7 +383,11 @@ in
     (lib.mkIf (cfg.backend == "finit") {
       # backend is a bare string key, so only this module can say which binary it means.
       # Wiring it to boot.init is the contract's job, not this one's.
-      providers.services.initExecutable = "${config.finit.package}/bin/finit";
+      # an argv: finit needs nothing in place that finix-init has not already done. Activation is
+      # the exception it always was - the finix-setup plugin does it from PLUGIN_INIT, earlier than
+      # anything else could be attached to - so on this backend it now happens twice. Idempotent,
+      # and the plugin goes once it is confirmed to do only that.
+      providers.services.exec = [ "${config.finit.package}/bin/finit" ];
 
       # finit ships all three, and they reach it over its own socket. They are on PATH anyway
       # through finit.package being in systemPackages - naming them here is what stops that

@@ -179,7 +179,6 @@ let
   # rc.init keeps running. A service's job never exits on its own, so this blocks on whichever
   # finishes first and loops, rather than trying to wait for all of them at once.
   rcInit = pkgs.writeShellScript "rc.init" ''
-    ${cfg.activationScript}
     ${mkdir} -p ${latchDir}
     ${lib.concatStrings (lib.mapAttrsToList (name: _: "${jobDir}/${name} &\n") bootSide)}
     while :; do
@@ -278,7 +277,11 @@ in
         path = true;
       };
 
-      providers.services.initExecutable = lib.getExe' sinit' "sinit";
+      # an argv. Activation used to be the first line of rc.init, which is the closest sinit has
+      # to a place to put it: sinit itself does nothing but spawn that script and reap. finix-init
+      # runs it before sinit is exec'd at all, which is earlier and is the same place every other
+      # backend gets it.
+      providers.services.exec = [ (lib.getExe' sinit' "sinit") ];
 
       # sinit only ever acts on this by reacting to a signal sent to PID 1 - unlike every other
       # backend here, there is no command which asks it to shut down directly, only one which

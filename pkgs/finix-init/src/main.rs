@@ -24,6 +24,21 @@ use std::process::Command;
 use rustix::mount::{mount, MountFlags};
 use serde::Deserialize;
 
+/// A message on the console, which is the only place anything can be said this early.
+///
+/// Defined before everything that uses it: `macro_rules!` is textual, so a macro used above its
+/// definition is simply not in scope, and the error says so in terms of the use rather than the
+/// order.
+macro_rules! say {
+    ($($arg:tt)*) => {{
+        let mut err = std::io::stderr();
+        let _ = writeln!(err, "finix-init: {}", format_args!($($arg)*));
+        let _ = err.flush();
+    }};
+}
+
+
+
 /// What the configuration tells this binary to do, emitted into the toplevel beside `activate`.
 ///
 /// Deliberately not `boot.json`: that name is taken by the bootspec, which bootloader installers
@@ -37,16 +52,125 @@ struct Config {
     version: u32,
     /// The service manager and its arguments. The last thing this process does.
     exec: Vec<String>,
+
+    /// Steps to take before the exec. Absent in a file from a configuration that needed none.
+    #[serde(default)]
+    pre: Vec<PreOp>,
 }
 
-/// A message on the console, which is the only place anything can be said this early.
-macro_rules! say {
-    ($($arg:tt)*) => {{
-        let mut err = std::io::stderr();
-        let _ = writeln!(err, "finix-init: {}", format_args!($($arg)*));
-        let _ = err.flush();
-    }};
+/// A step a backend needs before its first instruction, named as data rather than written as a
+/// shell script per backend.
+///
+/// These exist because two backends want the same thing: the generation's own view of what is
+/// running, copied somewhere writable, because the store is not. dinit's fingerprints and
+/// openrc's unit directory are the same operation with different paths, and each had its own
+/// three lines of `rm -rf`, `cp -rL`, `chmod -R u+w`.
+#[derive(Deserialize)]
+#[serde(tag = "op", rename_all = "camelCase")]
+enum PreOp {
+    /// Replace `to` with a writable copy of `from`, following symlinks.
+    ///
+    /// Dereferencing is the point: `from` is in the store, so a plain copy would give a tree of
+    /// links back into it and `writable` would be a lie.
+    CopyTree {
+        from: PathBuf,
+        to: PathBuf,
+        #[serde(default)]
+        writable: bool,
+    },
+    Mkdir {
+        path: PathBuf,
+    },
+    Symlink {
+        from: PathBuf,
+        to: PathBuf,
+    },
+    /// A named pipe, which is why some of these trees cannot simply be store paths: a fifo is
+    /// not something a derivation can contain.
+    Mkfifo {
+        path: PathBuf,
+        #[serde(default = "fifo_mode")]
+        mode: u32,
+    },
 }
+
+fn fifo_mode() -> u32 {
+    0o600
+}
+
+fn run_pre(ops: &[PreOp]) {
+    for op in ops {
+        let result = match op {
+            PreOp::CopyTree { from, to, writable } => copy_tree(from, to, *writable),
+            PreOp::Mkdir { path } => fs::create_dir_all(path).map_err(|e| e.to_string()),
+            PreOp::Symlink { from, to } => {
+                let _ = fs::remove_file(to);
+                std::os::unix::fs::symlink(from, to).map_err(|e| e.to_string())
+            }
+            PreOp::Mkfifo { path, mode } => {
+                let _ = fs::remove_file(path);
+                rustix::fs::mknodat(
+                    rustix::fs::CWD,
+                    path,
+                    rustix::fs::FileType::Fifo,
+                    rustix::fs::Mode::from_bits_truncate(*mode),
+                    0,
+                )
+                .map_err(|e| e.to_string())
+            }
+        };
+
+        // loud and not fatal: these prepare a backend's own state, and a backend that then cannot
+        // start says so far more precisely than this can guess at here
+        if let Err(e) = result {
+            say!("pre step failed: {e}");
+        }
+    }
+}
+
+/// `rm -rf to && cp -rL from to && chmod -R u+w to`, which is what this replaces.
+fn copy_tree(from: &Path, to: &Path, writable: bool) -> Result<(), String> {
+    if to.exists() {
+        let meta = fs::symlink_metadata(to).map_err(|e| e.to_string())?;
+        if meta.is_dir() {
+            fs::remove_dir_all(to).map_err(|e| format!("cannot replace {}: {e}", to.display()))?;
+        } else {
+            fs::remove_file(to).map_err(|e| format!("cannot replace {}: {e}", to.display()))?;
+        }
+    }
+    copy_into(from, to, writable)
+}
+
+fn copy_into(from: &Path, to: &Path, writable: bool) -> Result<(), String> {
+    // `metadata` rather than `symlink_metadata`, so a symlink is copied as what it points at
+    let meta = fs::metadata(from).map_err(|e| format!("cannot read {}: {e}", from.display()))?;
+
+    if meta.is_dir() {
+        fs::create_dir_all(to).map_err(|e| format!("cannot create {}: {e}", to.display()))?;
+        for entry in fs::read_dir(from).map_err(|e| format!("cannot list {}: {e}", from.display()))? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            copy_into(&entry.path(), &to.join(entry.file_name()), writable)?;
+        }
+        if writable {
+            make_writable(to, &meta)?;
+        }
+        return Ok(());
+    }
+
+    fs::copy(from, to).map_err(|e| format!("cannot copy {} to {}: {e}", from.display(), to.display()))?;
+    if writable {
+        make_writable(to, &meta)?;
+    }
+    Ok(())
+}
+
+fn make_writable(path: &Path, from: &fs::Metadata) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+    let mut perms = from.permissions();
+    perms.set_mode(perms.mode() | 0o200);
+    fs::set_permissions(path, perms).map_err(|e| format!("cannot make {} writable: {e}", path.display()))
+}
+
 
 fn main() {
     // a panic here would otherwise be a kernel panic with a worse message attached
@@ -90,6 +214,9 @@ fn main() {
     // looking at the result was how a failure here turned into the manager complaining about a
     // missing /etc/fstab three steps later.
     activate(&system);
+
+    // step 7: whatever the backend needs in place first
+    run_pre(&config.pre);
 
     // step 8: the service manager, exec'd rather than spawned, because PID 1 is what it has to be
     exec_manager(&config, &system)

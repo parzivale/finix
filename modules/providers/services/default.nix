@@ -231,6 +231,32 @@ in
       '';
     };
 
+    pre = lib.mkOption {
+      type = with lib.types; listOf attrs;
+      default = [ ];
+      internal = true;
+
+      description = ''
+        Steps `finix-init` takes after activation and before exec'ing the service manager, as
+        data rather than as a shell script written per backend.
+
+        Each entry names an `op` and its arguments:
+
+        - `{ op = "copyTree"; from = <path>; to = <path>; writable = <bool>; }` - replace `to`
+          with a copy of `from`, following symlinks. Dereferencing is the point: `from` is in
+          the store, so a plain copy would be a tree of links back into it and `writable` would
+          be a lie.
+        - `{ op = "mkdir"; path = <path>; }`
+        - `{ op = "symlink"; from = <path>; to = <path>; }`
+        - `{ op = "mkfifo"; path = <path>; mode = <int>; }` - which is why some of these trees
+          cannot be store paths at all: a derivation cannot contain a named pipe.
+
+        Add an op when a backend needs one, not before. Two already wanted the same thing - the
+        generation's own record of what is running, copied somewhere writable because the store
+        is not - and each had its own three lines of `rm -rf`, `cp -rL` and `chmod -R u+w`.
+      '';
+    };
+
     exec = lib.mkOption {
       type = with lib.types; nullOr (listOf str);
       default = null;
@@ -774,6 +800,7 @@ in
         builtins.toJSON {
           version = 1;
           exec = cfg.exec;
+          pre = cfg.pre;
         }
       )
     );

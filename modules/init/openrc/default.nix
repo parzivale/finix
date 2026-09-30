@@ -315,18 +315,19 @@ in
 
       # activation first, for the same reason as every other implementation: /etc has to exist
       # before anything reads a service out of it.
-      providers.services.initExecutable = pkgs.writeShellScript "openrc-init" ''
-        ${cfg.activationScript}
+      providers.services.exec = [ "${openrc}/bin/openrc-init" ];
 
-        # the generation about to be started, recorded as the running one. Here rather than in
-        # activation, which runs on every switch too - rewriting these then would tell the next
-        # `list` that what is running was already what is being switched into.
-        ${lib.getExe' pkgs.coreutils "rm"} -rf ${runUnits}
-        ${lib.getExe' pkgs.coreutils "cp"} -rL ${initd} ${runUnits}
-        ${lib.getExe' pkgs.coreutils "chmod"} -R u+w ${runUnits}
-
-        exec ${openrc}/bin/openrc-init
-      '';
+      # the generation about to be started, recorded as the running one. Before the exec rather
+      # than in activation, which runs on every switch too: rewriting these then would tell the
+      # next `list` that what is running was already what is being switched into.
+      providers.services.pre = [
+        {
+          op = "copyTree";
+          from = initd;
+          to = runUnits;
+          writable = true;
+        }
+      ];
 
       # `now` is not optional. Each of these takes a time to go down at - openrc-shutdown is
       # `shutdown(8)`, which schedules rather than acts - and without one it prints "No shutdown

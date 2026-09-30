@@ -428,25 +428,34 @@ in
       #
       # /run is already a tmpfs by the time this runs - the initrd mounts it - so there is
       # nothing to create first.
-      providers.services.initExecutable = pkgs.writeShellScript "dinit-init" ''
-        # /etc/dinit.d is one of the things activation creates, so this has to come first -
-        # without it dinit starts correctly and then reports "could not find service
-        # description", which looks like a dinit problem and is not one
-        ${cfg.activationScript}
+      # the argv, and the one thing that has to be in place before it.
+      #
+      # /etc/dinit.d is created by activation, which finix-init runs first - without it dinit
+      # starts correctly and then reports "could not find service description", which looks like
+      # a dinit problem and is not one.
+      providers.services.exec = [
+        "${config.dinit.package}/bin/dinit"
+        "-p"
+        "/run/dinitctl"
+        "-d"
+        "/etc/dinit.d"
+        "boot"
+      ];
 
-        # the generation about to be started, recorded as the running one. This is in the init
-        # rather than in activation because activation runs on every switch too, and rewriting
-        # these then would tell the next `list` that whatever is running was already what is
-        # being switched into.
-        ${lib.getExe' pkgs.coreutils "rm"} -rf ${runFingerprints}
-        ${lib.getExe' pkgs.coreutils "cp"} -rL ${fingerprintDir} ${runFingerprints}
-        ${lib.getExe' pkgs.coreutils "chmod"} -R u+w ${runFingerprints}
-
-        exec ${config.dinit.package}/bin/dinit -p /run/dinitctl -d /etc/dinit.d boot
-      '';
+      # the generation about to be started, recorded as the running one. Before the exec rather
+      # than in activation, which runs on every switch too: rewriting these then would tell the
+      # next `list` that whatever is running was already what is being switched into.
+      providers.services.pre = [
+        {
+          op = "copyTree";
+          from = fingerprintDir;
+          to = runFingerprints;
+          writable = true;
+        }
+      ];
 
       # dinit ships all three, and they reach it over the control socket - /run/dinitctl, which
-      # is both dinit's own default and what initExecutable above asks for, so they need no
+      # is both dinit's own default and what the argv above asks for, so they need no
       # argument to find it.
       providers.services.shutdownCommands = {
         poweroff = "${config.dinit.package}/bin/poweroff";
