@@ -250,7 +250,17 @@ in
     '';
   };
 
-  config = lib.mkIf (!config.boot.initrd.enable) {
+  # `boot.kernel.enable` as well as the initrd being off.
+  #
+  # Everything here is about telling a kernel which filesystem to mount and how to find it, and a
+  # configuration with no kernel has nothing to tell: a container has neither an initrd nor a
+  # kernel, and would otherwise arrive at "boot.initrd.enable is false, so the kernel mounts the
+  # root filesystem itself and has to be told which one" for a root nothing is going to mount.
+  #
+  # Which is the shape of the mistake worth naming: `!initrd.enable` reads as "the direct boot
+  # path" and is not. It is every configuration that is not using an initrd, and two of those are
+  # not booting at all.
+  config = lib.mkIf (config.boot.kernel.enable && !config.boot.initrd.enable) {
     # `device != null` as well: with nothing resolved there is no `root=` to write, and the
     # assertions below are what should report that rather than a coercion error from this string.
     boot.kernelParams = lib.mkIf (kernelRoot != null && device != null) params;
