@@ -148,7 +148,37 @@ let
   # is /etc, so on a read-only root there is no /etc for finit to read its fstab out of and the
   # boot ends in sulogin. There is nothing to remount with before the thing which does the
   # remounting exists.
-  ++ [ (if lib.elem "ro" root.options then "ro" else "rw") ];
+  ++ [ (if lib.elem "ro" root.options then "ro" else "rw") ]
+
+  # `rootwait`, always.
+  #
+  # The kernel gives up on a root that is not there yet, and whether it is there is a race it
+  # cannot see the other side of: a controller's probe is asynchronous, and a driver built into
+  # the kernel is not a driver that has finished binding. Without this the same machine boots or
+  # does not depending on how fast its disk answered, which is the worst shape a boot failure can
+  # have.
+  #
+  # Unconditional because there is no case for the other behaviour. Waiting costs nothing on a
+  # machine whose root is already there, and the alternative is `VFS: Cannot open root device`
+  # from hardware that was about to be ready.
+  ++ [ "rootwait" ];
+
+  # filesystems which have to be built before they can be mounted, which is the work a stage 1
+  # exists to do. Named by fsType because that is how the contract names them: `luks` and `lvm`
+  # are already fsTypes the mount generator skips for the same reason.
+  assembled = lib.filter (
+    fs:
+    lib.elem fs.fsType [
+      "luks"
+      "lvm"
+      "zfs"
+      "mdraid"
+    ]
+    || lib.elem "_netdev" (fs.options or [ ])
+  ) early;
+
+  # and the ones expecting an fsck that nothing on this path can perform
+  unchecked = lib.filter (fs: !fs.noCheck) early;
 
   # `neededForBoot` means "mounted before stage 2 init", which is a thing only an initrd can
   # do. `/` is the exception the kernel handles itself.
@@ -313,18 +343,43 @@ in
         '';
       }
 
+      # `neededForBoot` is no longer refused here.
+      #
+      # It used to be, and the reason was sound while it held: mounting a filesystem before the
+      # init runs is a thing only an initrd can do. finix-init does it now - it reads the list out
+      # of finix-init.json and mounts it before activation - so what is left to refuse is not the
+      # marking but the kinds of filesystem the kernel and one static binary cannot between them
+      # bring into being.
       {
-        assertion = early == [ ];
+        assertion = assembled == [ ];
         message = ''
-          boot.initrd.enable is false, so nothing runs before the init: ${
-            lib.concatMapStringsSep ", " (fs: fs.mountPoint) early
+          boot.initrd.enable is false, so the only things that exist before the init are the root
+          the kernel mounted and the mounts finix-init makes from it. ${
+            lib.concatMapStringsSep ", " (fs: "${fs.mountPoint} (${fs.fsType})") assembled
           } ${
-            if lib.length early == 1 then "is marked" else "are marked"
-          } neededForBoot, and only an initrd can mount a filesystem that early.
+            if lib.length assembled == 1 then "needs" else "need"
+          } assembling first, which is what a stage 1 is for: unlocking a volume, assembling an
+          array, importing a pool, bringing up a network.
 
-          Either put ${
-            if lib.length early == 1 then "it" else "them"
-          } on the root filesystem, or enable the initrd.
+          Set boot.initrd.enable = true. finix-init mounts a filesystem; it does not construct one.
+        '';
+      }
+
+      # and fsck, which cannot happen at all on this path
+      {
+        assertion = unchecked == [ ];
+        message = ''
+          boot.initrd.enable is false, so ${lib.concatMapStringsSep ", " (fs: fs.mountPoint) unchecked} ${
+            if lib.length unchecked == 1 then
+              "is marked neededForBoot and expects"
+            else
+              "are marked neededForBoot and expect"
+          } to be checked, and there is no moment at which that
+          could happen. An initrd is where a root gets checked, being the one point at which the
+          filesystem is present and not yet mounted; here the first thing to touch it mounts it.
+
+          Set noCheck = true to say so out loud, or enable the initrd so there is something to do
+          the checking.
         '';
       }
     ];

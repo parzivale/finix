@@ -790,7 +790,7 @@ in
     # backend as a shell script each one got slightly differently.
     boot.init = if cfg.exec != null then lib.getExe finixInit else cfg.initExecutable;
 
-    # the argv, as data beside `activate` in the toplevel.
+    # the argv, the steps before it, and the filesystems that have to exist for either to work.
     #
     # Not in `boot.json`: that name belongs to the bootspec, which bootloader installers parse and
     # which names the toplevel - so putting this there would intrude on a format that is not ours
@@ -801,6 +801,38 @@ in
           version = 1;
           exec = cfg.exec;
           pre = cfg.pre;
+
+          # `neededForBoot`, shallowest first - which is the ordering that matters and not an
+          # alphabetical one: a path cannot be mounted over a parent which is not there yet. Sorted
+          # here because this is where the depths are known, so the binary can walk the list.
+          #
+          # `/` is not among them. Either a stage mounted it and handed over, or the kernel did,
+          # and in both cases an entry for it describes something already mounted.
+          mounts =
+            let
+              early = lib.filter (fs: fs.neededForBoot && fs.mountPoint != "/") (
+                lib.attrValues config.fileSystems
+              );
+              depth = p: lib.length (lib.splitString "/" p);
+            in
+            map
+              (fs: {
+                inherit (fs)
+                  device
+                  mountPoint
+                  fsType
+                  options
+                  ;
+              })
+              (
+                lib.sort (
+                  a: b:
+                  if depth a.mountPoint != depth b.mountPoint then
+                    depth a.mountPoint < depth b.mountPoint
+                  else
+                    a.mountPoint < b.mountPoint
+                ) early
+              );
         }
       )
     );

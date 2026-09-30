@@ -38,15 +38,23 @@ let
           # NOTE: Be careful to not introduce excess newlines at the end of the
           # injectors, as that may affect the pipes and redirects.
 
-          # Inject toplevel and init into the bootspec.
+          # Inject toplevel, init, and finix_system= into the bootspec.
           # This can only be done here because we *cannot* depend on $out
           # referring to the toplevel, except by living in the toplevel itself.
+          #
+          # finix_system= is that same fact stated on the command line, for finix-init. It needs to
+          # know which closure this boot is, and until now worked that out from the directory
+          # holding `init=` - an inference exactly as good as `init=` naming something inside the
+          # toplevel, which is true today and is not a thing PID 1 should have to rely on. On the
+          # direct path `init=` is a path relative to the store device. The inference stays as the
+          # fallback, so a bootloader which does not carry this still boots.
           toplevelInjector =
             lib.escapeShellArgs [
               "${pkgs.buildPackages.jq}/bin/jq"
               ''
                 ."org.nixos.bootspec.v1".toplevel = $toplevel |
-                ."org.nixos.bootspec.v1".init = $init
+                ."org.nixos.bootspec.v1".init = $init |
+                ."org.nixos.bootspec.v1".kernelParams += [ "finix_system=" + $toplevel ]
               ''
               "--sort-keys"
               "--arg"

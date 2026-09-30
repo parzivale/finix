@@ -53,9 +53,72 @@ struct Config {
     /// The service manager and its arguments. The last thing this process does.
     exec: Vec<String>,
 
+    /// Filesystems to mount before activation, shallowest first.
+    #[serde(default)]
+    mounts: Vec<Mount>,
+
     /// Steps to take before the exec. Absent in a file from a configuration that needed none.
     #[serde(default)]
     pre: Vec<PreOp>,
+}
+
+/// A filesystem the configuration wants mounted before the service manager starts.
+///
+/// `neededForBoot`, in other words - which used to mean "a thing only an initrd can do", and was
+/// refused outright on a machine with none. It is this binary's job now, which is the same job
+/// stage one had and the reason stage one existed.
+#[derive(Deserialize)]
+struct Mount {
+    device: String,
+    #[serde(rename = "mountPoint")]
+    mount_point: PathBuf,
+    #[serde(rename = "fsType")]
+    fs_type: String,
+    #[serde(default)]
+    options: Vec<String>,
+}
+
+/// Mount them shallowest first.
+///
+/// Ordered by the configuration rather than sorted here, because the ordering that matters is not
+/// alphabetical: a path cannot be mounted over a parent which is not there yet, and the Nix side
+/// already knows the depth of each.
+fn mount_all(mounts: &[Mount]) {
+    for m in mounts {
+        if is_mounted_path(&m.mount_point) {
+            continue;
+        }
+
+        if let Err(e) = fs::create_dir_all(&m.mount_point) {
+            say!("cannot create {}: {e}", m.mount_point.display());
+            continue;
+        }
+
+        // the options as one comma-joined string, which is what mount(2) takes as its data
+        // argument - the same thing `-o` is, rather than anything mount(8) invented
+        let data = m.options.join(",");
+
+        if let Err(e) = mount(
+            m.device.as_str(),
+            &m.mount_point,
+            m.fs_type.as_str(),
+            MountFlags::empty(),
+            data.as_str(),
+        ) {
+            // not fatal here: what is fatal is the store being absent, and that is caught where
+            // the configuration is read. A machine missing /persistent has a chance of saying so.
+            say!(
+                "cannot mount {} on {} ({}): {e}",
+                m.device,
+                m.mount_point.display(),
+                m.fs_type
+            );
+        }
+    }
+}
+
+fn is_mounted_path(target: &Path) -> bool {
+    is_mounted(&target.to_string_lossy())
 }
 
 /// A step a backend needs before its first instruction, named as data rather than written as a
@@ -206,6 +269,9 @@ fn main() {
         Ok(c) => c,
         Err(e) => rescue(&format!("{e}")),
     };
+
+    // step 5: the filesystems the configuration says have to be there first
+    mount_all(&config.mounts);
 
     // step 6: activation, and its status.
     //
