@@ -230,6 +230,57 @@ in
       '';
     };
 
+    virtualMounts = lib.mkOption {
+      type = with lib.types; listOf attrs;
+      internal = true;
+
+      default = [
+        {
+          device = "sys";
+          mountPoint = "/sys";
+          fsType = "sysfs";
+          options = [
+            "nosuid"
+            "nodev"
+            "noexec"
+          ];
+        }
+        {
+          device = "devtmpfs";
+          mountPoint = "/dev";
+          fsType = "devtmpfs";
+          options = [ "nosuid" ];
+        }
+        {
+          device = "tmpfs";
+          mountPoint = "/run";
+          fsType = "tmpfs";
+          options = [
+            "nosuid"
+            "nodev"
+          ];
+        }
+      ];
+
+      description = ''
+        The kernel's own filesystems, mounted by `finix-init` before activation.
+
+        Declared rather than assumed. These were mounted unconditionally by a binary nobody had
+        asked to mount them, which is a set of assumptions dressed as a contract - and it had a
+        consequence: s6-linux-init wants to own `/run`, and a preamble that had already mounted one
+        was a problem to design around rather than a question anyone had been asked.
+
+        An implementation which owns one of these removes it here, and nothing else changes. What
+        it gives up by doing so is whatever `finix-init` puts there - `/run` in particular holds
+        `/run/booted-system` and `/run/current-system`, so an implementation taking it over is
+        taking those on too.
+
+        `/proc` is not in this list and cannot be: `finix-init` reads `finix_system=` out of
+        `/proc/cmdline` to find the configuration this would be declared in, so it mounts that one
+        for itself before anything is known.
+      '';
+    };
+
     pre = lib.mkOption {
       type = with lib.types; listOf attrs;
       default = [ ];
@@ -842,6 +893,12 @@ in
           #
           # `/` is not among them. Either a stage mounted it and handed over, or the kernel did,
           # and in both cases an entry for it describes something already mounted.
+          # the kernel's own filesystems first, then what the configuration marked neededForBoot.
+          #
+          # In that order and not the other: activation reads /sys and names device nodes, and the
+          # generation's symlinks go in /run, so those have to exist before a real filesystem is
+          # mounted or activation runs. Neither list is sorted against the other - they cannot
+          # overlap, one being virtual and the other having devices.
           mounts =
             let
               early = lib.filter (fs: fs.neededForBoot && fs.mountPoint != "/") (
@@ -849,24 +906,26 @@ in
               );
               depth = p: lib.length (lib.splitString "/" p);
             in
-            map
-              (fs: {
-                inherit (fs)
-                  device
-                  mountPoint
-                  fsType
-                  options
-                  ;
-              })
-              (
-                lib.sort (
-                  a: b:
-                  if depth a.mountPoint != depth b.mountPoint then
-                    depth a.mountPoint < depth b.mountPoint
-                  else
-                    a.mountPoint < b.mountPoint
-                ) early
-              );
+            cfg.virtualMounts
+            ++
+              map
+                (fs: {
+                  inherit (fs)
+                    device
+                    mountPoint
+                    fsType
+                    options
+                    ;
+                })
+                (
+                  lib.sort (
+                    a: b:
+                    if depth a.mountPoint != depth b.mountPoint then
+                      depth a.mountPoint < depth b.mountPoint
+                    else
+                      a.mountPoint < b.mountPoint
+                  ) early
+                );
         }
       )
     );

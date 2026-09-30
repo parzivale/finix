@@ -142,8 +142,11 @@ fn pivot_to_declared_root(root: &Root, store_mount: &str) {
         rescue(&format!("cannot create {new_root}: {e}"));
     }
 
-    let data = root.options.join(",");
-    if let Err(e) = mount("tmpfs", new_root, "tmpfs", MountFlags::empty(), data.as_str()) {
+    // the same split as every other mount: `size=6G` is tmpfs's to parse, `nosuid` is a bit in
+    // the flags word, and `defaults` is fstab saying nothing at all. Joining them and handing the
+    // lot over as data asks tmpfs to make sense of words that were never meant for it.
+    let (flags, data) = split_options(&root.options);
+    if let Err(e) = mount("tmpfs", new_root, "tmpfs", flags, data.as_str()) {
         rescue(&format!("cannot mount the declared tmpfs on {new_root}: {e}"));
     }
 
@@ -178,6 +181,44 @@ struct Mount {
     options: Vec<String>,
 }
 
+/// Split a fstab-style option list into mount(2)'s two arguments.
+///
+/// They are two different things and this was passing them as one. `nosuid` is a bit in the flags
+/// word; `subvol=nix` is a string the filesystem parses. Handing the whole list over as data meant
+/// a filesystem being asked to make sense of `nosuid`, and `defaults` - which is fstab's way of
+/// saying nothing at all - being passed through as though it meant something.
+fn split_options(options: &[String]) -> (MountFlags, String) {
+    let mut flags = MountFlags::empty();
+    let mut data: Vec<&str> = Vec::new();
+
+    for opt in options {
+        match opt.as_str() {
+            // fstab's word for "no options", which is not an option
+            "defaults" => {}
+
+            "nosuid" => flags |= MountFlags::NOSUID,
+            "nodev" => flags |= MountFlags::NODEV,
+            "noexec" => flags |= MountFlags::NOEXEC,
+            "ro" => flags |= MountFlags::RDONLY,
+            "sync" => flags |= MountFlags::SYNCHRONOUS,
+            "dirsync" => flags |= MountFlags::DIRSYNC,
+            "noatime" => flags |= MountFlags::NOATIME,
+            "nodiratime" => flags |= MountFlags::NODIRATIME,
+            "relatime" => flags |= MountFlags::RELATIME,
+            "strictatime" => flags |= MountFlags::STRICTATIME,
+            "silent" => flags |= MountFlags::SILENT,
+
+            // `rw` and `atime` are the absence of their opposites rather than bits of their own
+            "rw" | "atime" | "suid" | "dev" | "exec" | "async" => {}
+
+            // everything else is the filesystem's business
+            other => data.push(other),
+        }
+    }
+
+    (flags, data.join(","))
+}
+
 /// Mount them shallowest first.
 ///
 /// Ordered by the configuration rather than sorted here, because the ordering that matters is not
@@ -194,15 +235,13 @@ fn mount_all(mounts: &[Mount]) {
             continue;
         }
 
-        // the options as one comma-joined string, which is what mount(2) takes as its data
-        // argument - the same thing `-o` is, rather than anything mount(8) invented
-        let data = m.options.join(",");
+        let (flags, data) = split_options(&m.options);
 
         if let Err(e) = mount(
             m.device.as_str(),
             &m.mount_point,
             m.fs_type.as_str(),
-            MountFlags::empty(),
+            flags,
             data.as_str(),
         ) {
             // not fatal here: what is fatal is the store being absent, and that is caught where
@@ -378,14 +417,16 @@ fn main() {
     let system = relocate(&system, &config.store_mount);
     say!("system is {}", system.display());
 
-    // step 4: the rest of the virtual filesystems.
+    // step 4 is gone, and that is the point.
     //
-    // /dev before anything names a device node, which activation does. CONFIG_DEVTMPFS_MOUNT
-    // sounds like it covers this and does not: the kernel mounts devtmpfs for a root it mounted
-    // itself, and only after `/` is in place.
-    ensure_mount("sys", "/sys", "sysfs", MountFlags::NOSUID | MountFlags::NODEV | MountFlags::NOEXEC);
-    ensure_mount("devtmpfs", "/dev", "devtmpfs", MountFlags::NOSUID);
-    ensure_mount("tmpfs", "/run", "tmpfs", MountFlags::NOSUID | MountFlags::NODEV);
+    // /sys, /dev and /run were mounted here unconditionally, by a binary nobody had asked to
+    // mount them. They are in the configuration's `mounts` now like everything else, so a backend
+    // which wants to own one of them says so by not asking for it - which is the difference
+    // between a contract and a set of assumptions.
+    //
+    // /proc is the exception and has to be: reading `finix_system=` needs /proc/cmdline, and the
+    // configuration that would declare /proc is found through it. It is mounted above, for this
+    // binary's own use, before anything is known.
 
     // step 5: the filesystems the configuration says have to be there first
     mount_all(&config.mounts);
