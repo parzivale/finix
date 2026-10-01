@@ -858,21 +858,28 @@ in
           # mounted and what the configuration asked for differ. finix-init checks anyway - it
           # compares `/`'s statfs type against this - so a machine whose stage 1 already built the
           # tmpfs passes straight through.
+          # null rather than `{ }` when there is no declared tmpfs root, which is a distinction
+          # `lib.optionalAttrs` cannot make and JSON very much can. An empty object is a `root`
+          # whose fields are missing, not an absent one, and finix-init said so exactly:
+          #
+          #   finix-init: cannot parse .../finix-init.json: missing field `fsType` at line 1
+          #   column 366
+          #
+          # which was the whole of the first no-initrd boot.
           root =
             let
               r = config.fileSystems."/" or null;
             in
-            lib.optionalAttrs
-              (
-                r != null
-                && lib.elem r.fsType [
-                  "tmpfs"
-                  "ramfs"
-                ]
-              )
-              {
-                inherit (r) fsType options;
-              };
+            if
+              r != null
+              && lib.elem r.fsType [
+                "tmpfs"
+                "ramfs"
+              ]
+            then
+              { inherit (r) fsType options; }
+            else
+              null;
 
           # where the store's filesystem is declared to live, which is where the old root goes
           # when finix-init pivots: after it, every absolute store path in this file resolves.
