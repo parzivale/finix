@@ -71,6 +71,33 @@ let
       ;;
   '') (if cfg.user.manager ? supervisor then lib.attrNames cfg.users else [ ]);
 
+  # the same shape as `supervisorArms`, for the variables a session is given rather than the
+  # thing that supervises it.
+  #
+  # `lib.toShellVars` renders an attrset as assignments with values quoted, which is nearly what
+  # is wanted and not quite: a value is allowed to refer to the variable it is replacing, the way
+  # `environment.d(5)` lets one extend a path, and `toShellVars` quotes in a way that would
+  # export the text rather than the result.
+  #
+  # Double quotes rather than none, though. Parameter expansion happens inside them, so
+  # `''${XDG_CONFIG_DIRS:+:$XDG_CONFIG_DIRS}` still extends the variable - what they prevent is
+  # word splitting, and unquoted a value with a space in it becomes two arguments to `export`,
+  # the second of them a bare word. Store paths do not have spaces in them; values arriving here
+  # are not all store paths.
+  sessionVariableArms = lib.concatMapStrings (
+    user:
+    let
+      vars = cfg.users.${user}.sessionVariables;
+    in
+    lib.optionalString (vars != { }) ''
+      ${user})
+      ${lib.concatStringsSep "\n" (
+        lib.mapAttrsToList (name: value: "    export ${name}=\"${value}\"") vars
+      )}
+        ;;
+    ''
+  ) (lib.attrNames cfg.users);
+
   launcher = pkgs.writeShellScript "session-launch" ''
     set -eu
 
@@ -88,6 +115,19 @@ let
 
     [ -n "$user" ] || { echo "session-launch: --user is required" >&2; exit 2; }
     [ "$#" -gt 0 ] || { echo "session-launch: nothing to run" >&2; exit 2; }
+
+    # the session's environment, before anything in the session exists.
+    #
+    # Before the payload and not after it, unlike the block below: the payload is what spawns a
+    # session's applications, so anything it is not told it cannot pass on. Setting these
+    # afterwards would reach the supervisor and miss everything the compositor starts, which is
+    # the half that was already broken.
+    ${lib.optionalString (sessionVariableArms != "") ''
+      case "$user" in
+      ${sessionVariableArms}
+        *) ;;
+      esac
+    ''}
 
     # the payload - a compositor, a shell, whatever the session is - in the background, because
     # this process has to outlive it by long enough to stop the supervisor.
@@ -285,6 +325,58 @@ in
       '';
       type = lib.types.attrsOf (
         lib.types.submodule {
+          # the session's own environment, as opposed to what the session discovers about
+          # itself.
+          #
+          # Both end up exported by the launcher and the difference is only when.
+          # `sessionLauncherEnv` is polled after the payload starts, because what it reports is
+          # something the payload had to exist to publish - a compositor's socket name. These
+          # are known before anything runs, and have to be set before the payload rather than
+          # after it: the payload is what spawns a session's applications, so a variable it does
+          # not have is a variable they do not have either.
+          #
+          # Which is the shape of the bug this exists for. home-manager writes a user's session
+          # variables twice - once into a shell file for login shells, once into
+          # ~/.config/environment.d for systemd's user manager to import - and on a machine
+          # without that manager the second is a file nobody reads. So a terminal's children
+          # were themed and the compositor's were not: `QT_QPA_PLATFORMTHEME` reached a Qt
+          # application launched from a shell and not one launched from a key binding, which
+          # looks like the application ignoring the theme rather than never being told.
+          #
+          # Per-user because the values are: they are paths into one user's profile, and they
+          # change when that user's generation does.
+          options.sessionVariables = lib.mkOption {
+            # `int` and `path` coerced rather than refused, because home-manager's own session
+            # variables are typed that way and a consumer feeding them straight in should not
+            # have to map over them first. XCURSOR_SIZE is the one that found this: stylix sets
+            # it to 32, an integer, and an attrsOf str refuses it with the value and not the
+            # type in the message, which reads like a bad path rather than a number.
+            type = lib.types.attrsOf (
+              lib.types.coercedTo lib.types.int builtins.toString (
+                lib.types.coercedTo lib.types.path builtins.toString lib.types.str
+              )
+            );
+            default = { };
+            example = {
+              QT_QPA_PLATFORMTHEME = "qt5ct";
+            };
+            description = ''
+              Environment variables for this user's whole session - the payload the launcher
+              runs, the supervisor beside it, and everything either of them starts.
+
+              Set before the payload, so that what a compositor spawns inherits them.
+              {option}`providers.services.user.sessionLauncherEnv` is for the other case, a
+              value only knowable once the session is running.
+
+              Values are expanded by the shell the launcher is, so a variable may extend
+              itself the way `environment.d(5)` allows - `$XDG_CONFIG_DIRS` and
+              `''${XDG_CONFIG_DIRS:+:$XDG_CONFIG_DIRS}` both do what they look like. That is
+              also the caveat: a value is shell, so one containing a command substitution
+              would run it. They come from the configuration, which is as trusted as the
+              launcher itself, but nothing here sanitises them.
+            '';
+          };
+
           options.units = lib.mkOption {
             inherit (options.providers.services.units) type;
             default = { };
