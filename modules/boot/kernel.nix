@@ -47,8 +47,6 @@ let
     xfs.XFS_FS = yes;
   };
 
-  root = config.fileSystems."/" or null;
-
   # the root is the one filesystem the kernel has to mount unaided, and only when there is no
   # initrd to mount it instead. Everything else in `fileSystems` is mounted after init starts,
   # by which time a module is an ordinary thing to load - and an initrd carries the module for
@@ -66,9 +64,19 @@ let
   #
   # `auto` is not a filesystem, so there is nothing to look up; an fsType this has never heard
   # of is left to the warning below rather than silently dropped.
-  derived = lib.optional (
-    !config.boot.initrd.enable && root != null && filesystemConfig ? ${root.fsType}
-  ) root.fsType;
+  # `boot.kernelRootFsType` rather than fileSystems."/" directly, because the two are not always
+  # the same filesystem and this wants the one the kernel is actually going to mount. On a machine
+  # whose `/` is a tmpfs they differ by the whole of the point: the answer here was `tmpfs`, which
+  # is not a block filesystem and has no Kconfig symbol in the table, so `derived` came out empty
+  # and the kernel was built without the filesystem holding the store it was about to be run from.
+  # root.nix names the one it puts in `root=`, which is the question being asked.
+  derived =
+    let
+      fsType = config.boot.kernelRootFsType;
+    in
+    lib.optional (
+      !config.boot.initrd.enable && fsType != null && filesystemConfig ? ${fsType}
+    ) fsType;
 
   # the same idea for the controller the root disk hangs off, which is the other half of what
   # a kernel needs in order to reach a root unaided: knowing ext4 is no use if nothing can
@@ -494,17 +502,20 @@ in
     };
 
     warnings =
+      let
+        fsType = config.boot.kernelRootFsType;
+      in
       lib.optional
         (
           !config.boot.initrd.enable
-          && root != null
-          && root.fsType != "auto"
-          && !(filesystemConfig ? ${root.fsType})
+          && fsType != null
+          && fsType != "auto"
+          && !(filesystemConfig ? ${fsType})
         )
         ''
-          fileSystems."/" is ${root.fsType}, which this machine has no initrd to mount for it, and
-          which finix has no kernel configuration for - so nothing here can say whether the kernel
-          is able to mount it at all.
+          The kernel is told to mount a ${fsType} filesystem as its root, which this machine has
+          no initrd to mount for it, and which finix has no kernel configuration for - so nothing
+          here can say whether the kernel is able to mount it at all.
 
           If it is not, the machine boots to a kernel panic rather than to anything which could
           report this. Build the filesystem in through boot.kernel.structuredExtraConfig, or give

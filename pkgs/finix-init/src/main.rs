@@ -57,11 +57,6 @@ struct Config {
     #[serde(default)]
     root: Option<Root>,
 
-    /// Where the store's filesystem is declared to be mounted - normally /nix. The old root
-    /// lands here after the pivot, which is where every store path already expects it.
-    #[serde(rename = "storeMount", default = "default_store_mount")]
-    store_mount: String,
-
     /// Filesystems to mount before activation, shallowest first.
     #[serde(default)]
     mounts: Vec<Mount>,
@@ -111,20 +106,29 @@ fn is_tmpfs(path: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Put the declared root in place, with what the kernel mounted moved to where the store lives.
+/// Put the declared root in place, with what the kernel mounted taken back out of the way.
 ///
 /// The sequence matters and each step is there for a reason:
 ///
-///   - the tmpfs is mounted on a directory *of the current root*, which is the store device. That
-///     leaves an empty `/.finix-root` behind on it, which is the price of having somewhere to
-///     stand: pivot_root needs both paths to exist before either is the root.
-///   - the old root has to be moved somewhere inside the new one, and where it belongs is where
-///     the store is declared to be mounted - normally /nix. So the directory made for it is the
-///     store's own mount point, and after the pivot the device is exactly where every store path
-///     already expects it.
+///   - the tmpfs is mounted on a directory *of the current root*, which is whatever the kernel was
+///     given. That leaves an empty `/.finix-root` behind on it, which is the price of having
+///     somewhere to stand: pivot_root needs both paths to exist before either is the root.
+///   - the old root goes somewhere disposable rather than somewhere useful. It used to go to the
+///     store's own mount point, because the kernel was being given the store's own subvolume and
+///     moving it to /nix was what made /nix/store/... resolve. The kernel is given the view
+///     *above* that now - it has to be, since `init=` is an absolute store path which the kernel
+///     resolves before any of this runs - so moving it to /nix would put the store at
+///     /nix/nix/store. What puts the store at /nix is the configuration's own entry for it,
+///     mounted a step later with the options the machine asked for.
 ///   - `chdir("/")` after, because pivot_root leaves the working directory on the old root, and a
 ///     process holding that would keep it busy.
-fn pivot_to_declared_root(root: &Root, store_mount: &str) {
+///   - and then it is detached, which is the one part that cannot be left for later. Everything
+///     mounted before the pivot went with the old root - /proc, above - so leaving it in place
+///     means a second /proc under a dot-directory for the life of the system, over a filesystem
+///     nothing is ever going to unmount. Lazily, because this binary is running out of it:
+///     MNT_DETACH takes the subtree out of the namespace and lets the last reference close it,
+///     and the last reference is this process exec'ing out of the store's real mount.
+fn pivot_to_declared_root(root: &Root) {
     if root.fs_type != "tmpfs" {
         return;
     }
@@ -136,7 +140,7 @@ fn pivot_to_declared_root(root: &Root, store_mount: &str) {
     say!("/ is not the declared tmpfs; pivoting");
 
     let new_root = "/.finix-root";
-    let old_root = format!("{new_root}{store_mount}");
+    let old_root = format!("{new_root}/.old-root");
 
     if let Err(e) = fs::create_dir_all(new_root) {
         rescue(&format!("cannot create {new_root}: {e}"));
@@ -162,6 +166,13 @@ fn pivot_to_declared_root(root: &Root, store_mount: &str) {
 
     if let Err(e) = rustix::process::chdir("/") {
         say!("cannot chdir to the new root: {e}");
+    }
+
+    if let Err(e) = rustix::mount::unmount("/.old-root", rustix::mount::UnmountFlags::DETACH) {
+        // not fatal: what it costs is a mount nothing can see rather than a boot
+        say!("cannot detach the old root: {e}");
+    } else if let Err(e) = fs::remove_dir("/.old-root") {
+        say!("cannot remove /.old-root: {e}");
     }
 }
 
@@ -404,18 +415,24 @@ fn main() {
 
     // step 3: the declared root, where the kernel could not mount it itself
     if let Some(root) = &config.root {
-        pivot_to_declared_root(root, &config.store_mount);
-    }
+        pivot_to_declared_root(root);
 
-    // where the closure is *now*, which the pivot may have changed.
-    //
-    // On the direct path the kernel mounted the store's own filesystem at `/`, so a store path was
-    // reachable without the prefix it is named with - /store/... rather than /nix/store/... . The
-    // pivot puts that filesystem where it is declared to be, and every absolute path in the
-    // configuration starts resolving. Asked rather than assumed, because the same binary serves
-    // the path where no pivot happened at all.
-    let system = relocate(&system, &config.store_mount);
-    say!("system is {}", system.display());
+        // and /proc again, because the pivot took the one from step 1 with it.
+        //
+        // Everything mounted before a pivot_root stays under the old root, which is detached a
+        // moment later, so the mount made above for this binary's own use is simply gone - and
+        // nothing puts it back in time. `mounts` is the backend's list and finit is not on it:
+        // finit mounts /proc itself, which it does after this process has exec'd it, which is
+        // after activation. So activation ran without /proc, and said so in the one line of it
+        // that reads a sysctl:
+        //
+        //   .../activate: line 92: /proc/sys/kernel/modprobe: No such file or directory
+        //   Activation script snippet 'modprobe' failed (1)
+        //
+        // Here rather than in `mounts`, for the same reason step 1 is: /proc is this binary's own
+        // prerequisite and not a thing the configuration should have to ask for twice.
+        ensure_mount("proc", "/proc", "proc", MountFlags::NOSUID | MountFlags::NODEV | MountFlags::NOEXEC);
+    }
 
     // step 4 is gone, and that is the point.
     //
@@ -431,6 +448,18 @@ fn main() {
     // step 5: the filesystems the configuration says have to be there first
     mount_all(&config.mounts);
 
+    // and only now is the closure's own path answerable, which is why nothing is said about it
+    // before here.
+    //
+    // There is no longer anything to work out: `system` is the absolute path the bootspec named
+    // and every path in the configuration agrees with it, and step 5 is where that becomes true
+    // of the filesystem as well. It used to be asked rather than assumed, because the pivot moved
+    // the store's filesystem and the prefix it was named with had to be put back on - and with
+    // the pivot leaving it where it was named, asking could only return the same answer or a
+    // wrong one. It returned the wrong one: /nix/nix/store/..., found because the old root was
+    // still mounted at /nix at the time, and mounted over a step later.
+    say!("system is {}", system.display());
+
     // step 6: activation, and its status.
     //
     // The service manager's own configuration is in /etc, and /etc is what this puts there, so
@@ -444,26 +473,6 @@ fn main() {
 
     // step 8: the service manager, exec'd rather than spawned, because PID 1 is what it has to be
     exec_manager(&config, &system)
-}
-
-/// The closure's path after whatever step 3 did, found by asking rather than by remembering.
-///
-/// Both candidates are tried in the order that makes the no-pivot case free: a machine which
-/// pivoted finds its closure under the store's mount point, one which did not finds it where it
-/// was named.
-fn relocate(system: &Path, store_mount: &str) -> PathBuf {
-    if system.join("activate").exists() {
-        return system.to_path_buf();
-    }
-
-    let stripped = system.strip_prefix("/").unwrap_or(system);
-    let moved = Path::new(store_mount).join(stripped);
-    if moved.join("activate").exists() {
-        return moved;
-    }
-
-    // neither, which activate() will report against the more useful of the two
-    system.to_path_buf()
 }
 
 /// Mount `target` unless something is already there.
@@ -611,9 +620,4 @@ fn rescue(why: &str) -> ! {
 /// mounted onto them, so the directory is there either way.
 fn count_store() -> usize {
     fs::read_dir("/nix/store").map(|d| d.count()).unwrap_or(0)
-}
-
-
-fn default_store_mount() -> String {
-    "/nix".to_string()
 }

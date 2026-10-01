@@ -32,9 +32,69 @@ let
     "rw"
   ];
 
-  rootflags = lib.filter (opt: !(lib.elem opt ownFlags)) (
-    if kernelRoot == null then [ ] else kernelRoot.options
-  );
+  pathComponents = p: lib.filter (c: c != "") (lib.splitString "/" p);
+
+  # `subvolid=` is not a near miss here: it is longer than the prefix and differs at the
+  # character the prefix ends on, so it never matches. Which is the right outcome and the wrong
+  # reason to depend on, so the assertion below names it rather than leaving it to that.
+  subvolOf =
+    fs:
+    let
+      hit = lib.filter (lib.hasPrefix "subvol=") (fs.options or [ ]);
+    in
+    if hit == [ ] then null else lib.removePrefix "subvol=" (lib.head hit);
+
+  # which subvolume the kernel is told to mount, which is not the one the machine wrote down.
+  #
+  # `init=` is an absolute path - /nix/store/...-finix-system/init - and the kernel resolves it
+  # against whatever it mounted as `/`. So that mount has to be the view of the device in which
+  # the path is spelled the way the bootspec spelled it, and where the store sits on a subvolume
+  # of its own that is not the subvolume itself: `subvol=nix` mounted at /nix has the store at
+  # `store/`, so /nix/store/... resolves to nothing and the kernel panics on an init it was
+  # handed the correct path to.
+  #
+  # The view that works is the one in which the mountpoint's own path is still written out,
+  # which is the subvolume lifted by the depth of the mountpoint it was going to be mounted at:
+  #
+  #     subvol=nix         at /nix        ->  the top level, where the store is nix/store/...
+  #     subvol=@/nix       at /nix        ->  subvol=@,      where the store is nix/store/...
+  #     subvol=@/nix/store at /nix/store  ->  subvol=@
+  #     subvol=store       at /nix/store  ->  nothing lifts that far; the assertion below
+  #
+  # `/` is depth zero, so for a root the kernel really is mounting this is the identity and the
+  # machine's own subvolume is what it gets. Which is the only correct answer there, that mount
+  # being the final one with nothing to come along and remount it.
+  liftedSubvol =
+    if kernelRoot == null then
+      null
+    else
+      let
+        subvol = subvolOf kernelRoot;
+        have = if subvol == null then [ ] else pathComponents subvol;
+        keep = lib.length have - lib.length (pathComponents kernelRoot.mountPoint);
+      in
+      if keep < 0 then null else lib.concatStringsSep "/" (lib.take keep have);
+
+  # what the kernel is handed as `rootflags`.
+  #
+  # For a root the kernel mounts as the final root, the machine's own options less the ones the
+  # kernel takes as flags of its own. That mount happens exactly once and nothing remounts it
+  # afterwards, so `subvol=`, `noatime` and `compress=` have to be in effect from the first
+  # instruction, and this is the only channel they have.
+  #
+  # For a pivot they are not this mount's options at all. finix-init mounts the store at its
+  # declared mountpoint out of `mounts` a moment later, with exactly these options, and what the
+  # kernel mounted is the scaffolding the binary is run out of - discarded by the pivot before
+  # anything else happens. Passing them here applies one option list to two different mounts,
+  # and `subvol=` is the member of it which does damage rather than nothing. The single thing
+  # wanted from the device is a view in which `init=` resolves, which is the lift above.
+  rootflags =
+    if kernelRoot == null then
+      [ ]
+    else if !virtualRoot then
+      lib.filter (opt: !(lib.elem opt ownFlags)) kernelRoot.options
+    else
+      lib.optional (liftedSubvol != null && liftedSubvol != "") "subvol=${liftedSubvol}";
 
   # what the kernel is handed as root=, which is not always what the machine wrote down.
   #
@@ -223,6 +283,23 @@ let
     ];
 in
 {
+  # what the kernel is told to mount, by fsType, for whoever has to build a kernel that can.
+  #
+  # Internal: this module's own answer to "which filesystem does `root=` name", published
+  # because boot/kernel.nix needs it and deriving it twice would be deriving it differently.
+  # Null wherever this module emits no `root=` at all.
+  options.boot.kernelRootFsType = lib.mkOption {
+    type = lib.types.nullOr lib.types.str;
+    default = null;
+    internal = true;
+    description = ''
+      The `fsType` of the filesystem named to the kernel as `root=`, or null where nothing is.
+
+      Normally `fileSystems."/"`. Where `/` is a tmpfs the kernel cannot mount it, so what it is
+      given is the filesystem holding the store and this is that one's type.
+    '';
+  };
+
   options.boot.deviceAliases = lib.mkOption {
     type = with lib.types; listOf (listOf str);
     default = [ ];
@@ -269,6 +346,8 @@ in
     # `device != null` as well: with nothing resolved there is no `root=` to write, and the
     # assertions below are what should report that rather than a coercion error from this string.
     boot.kernelParams = lib.mkIf (kernelRoot != null && device != null) params;
+
+    boot.kernelRootFsType = lib.mkIf (kernelRoot != null) kernelRoot.fsType;
 
     # and never checked at boot, which the fstab has to say out loud.
     #
@@ -393,6 +472,74 @@ in
           there is nothing to name and nothing for the binary to be run out of.
 
           Give the store a filesystem of its own, or enable the initrd so a stage builds the root.
+        '';
+      }
+
+      # and that filesystem has to be mountable in a way which leaves the store where the
+      # bootspec says it is
+      {
+        assertion = !virtualRoot || kernelRoot == null || liftedSubvol != null;
+        message =
+          let
+            subvol = subvolOf kernelRoot;
+            byId = lib.filter (lib.hasPrefix "subvolid=") (kernelRoot.options or [ ]);
+            depth = lib.length (pathComponents kernelRoot.mountPoint);
+
+            why =
+              if subvol != null then
+                "subvol=${subvol} would have to be lifted ${toString depth} ${
+                  if depth == 1 then "component" else "components"
+                } and is ${toString (lib.length (pathComponents subvol))} deep."
+              else if byId != [ ] then
+                "${kernelRoot.mountPoint} names its subvolume by id (${
+                  lib.concatStringsSep ", " byId
+                }), and an id says nothing about where in the filesystem that subvolume sits - so there is no parent of it to name in its place. Write subvol=<path> and there will be."
+              else
+                "${kernelRoot.mountPoint} is ${kernelRoot.fsType}, which can only be mounted from its own root - where the store is at ${
+                  lib.removePrefix kernelRoot.mountPoint "/nix/store"
+                }/..., not at /nix/store/.... Mounting a filesystem from somewhere other than its root is a btrfs feature, and `subvol=` is it.";
+          in
+          ''
+            fileSystems."/" is ${root.fsType} and boot.initrd.enable is false, so the kernel is
+            given ${kernelRoot.mountPoint} to mount as its root and execs the init out of it by
+            the path the bootspec wrote: /nix/store/...-finix-system/init.
+
+            That path is absolute and the kernel resolves it against what it mounted, so the
+            mount has to begin far enough up the filesystem that ${kernelRoot.mountPoint} is
+            still part of the path. ${why}
+
+            Four ways out, in the order they are worth taking:
+
+              - mount the store at /nix rather than at /nix/store, so there is one component to
+                lift instead of two.
+              - put the store on a subvolume with a parent to mount in its place: subvol=@/nix
+                at /nix leaves subvol=@, where the store is nix/store/... as written.
+              - give the machine a real root instead of a tmpfs. The kernel's mount is then the
+                root itself, `init=` resolves against it as a matter of course, and none of this
+                applies.
+              - set boot.initrd.enable = true, where stage 1 builds the tmpfs and mounts the
+                store beneath it before the init runs, and the kernel is never asked to resolve
+                a path inside the store at all.
+          '';
+      }
+
+      # and it has to be mounted again once the pivot is done
+      {
+        assertion = !virtualRoot || kernelRoot == null || kernelRoot.neededForBoot;
+        message = ''
+          fileSystems."${kernelRoot.mountPoint}" holds the store and boot.initrd.enable is false,
+          so the kernel mounts it to find the init - and then finix-init pivots to the declared
+          tmpfs, which takes that mount with it. Nothing would put the store back.
+
+          What the kernel mounted is scaffolding: it is a view of the device chosen so the
+          bootspec's own `init=` resolves, it is detached once the pivot is done, and it is not
+          the mount the machine asked for. The mount the machine asked for is this entry, and
+          finix-init makes it from the list of filesystems marked neededForBoot - which this one
+          is not, so the list would not contain it and the pivot would land on an empty tmpfs with
+          no store under it.
+
+          Set fileSystems."${kernelRoot.mountPoint}".neededForBoot = true. On a machine whose
+          store is its root this is implicit; on one whose root is a tmpfs it has to be said.
         '';
       }
 

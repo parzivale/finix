@@ -881,19 +881,6 @@ in
             else
               null;
 
-          # where the store's filesystem is declared to live, which is where the old root goes
-          # when finix-init pivots: after it, every absolute store path in this file resolves.
-          storeMount =
-            let
-              holders = lib.filter (fs: lib.hasPrefix fs.mountPoint "/nix/store") (
-                lib.attrValues config.fileSystems
-              );
-              deepest = lib.foldl' (
-                a: b: if lib.stringLength b.mountPoint > lib.stringLength a.mountPoint then b else a
-              ) { mountPoint = "/"; } holders;
-            in
-            deepest.mountPoint;
-
           # `neededForBoot`, shallowest first - which is the ordering that matters and not an
           # alphabetical one: a path cannot be mounted over a parent which is not there yet. Sorted
           # here because this is where the depths are known, so the binary can walk the list.
