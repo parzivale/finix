@@ -123,6 +123,38 @@ let
       # outright rather than filling in one it left open.
       NVME_AUTH = lib.mkForce yes;
     };
+    # Apple silicon's NVMe, which is not the PCIe NVMe above and shares only the command set.
+    #
+    # The controller is an RTKit coprocessor reached over a mailbox rather than a PCIe function,
+    # so none of `nvme`'s symbols bring it in - a machine with this disk and only BLK_DEV_NVME
+    # built in gets `VFS: Cannot open root device` from a kernel which has an NVMe driver and
+    # not the one for its own disk. `nvme_apple.flush_interval=` on an Asahi command line is the
+    # giveaway that the module in play is this one.
+    #
+    # SART is the address filter the controller DMAs through and NVME_APPLE depends on it
+    # directly. DART is the IOMMU: a built-in driver probes before any module is loaded, so a
+    # modular DART means the device is there and its address translation is not, which fails at
+    # probe rather than at mount and says nothing about why. MAILBOX is how the coprocessor is
+    # reached at all.
+    #
+    # This entry is not sufficient on its own, and that is not a defect in it. nixpkgs seeds a
+    # kernel configuration with `make defconfig` and then answers questions from the list this
+    # produces, and kconfig asks in its own source order: drivers/nvme comes well before
+    # drivers/iommu, drivers/mailbox and drivers/soc, so when NVMe is decided its dependencies
+    # still hold whatever the seed gave them. A tristate cannot be built in over a modular
+    # dependency, so `y` is not offered, asking for it anyway gets the question re-asked, and
+    # generate-config.pl dies on the repeat - its second pass, which exists for precisely this
+    # and would have succeeded, is never reached. The values below have to be in the *seed* to
+    # be in time, which is a patch against the platform's defconfig and so a host's business
+    # rather than this table's: see the Asahi host's `apple-nvme-builtin.patch`. What belongs
+    # here is the statement of which symbols the driver needs, which is what every other entry
+    # is, and the assertion in the host's patch is that they arrived early enough.
+    nvme_apple = {
+      NVME_APPLE = yes;
+      APPLE_SART = yes;
+      APPLE_DART = yes;
+      APPLE_MAILBOX = yes;
+    };
     sd_mod = {
       SCSI = yes;
       BLK_DEV_SD = yes;
