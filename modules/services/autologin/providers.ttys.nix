@@ -33,8 +33,10 @@ in
       # session into a half-built machine.
       #
       # That one edge is the whole of it now. This used to name five things one at a time -
-      # syslogd, the device manager's settle, elogind, sessiond, seatd's socket - and every one
-      # of them is in an earlier tier, including the socket gates, so the trunk says it all.
+      # syslogd, the device manager, elogind, sessiond, seatd's socket - and every one
+      # of them is in an earlier tier, including the socket gates, so the trunk says it all. The
+      # device manager's settle is no longer among them and is not missed: a login prompt
+      # needs a tty, which is devtmpfs, not an enumerated device.
       requires = [ "multi-user" ];
     };
   };

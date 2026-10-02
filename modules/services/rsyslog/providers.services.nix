@@ -39,7 +39,7 @@ in
         # would otherwise race the unit which creates it.
         "tmpfiles-setup"
       ]
-      ++ lib.optional config.services.udev.enable "udev-settle"
+      ++ lib.optional config.services.udev.enable "udev-coldplug"
       ++ lib.optional config.services.mdevd.enable "coldplug";
     };
   };

@@ -17,10 +17,22 @@ in
     providers.services.units.ifupdown-ng = {
       description = "bring up network interfaces";
 
-      # `sysinit` puts it in the basic tier: the device manager has settled in the tier before,
-      # so the interfaces exist, and syslogd is there too - which is what the old
-      # `service/syslogd/ready` condition said and no longer needs saying.
-      requires = [ "sysinit" ];
+      # `sysinit` puts it in the basic tier, where syslogd is already behind it - which is what
+      # the old `service/syslogd/ready` condition said and no longer needs saying.
+      #
+      # The device manager's settle is named outright, because this is one of the few things
+      # that genuinely wants the global property rather than a device. Interfaces are renamed by
+      # the device manager - `wlan0` becomes `wlp1s0f0` - and what this needs to know is that no
+      # further renames are coming. That is the absence of an event, so there is no path to wait
+      # for: `waitFor.path` cannot express it and the settle is the only thing that can. Bringing
+      # up an interface under a name that is about to change is a configuration applied to
+      # nothing.
+      requires = [
+        "sysinit"
+      ]
+      ++ lib.optional config.services.udev.enable "udev-settle"
+      ++ lib.optional config.services.mdevd.enable "coldplug"
+      ++ lib.optional config.services.gardendevd.enable "gardendevd-settle";
 
       type.oneshot.command = pkgs.writeShellScript "ifup" ''
         ${lib.concatMapStrings (iface: ''

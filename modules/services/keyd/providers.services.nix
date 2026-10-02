@@ -17,9 +17,20 @@ in
     providers.services.units.keyd = {
       description = "keyd, a key remapping daemon";
 
-      # the device manager has settled in the head tier, so the input devices keyd grabs are
-      # there. syslogd is in that tier too and needs no naming.
-      requires = [ "basic" ];
+      # The device manager's settle, named outright rather than assumed from the tier.
+      #
+      # keyd opens every keyboard under /dev/input and grabs it, which is a look-once
+      # enumeration of a set rather than a wait for one device - so `waitFor.path` has nothing
+      # to name, and a keyboard whose driver probes late is simply one keyd never grabbed. This
+      # used to work because the settle sat on the head of the trunk and everything after it had
+      # devices; it does not sit there any more, and the dependency is real, so it is written
+      # down.
+      requires = [
+        "basic"
+      ]
+      ++ lib.optional config.services.udev.enable "udev-settle"
+      ++ lib.optional config.services.mdevd.enable "coldplug"
+      ++ lib.optional config.services.gardendevd.enable "gardendevd-settle";
 
       # keyd reads /etc/keyd and names none of it, so every file the tree was generated
       # from is listed: a changed keymap is then a changed unit. It has a `reload` below,

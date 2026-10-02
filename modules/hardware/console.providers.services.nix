@@ -48,8 +48,11 @@ in
     providers.services.units.loadkmap = {
       description = "load console keymap";
 
-      # `conditions = "dev/console"` was finit waiting for the device node. The device manager
-      # is what puts it there, and it is in the head tier, so this sits in the tier after it.
+      # `conditions = "dev/console"` was finit waiting for the device node, and this replaced it
+      # with a tier - on the reasoning that the device manager puts /dev/console there. It does
+      # not: /dev/console is devtmpfs, which the kernel populates and the init mounts before any
+      # unit runs. So there is nothing here to wait for beyond the trunk, and naming a device
+      # manager would be naming something this has never needed.
       requires = [ "sysinit" ];
 
       # reported rather than fatal, like the finit task this was: nothing waited on a task, but

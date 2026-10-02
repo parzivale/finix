@@ -36,10 +36,15 @@ in
       # that, which is what the optional `requires = [ "syslogd" ]` scattered through the other
       # service modules is working around.
       #
-      # The device manager comes first where there is one: /dev/log has to exist before
-      # anything can log to it, and on a machine with no device nodes yet there is nothing to
-      # listen on. Both managers have a unit which means "the device nodes are there" - udev's
-      # settle, mdevd's coldplug - and neither is attached to a tier, so both are named.
+      # The device manager is asked to populate /dev first where there is one. Both managers
+      # have a unit which triggers that - udev's coldplug, mdevd's - and both are named rather
+      # than relied on through the trunk.
+      #
+      # The trigger and not a settle. udev used to offer one and this named it, which meant a
+      # logger waited for the entire device tree to drain before it could start - about two
+      # seconds on a laptop, for a dependency it does not have. /dev is devtmpfs and is mounted
+      # before any unit runs, so /dev/log has somewhere to live regardless. What the ordering
+      # actually buys is that a manager which is going to create nodes has started doing so.
       requires = [
         (lib.head config.providers.services.trunk.levels)
 
@@ -48,7 +53,7 @@ in
         # would otherwise race the unit which creates it.
         "tmpfiles-setup"
       ]
-      ++ lib.optional config.services.udev.enable "udev-settle"
+      ++ lib.optional config.services.udev.enable "udev-coldplug"
       ++ lib.optional config.services.mdevd.enable "coldplug";
     };
   };
