@@ -118,6 +118,59 @@ let
   # waits for this" is a fact about the graph rather than a decoration.
   isFloating = name: unit: !(isLevel name) && levelOf name unit == null;
 
+  # a user's tree, drawn beside the system's rather than in it.
+  #
+  # It is a graph of its own in the strongest sense: a different supervisor runs it, started by
+  # that user's session, and the contract refuses an edge leaving it - so there is nothing to draw
+  # between the two and drawing them in one flow would imply an ordering that does not exist. A
+  # mermaid subgraph is exactly that statement: these nodes belong together and to nothing else.
+  #
+  # Ids are prefixed per user because the namespaces are genuinely separate. Each tree has its own
+  # trunk head, so `start` exists once per user and once for the system, and a single `u_start`
+  # would quietly merge all of them into one node with edges from everywhere.
+  userTree =
+    user: u:
+    let
+      units = lib.filterAttrs (_: v: v.enable) u.units;
+      # the username through the same sanitiser the unit names go through, then that as the prefix
+      # every node in this tree carries
+      prefix = idOf "s_" user + "_";
+      nid = idOf prefix;
+      head = lib.head trunk.levels;
+
+      # the head is an anchor in this tree the same way it is in the system's, but it is not in
+      # `units` - the implementation emits it - so it is drawn from what names it rather than from
+      # a definition that is not there.
+      named = lib.any (v: lib.elem head v.requires) (lib.attrValues units);
+    in
+    [
+      "  subgraph ${prefix}tree[\"${user} · ${toString (lib.length (lib.attrNames units))} units\"]"
+      "    direction LR"
+    ]
+    ++ lib.optional named "    ${nid head}{{${head}}}:::level"
+    ++ lib.mapAttrsToList (
+      name: unit:
+      let
+        kind = kindOf unit;
+        label = "${name}<br/>${if kind == "oneshot" then "oneshot" else kind}";
+      in
+      if kind == "service" then
+        "    ${nid name}(\"${label}\"):::service"
+      else if kind == "oneshot" then
+        "    ${nid name}[\"${label}\"]:::oneshot"
+      else
+        "    ${nid name}([\"${label}\"]):::anchor"
+    ) units
+    ++ lib.concatLists (
+      lib.mapAttrsToList (
+        name: unit:
+        map (dep: "    ${nid dep} --> ${nid name}") (
+          lib.filter (dep: units ? ${dep} || (dep == head && named)) unit.requires
+        )
+      ) units
+    )
+    ++ [ "  end" ];
+
   mermaid = lib.concatStringsSep "\n" (
     [
       "---"
@@ -144,6 +197,10 @@ let
     ++ lib.mapAttrsToList (name: unit: "  ${nodeFor name unit}") enabled
     ++ [ "" ]
     ++ lib.concatLists (lib.mapAttrsToList edgesOf enabled)
+    ++ [ "" ]
+
+    # the per-user trees last, so the system graph reads top to bottom before them
+    ++ lib.concatLists (lib.mapAttrsToList userTree cfg.users)
     ++ [ "" ]
   );
 in
