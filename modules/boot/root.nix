@@ -264,8 +264,33 @@ let
     || lib.elem "_netdev" (fs.options or [ ])
   ) early;
 
-  # and the ones expecting an fsck that nothing on this path can perform
-  unchecked = lib.filter (fs: !fs.noCheck) early;
+  # the ones expecting an fsck that nothing on this path can perform.
+  #
+  # `!noCheck` alone was too broad and said so the first time it met a VM: `/persistent` there is
+  # a tmpfs, which has no fsck to expect, and the assertion duly refused a configuration that was
+  # fine. A filesystem only expects one if something would actually run it - so the same
+  # exclusions the mount generator makes apply here, by the same reasoning and from the same list.
+  neverChecked = [
+    "none"
+    "auto"
+    "overlay"
+    "bindfs"
+    "iso9660"
+    "udf"
+    "btrfs"
+    "zfs"
+    "bcachefs"
+    "tmpfs"
+    "ramfs"
+    "9p"
+    "virtiofs"
+    "nfs"
+    "nfs4"
+    "cifs"
+    "vboxsf"
+  ];
+
+  unchecked = lib.filter (fs: !fs.noCheck && !(lib.elem fs.fsType neverChecked)) early;
 
   # `neededForBoot` means "mounted before stage 2 init", which is a thing only an initrd can
   # do. `/` is the exception the kernel handles itself.
