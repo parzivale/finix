@@ -269,6 +269,31 @@ let
 
   # `neededForBoot` means "mounted before stage 2 init", which is a thing only an initrd can
   # do. `/` is the exception the kernel handles itself.
+  # a name only udev makes, and so a name nothing has made yet on this path
+  udevPath = d: d != null && lib.hasPrefix "/dev/disk/by-" d;
+
+  # what mount(8) resolves for itself, by reading the disk rather than looking in /dev
+  blkidTag =
+    d:
+    d != null
+    && lib.any (t: lib.hasPrefix t d) [
+      "UUID="
+      "LABEL="
+      "PARTUUID="
+      "PARTLABEL="
+    ];
+
+  # everything `mount -a` will try, which is every filesystem but the root - that one is the
+  # kernel's or a stage's, and is already mounted by the time fstab is read
+  fstabMounts = lib.filter (fs: fs.mountPoint != "/") (lib.attrValues config.fileSystems);
+
+  # named by a symlink udev has not made yet
+  lateNamed = lib.filter (fs: udevPath fs.device) fstabMounts;
+
+  # and the ones finix-init mounts itself, which is mount(2) rather than mount(8): a syscall
+  # takes a path, so neither a udev symlink nor one of mount(8)'s tags is a thing it can use
+  rawNamed = lib.filter (fs: udevPath fs.device || blkidTag fs.device) early;
+
   early = lib.filter (fs: fs.neededForBoot && fs.mountPoint != "/") (
     lib.attrValues config.fileSystems
   );
@@ -580,6 +605,59 @@ in
 
           Set noCheck = true to say so out loud, or enable the initrd so there is something to do
           the checking.
+        '';
+      }
+
+      # the devices fstab names, which nothing has made yet
+      {
+        assertion = lateNamed == [ ];
+        message = ''
+          boot.initrd.enable is false, so ${
+            lib.concatMapStringsSep ", " (fs: "${fs.mountPoint} (${toString fs.device})") lateNamed
+          } ${
+            if lib.length lateNamed == 1 then "is" else "are"
+          } mounted by `mount -a` once the init is running - and nothing has run udev by then.
+          /dev/disk/by-* is a symlink udev makes, so the mount fails exactly as a missing device
+          does.
+
+          It takes the whole boot with it, which is why this is an error and not a warning.
+          `mount -a` is one task for every filesystem, so one entry failing fails all of them;
+          the sysinit barrier waits on that task for ever, and a machine which never reaches
+          sysinit never starts a logger - so the only record of why is on the console, if anyone
+          is watching.
+
+          mount(8) resolves these itself, through libblkid, which reads the disk rather than
+          looking in /dev:
+
+            /dev/disk/by-partuuid/X   ->  PARTUUID=X
+            /dev/disk/by-partlabel/X  ->  PARTLABEL=X
+            /dev/disk/by-uuid/X       ->  UUID=X
+            /dev/disk/by-label/X      ->  LABEL=X
+
+          by-id, by-path and by-diskseq have no equivalent - they describe what the hardware says
+          about itself, which is udev's knowledge and not the disk's - so those have to name the
+          device node instead.
+        '';
+      }
+
+      # and the devices finix-init mounts, where even mount(8)'s own syntax is too late
+      {
+        assertion = rawNamed == [ ];
+        message = ''
+          ${
+            lib.concatMapStringsSep ", " (fs: "${fs.mountPoint} (${toString fs.device})") rawNamed
+          } ${
+            if lib.length rawNamed == 1 then "is" else "are"
+          } neededForBoot, so finix-init mounts ${
+            if lib.length rawNamed == 1 then "it" else "them"
+          } before the init runs - and it calls mount(2), which takes a path and nothing else.
+
+          `UUID=`, `LABEL=`, `PARTUUID=` and `PARTLABEL=` are mount(8)'s syntax, resolved by
+          libblkid inside a program which is not running here. /dev/disk/by-* is a symlink udev
+          makes, and udev is not running either. A syscall can use neither.
+
+          Name the device node: /dev/nvme0n1p5, /dev/sda2. This is the same thing root= asks for
+          and for the same reason - there is nothing between the kernel and the disk yet.
         '';
       }
     ];
