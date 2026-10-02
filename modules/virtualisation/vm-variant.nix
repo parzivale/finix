@@ -22,10 +22,32 @@ let
 
   hostPkgs = cfg.host.pkgs;
 
-  # Whether a mount names storage a virtual machine does not have: a block device, or a
-  # filesystem label - anything findable only on the machine the configuration was written for.
-  # Everything else is a pseudo-filesystem, a bind, or a share, and works here unchanged.
-  namesADisk = fs: fs.label != null || (fs.device != null && lib.hasPrefix "/dev/" fs.device);
+  # Whether a mount names storage a virtual machine does not have: a block device, a filesystem
+  # label, or one of the tags mount resolves against the partitions it can see - anything findable
+  # only on the machine the configuration was written for. Everything else is a pseudo-filesystem,
+  # a bind, or a share, and works here unchanged.
+  #
+  # A `/dev/` path and a label were not the whole of it, and /boot is where that showed: an ESP
+  # written `PARTUUID=...` is a disk by every meaning this predicate has, and is named like none
+  # of the two it knew, so it passed through unchanged to a machine with no such partition. What
+  # that produces is `mount -a` failing on the one mount, which holds every dependent of
+  # `mount-filesystems` and stops the trunk - a machine that cannot boot in a VM over a mount it
+  # was never going to need there.
+  deviceTags = [
+    "UUID="
+    "PARTUUID="
+    "LABEL="
+    "PARTLABEL="
+    "ID="
+  ];
+
+  namesADisk =
+    fs:
+    fs.label != null
+    || (
+      fs.device != null
+      && (lib.hasPrefix "/dev/" fs.device || lib.any (tag: lib.hasPrefix tag fs.device) deviceTags)
+    );
 
   # The console the kernel is told to use, which is the console the runner below reads. Chosen
   # by architecture because qemu's `virt` machine wires a different uart depending: an amba
