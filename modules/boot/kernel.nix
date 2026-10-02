@@ -74,9 +74,7 @@ let
     let
       fsType = config.boot.kernelRootFsType;
     in
-    lib.optional (
-      !config.boot.initrd.enable && fsType != null && filesystemConfig ? ${fsType}
-    ) fsType;
+    lib.optional (!config.boot.initrd.enable && fsType != null && filesystemConfig ? ${fsType}) fsType;
 
   # the same idea for the controller the root disk hangs off, which is the other half of what
   # a kernel needs in order to reach a root unaided: knowing ext4 is no use if nothing can
@@ -154,6 +152,13 @@ let
       APPLE_SART = yes;
       APPLE_DART = yes;
       APPLE_MAILBOX = yes;
+
+      # For the reason given on `nvme` above, which reaches here by the same route: NVME_APPLE
+      # selects NVME_CORE, NVME_HOST_AUTH is a built-in bool selecting NVME_AUTH, and a tristate
+      # so selected under a built-in parent is `y`. This was invisible while every driver in the
+      # table was selected, because `nvme` was in that set and carried the override; a machine
+      # naming only this driver loses it and the configuration check fails on the difference.
+      NVME_AUTH = lib.mkForce yes;
     };
     sd_mod = {
       SCSI = yes;
@@ -190,7 +195,25 @@ let
   # try to name only the necessary ones.
   #
   # A machine which knows what it is can still say so, `[ ]` included.
-  allDrivers = lib.optionals (!config.boot.initrd.enable) knownDrivers;
+  #
+  # `seedOnly` is excluded, and that exclusion is the whole of why the list is not simply
+  # `knownDrivers`. A driver in it cannot be built in by answering the configuration
+  # generator's questions, because its dependencies are asked about after it is: the answer
+  # `y` is refused, the question repeats, and the build dies naming the driver rather than the
+  # dependency. Getting it in means putting the dependencies in the defconfig the generator
+  # starts from, which is a patch against the platform's own configuration and so a machine's
+  # business rather than this list's.
+  #
+  # So naming such a driver here is a request a machine can honour, and building it into
+  # every no-initrd kernel automatically is a build failure for every machine that does not
+  # carry the patch - which is what happened: adding `nvme_apple` to the table broke every
+  # no-initrd test in this repository, because they build the stock kernel and have no reason
+  # to patch its defconfig.
+  seedOnly = [ "nvme_apple" ];
+
+  allDrivers = lib.optionals (!config.boot.initrd.enable) (
+    lib.filter (d: !(lib.elem d seedOnly)) knownDrivers
+  );
 
   known = lib.attrNames filesystemConfig;
   unknown = lib.filter (fs: !(filesystemConfig ? ${fs})) config.boot.kernel.builtinFilesystems;
@@ -539,10 +562,7 @@ in
       in
       lib.optional
         (
-          !config.boot.initrd.enable
-          && fsType != null
-          && fsType != "auto"
-          && !(filesystemConfig ? ${fsType})
+          !config.boot.initrd.enable && fsType != null && fsType != "auto" && !(filesystemConfig ? ${fsType})
         )
         ''
           The kernel is told to mount a ${fsType} filesystem as its root, which this machine has
