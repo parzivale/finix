@@ -516,13 +516,9 @@ in
                   if depth == 1 then "component" else "components"
                 } and is ${toString (lib.length (pathComponents subvol))} deep."
               else if byId != [ ] then
-                "${kernelRoot.mountPoint} names its subvolume by id (${
-                  lib.concatStringsSep ", " byId
-                }), and an id says nothing about where in the filesystem that subvolume sits - so there is no parent of it to name in its place. Write subvol=<path> and there will be."
+                "${kernelRoot.mountPoint} names its subvolume by id (${lib.concatStringsSep ", " byId}), and an id says nothing about where in the filesystem that subvolume sits - so there is no parent of it to name in its place. Write subvol=<path> and there will be."
               else
-                "${kernelRoot.mountPoint} is ${kernelRoot.fsType}, which can only be mounted from its own root - where the store is at ${
-                  lib.removePrefix kernelRoot.mountPoint "/nix/store"
-                }/..., not at /nix/store/.... Mounting a filesystem from somewhere other than its root is a btrfs feature, and `subvol=` is it.";
+                "${kernelRoot.mountPoint} is ${kernelRoot.fsType}, which can only be mounted from its own root - where the store is at ${lib.removePrefix kernelRoot.mountPoint "/nix/store"}/..., not at /nix/store/.... Mounting a filesystem from somewhere other than its root is a btrfs feature, and `subvol=` is it.";
           in
           ''
             fileSystems."/" is ${root.fsType} and boot.initrd.enable is false, so the kernel is
@@ -644,9 +640,7 @@ in
       {
         assertion = rawNamed == [ ];
         message = ''
-          ${
-            lib.concatMapStringsSep ", " (fs: "${fs.mountPoint} (${toString fs.device})") rawNamed
-          } ${
+          ${lib.concatMapStringsSep ", " (fs: "${fs.mountPoint} (${toString fs.device})") rawNamed} ${
             if lib.length rawNamed == 1 then "is" else "are"
           } neededForBoot, so finix-init mounts ${
             if lib.length rawNamed == 1 then "it" else "them"
