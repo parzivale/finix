@@ -54,7 +54,26 @@ in
         "tmpfiles-setup"
       ]
       ++ lib.optional config.services.udev.enable "udev-coldplug"
-      ++ lib.optional config.services.mdevd.enable "coldplug";
+      ++ lib.optional config.services.mdevd.enable "coldplug"
+
+      # and the thing which mounts /var/log, where there is one.
+      #
+      # Same race as tmpfiles-setup above and a worse outcome. If /var/log is a preserved path,
+      # something bind-mounts it from disk during boot, and a logger which opened its file first
+      # is writing underneath that mount: the lines go to the tmpfs the mount covers, where
+      # nothing can read them and the next reboot discards them. The log of the boot you need to
+      # explain is the one guaranteed to be missing.
+      #
+      # It cost a diagnosis to find. A machine on sinit left no trace of itself at all - forty
+      # boots in the logs, none of them that one - because sinit launches every job at once and
+      # orders them only by latch, so nothing serialised the two. On finit the tiers happened to.
+      #
+      # Named by unit rather than by option, because `preservation` is not finix's: the module
+      # declaring it lives elsewhere, and asking after `config.preservation.enable` would be an
+      # eval error on every machine without it. `enable` and not merely presence - a disabled unit
+      # is still an attribute, and requiring one no backend will emit is how a logger waits for
+      # something that never starts.
+      ++ lib.optional (config.providers.services.units.preservation.enable or false) "preservation";
     };
   };
 }
