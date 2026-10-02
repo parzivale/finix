@@ -137,8 +137,26 @@ let
           "${touch} ${latch name}"
         else if kind == "oneshot" then
           ''
-            ${asUser unit}${v.command}
-            ${touch} ${latch name}
+            # latched on success, and only on success.
+            #
+            # The latch is what everything downstream waits for, so touching it unconditionally
+            # said "this finished" where it meant "this stopped running". Nothing else observes a
+            # oneshot here, so a failure became indistinguishable from a success on every path
+            # that mattered - and what that produced was a compositor with no configuration:
+            # home-manager activation failed, its latch was touched anyway, greetd started on the
+            # strength of it, and niri went looking for a config nothing had linked yet.
+            #
+            # finit is the one backend where that cannot happen, its tasks not satisfying a
+            # dependent when they fail, which is why only this one ever showed it.
+            #
+            # A failed oneshot now holds its dependents. That is the more useful failure: a boot
+            # which stops at the unit that broke, rather than one which carries on and shows you
+            # the consequence three steps later.
+            if ${asUser unit}${v.command}; then
+              ${touch} ${latch name}
+            else
+              echo "${name}: exited non-zero, so ${latch name} is not being touched - anything requiring it waits" >&2
+            fi
           ''
         else if readinessOf unit == "waitFor" then
           ''
@@ -146,8 +164,12 @@ let
             # alongside it and latches when whatever it is waiting for is live - the same
             # shape as runit's, and for the same reason: nothing here observes a daemon's
             # readiness on its own either.
-            ( ${readinessLib.scriptFor name v.readiness}
-              ${touch} ${latch name} ) &
+            #
+            # `&&` for the reason the oneshot above has an `if`: a readiness script which gives up
+            # - a socket that never appeared, a check that kept failing - has established that the
+            # daemon is not ready, and latching on the way out of it would say the opposite.
+            ( ${readinessLib.scriptFor name v.readiness} \
+                && ${touch} ${latch name} ) &
             ${supervise name command}
           ''
         else
