@@ -131,7 +131,18 @@ let
       ${mkdir} -p ${latchDir}
       printf '%s' ${lib.escapeShellArg cfg.switch.fingerprints.${name}} > ${fingerprint name}
       ${waitFor unit}
-      ${lib.optionalString (unit.path != [ ]) "export PATH=${lib.makeBinPath unit.path}:\$PATH"}
+        ${lib.optionalString (unit.path != [ ]) "export PATH=${lib.makeBinPath unit.path}:\$PATH"}
+
+        # the unit's environment, which this backend was dropping on the floor.
+        #
+        # `providers.services.units.<name>.environment` is part of the contract and four of the
+        # six implementations render it; this one never read it, so anything a unit said about
+        # its environment was accepted and discarded. That included the HOME the contract now
+        # defaults for a unit with a user - which is the whole of why home-manager activation
+        # failed here, `cd $HOME` being its first line.
+        ${lib.concatStrings (
+          lib.mapAttrsToList (k: v: "export ${k}=${lib.escapeShellArg v}\n") unit.environment
+        )}
       ${
         if kind == "anchor" then
           "${touch} ${latch name}"

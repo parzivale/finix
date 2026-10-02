@@ -7,6 +7,13 @@
 let
   cfg = config.providers.services;
 
+  # a user's own home, named from the configuration rather than looked up at runtime.
+  #
+  # `or` so a unit may name a user this module does not declare - a system account created
+  # elsewhere - without failing to evaluate. The fallback is the convention, which is what the
+  # tools that would otherwise guess assume anyway.
+  homeOf = u: config.users.users.${u}.home or "/home/${u}";
+
   # the preamble the kernel runs before any backend: see pkgs/finix-init
   finixInit = pkgs.callPackage ../../../pkgs/finix-init { };
 
@@ -418,8 +425,31 @@ in
       '';
       type = lib.types.attrsOf (
         lib.types.submodule (
-          { name, ... }:
+          { name, config, ... }:
           {
+            # what a process running as a user is entitled to assume about its environment.
+            #
+            # None of the implementations provide it. finit does - it calls setenv("HOME") when it
+            # runs a unit as a user - and every other one drops privileges with a tool whose job
+            # is only that: `chpst -u`, `setuidgid`, dinit's `run-as`. They change uid and gid and
+            # nothing else, which is correct of them and leaves this unsaid.
+            #
+            # Unsaid is not harmless. home-manager's activation script begins `cd $HOME` and never
+            # sets it, so with HOME absent it runs in the wrong place and writes
+            # `${XDG_STATE_HOME:-$HOME/.local/state}` as `/.local/state` - which as that user
+            # fails, taking the whole activation with it. What that looked like was a compositor
+            # reporting no configuration file, three units downstream of the one that broke.
+            #
+            # Here rather than in each implementation: the job is identical whichever init is
+            # doing it, and five copies is how five machines come to differ in ways nobody meant.
+            # `mkDefault` per key, so a unit which says something about HOME still wins.
+            config.environment = lib.mkIf (config.user != null) (
+              lib.mapAttrs (_: lib.mkDefault) {
+                HOME = homeOf config.user;
+                USER = config.user;
+                LOGNAME = config.user;
+              }
+            );
             options = {
               enable = lib.mkOption {
                 type = lib.types.bool;
