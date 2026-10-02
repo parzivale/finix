@@ -389,6 +389,16 @@ in
       # and the plugin goes once it is confirmed to do only that.
       providers.services.exec = [ "${config.finit.package}/bin/finit" ];
 
+      # finit supervises through cgroups: it creates /sys/fs/cgroup/init, writes the controllers it
+      # wants into cgroup.subtree_control, and puts a cgroup under /sys/fs/cgroup/<group>/<service>
+      # per service it starts. That is ownership rather than use, so it mounts the hierarchy itself
+      # and claims it here, and finix-init leaves it alone.
+      #
+      # Mounting it twice would most likely have been harmless - finit would have found it mounted
+      # and carried on - but "most likely harmless" is not a thing to find out on PID 1, and the
+      # claim says which of the two is responsible for it either way.
+      providers.services.virtualMounts."/sys/fs/cgroup" = null;
+
       # finit ships all three, and they reach it over its own socket. They are on PATH anyway
       # through finit.package being in systemPackages - naming them here is what stops that
       # from being the reason they work, and so what stops them winning on a machine running

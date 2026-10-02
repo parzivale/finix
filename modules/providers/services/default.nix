@@ -238,53 +238,71 @@ in
     };
 
     virtualMounts = lib.mkOption {
-      type = with lib.types; listOf attrs;
       internal = true;
 
-      default = [
-        {
-          device = "sys";
-          mountPoint = "/sys";
-          fsType = "sysfs";
-          options = [
-            "nosuid"
-            "nodev"
-            "noexec"
-          ];
-        }
-        {
-          device = "devtmpfs";
-          mountPoint = "/dev";
-          fsType = "devtmpfs";
-          options = [ "nosuid" ];
-        }
-        {
-          device = "tmpfs";
-          mountPoint = "/run";
-          fsType = "tmpfs";
-          options = [
-            "nosuid"
-            "nodev"
-          ];
-        }
-      ];
+      type = lib.types.attrsOf (
+        lib.types.nullOr (
+          lib.types.submodule {
+            options = {
+              device = lib.mkOption {
+                type = lib.types.str;
+                description = "What to pass as the source. A pseudo-filesystem ignores it, but mount still wants one, and it is what shows up in `findmnt`.";
+              };
+
+              fsType = lib.mkOption {
+                type = lib.types.str;
+                description = "The filesystem type, as the kernel names it.";
+              };
+
+              options = lib.mkOption {
+                type = with lib.types; listOf str;
+                default = [ ];
+                description = "Mount options, split by `finix-init` into flags and data the way every other mount here is.";
+              };
+            };
+          }
+        )
+      );
+
+      default = { };
 
       description = ''
-        The kernel's own filesystems, mounted by `finix-init` before activation.
+        The filesystems the machine has regardless of what is configured, mounted by `finix-init`
+        before activation - keyed by mount point.
+
+        Not storage, and not anything a service asked for: the ones a Linux system is expected to
+        have before userspace starts, which no configuration names because naming them would be
+        describing the kernel rather than the machine. `finix-init` mounts them in order of depth,
+        so a mount point inside another filesystem is reached after the filesystem holding it, and
+        nothing here has to be declared in a particular order to work.
 
         Declared rather than assumed. These were mounted unconditionally by a binary nobody had
         asked to mount them, which is a set of assumptions dressed as a contract - and it had a
         consequence: s6-linux-init wants to own `/run`, and a preamble that had already mounted one
         was a problem to design around rather than a question anyone had been asked.
 
-        An implementation which owns one of these removes it here, and nothing else changes. What
-        it gives up by doing so is whatever `finix-init` puts there - `/run` in particular holds
+        An implementation which owns one of these claims it by setting that mount point to `null`,
+        and nothing else changes. That is why this is an attribute set and not a list: a claim is
+        then one entry rather than a redefinition of the whole set, so two implementations claiming
+        two different mounts do not have to agree on what the rest of it is. What an implementation
+        gives up by claiming one is whatever `finix-init` puts there - `/run` in particular holds
         `/run/booted-system` and `/run/current-system`, so an implementation taking it over is
         taking those on too.
 
-        `/proc` is not in this list and cannot be: `finix-init` reads `finix_system=` out of
-        `/proc/cmdline` to find the configuration this would be declared in, so it mounts that one
-        for itself before anything is known.
+        The set is worth having for a reason that took a broken machine to notice. It was once
+        `/sys`, `/dev` and `/run` alone, and the four missing from it - `/dev/pts`, `/dev/shm`,
+        `/dev/mqueue` and `/sys/fs/cgroup` - were exactly the ones finit mounts for itself. So on
+        finit nothing was wrong, and selecting sinit, which mounts nothing because mounting is not
+        its job, produced a machine with no `/dev/pts` at all.
+
+        Nothing reports that in those terms. No `/dev/pts` means no pty can be allocated: a
+        terminal emulator starts, connects to the compositor, initialises its fonts, fails to spawn
+        a shell and exits, and `ssh` hands out sessions with no terminal. Every program that never
+        wanted a pty is fine, which is what makes it look like a fault in the one that broke.
+
+        `/proc` is not here and cannot be: `finix-init` reads `finix_system=` out of `/proc/cmdline`
+        to find the configuration this would be declared in, so it mounts that one for itself
+        before anything is known.
       '';
     };
 
@@ -875,6 +893,89 @@ in
     # Not in `boot.json`: that name belongs to the bootspec, which bootloader installers parse and
     # which names the toplevel - so putting this there would intrude on a format that is not ours
     # and make the file describing the toplevel a dependency of it.
+    # as definitions rather than as the option's `default`, so that claiming one is an edit to one
+    # entry. A `default` is replaced wholesale by the first definition of the option: an
+    # implementation writing `virtualMounts."/run" = null` against a defaulted set would be left
+    # holding a set with `/run` in it and nothing else, and the machine would come up with no
+    # `/dev` rather than with one fewer mount than it asked for.
+    providers.services.virtualMounts = lib.mapAttrs (_: lib.mkDefault) {
+      "/sys" = {
+        device = "sys";
+        fsType = "sysfs";
+        options = [
+          "nosuid"
+          "nodev"
+          "noexec"
+        ];
+      };
+
+      # the controller hierarchy. An init which supervises through cgroups wants to create and
+      # populate this itself, which is a claim rather than a second mount - see finit, which does.
+      "/sys/fs/cgroup" = {
+        device = "cgroup2";
+        fsType = "cgroup2";
+        options = [
+          "nosuid"
+          "nodev"
+          "noexec"
+        ];
+      };
+
+      "/dev" = {
+        device = "devtmpfs";
+        fsType = "devtmpfs";
+        options = [ "nosuid" ];
+      };
+
+      # the pty multiplexer's own filesystem. `gid` is the tty group, which is what a pty's slave
+      # side is owned by, and `mode=0620` is what makes `write` and `wall` reach a terminal
+      # without making it readable by everyone logged in. `ptmxmode` is for `/dev/ptmx` itself:
+      # devtmpfs provides the node, and without this the permissions on it are 0000.
+      "/dev/pts" = {
+        device = "devpts";
+        fsType = "devpts";
+        options = [
+          "nosuid"
+          "noexec"
+          "gid=${toString config.ids.gids.tty}"
+          "mode=0620"
+          "ptmxmode=0666"
+        ];
+      };
+
+      # POSIX shared memory, which is a tmpfs by convention and by every program that uses it.
+      # 1777 because it is a shared namespace: anyone may create a segment, and the sticky bit is
+      # what stops them removing each other's.
+      "/dev/shm" = {
+        device = "shm";
+        fsType = "tmpfs";
+        options = [
+          "nosuid"
+          "nodev"
+          "mode=1777"
+        ];
+      };
+
+      "/dev/mqueue" = {
+        device = "mqueue";
+        fsType = "mqueue";
+        options = [
+          "nosuid"
+          "nodev"
+          "noexec"
+        ];
+      };
+
+      "/run" = {
+        device = "tmpfs";
+        fsType = "tmpfs";
+        options = [
+          "nosuid"
+          "nodev"
+        ];
+      };
+    };
+
     providers.services.initConfig = lib.mkIf (cfg.exec != null) (
       pkgs.writeText "finix-init.json" (
         builtins.toJSON {
@@ -917,39 +1018,47 @@ in
           #
           # `/` is not among them. Either a stage mounted it and handed over, or the kernel did,
           # and in both cases an entry for it describes something already mounted.
-          # the kernel's own filesystems first, then what the configuration marked neededForBoot.
+          # the filesystems the machine always has first, then what the configuration marked
+          # neededForBoot.
           #
           # In that order and not the other: activation reads /sys and names device nodes, and the
           # generation's symlinks go in /run, so those have to exist before a real filesystem is
-          # mounted or activation runs. Neither list is sorted against the other - they cannot
-          # overlap, one being virtual and the other having devices.
+          # mounted or activation runs. The two are not sorted against each other - they cannot
+          # overlap, one being virtual and the other having devices - but each is sorted within
+          # itself by depth, which is what puts /dev before /dev/pts and /nix before /nix/store
+          # without either list having to be written in an order.
           mounts =
             let
               early = lib.filter (fs: fs.neededForBoot && fs.mountPoint != "/") (
                 lib.attrValues config.fileSystems
               );
+
+              # a mount point claimed by an implementation is null, which is not the same as
+              # absent: the entry is still there to say who stopped it from being mounted here.
+              virtual = lib.mapAttrsToList (mountPoint: m: m // { inherit mountPoint; }) (
+                lib.filterAttrs (_: m: m != null) cfg.virtualMounts
+              );
+
               depth = p: lib.length (lib.splitString "/" p);
+
+              shallowestFirst = lib.sort (
+                a: b:
+                if depth a.mountPoint != depth b.mountPoint then
+                  depth a.mountPoint < depth b.mountPoint
+                else
+                  a.mountPoint < b.mountPoint
+              );
+
+              named = map (fs: {
+                inherit (fs)
+                  device
+                  mountPoint
+                  fsType
+                  options
+                  ;
+              });
             in
-            cfg.virtualMounts
-            ++
-              map
-                (fs: {
-                  inherit (fs)
-                    device
-                    mountPoint
-                    fsType
-                    options
-                    ;
-                })
-                (
-                  lib.sort (
-                    a: b:
-                    if depth a.mountPoint != depth b.mountPoint then
-                      depth a.mountPoint < depth b.mountPoint
-                    else
-                      a.mountPoint < b.mountPoint
-                  ) early
-                );
+            named (shallowestFirst virtual) ++ named (shallowestFirst early);
         }
       )
     );
