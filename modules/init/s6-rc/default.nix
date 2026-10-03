@@ -47,7 +47,6 @@ let
 
   readinessLib = import ../../providers/services/readiness.nix {
     inherit pkgs lib;
-    inherit (cfg) readinessPollInterval;
   };
   shutdownLib = import ../../providers/services/shutdown.nix { inherit pkgs lib; };
 

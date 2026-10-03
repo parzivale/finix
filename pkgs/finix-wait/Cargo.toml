@@ -1,0 +1,16 @@
+[package]
+name = "finix-wait"
+version = "0.1.0"
+edition = "2021"
+description = "block until a path, socket or pidfile says its unit is live"
+license = "MIT"
+
+# none, deliberately. See src/main.rs: what this does is stat a path, connect a unix
+# socket and read /proc, all of which std does, and the one thing that would have wanted
+# a crate - inotify - turned out not to be worth having here.
+[dependencies]
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = "symbols"
