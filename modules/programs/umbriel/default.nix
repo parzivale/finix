@@ -5,16 +5,15 @@
   ...
 }:
 let
-  cfg = config.programs.hyprland;
+  cfg = config.programs.umbriel;
 
-  sessionFile = pkgs.writeTextDir "share/wayland-sessions/hyprland.desktop" ''
+  sessionFile = pkgs.writeTextDir "share/wayland-sessions/umbriel.desktop" ''
     [Desktop Entry]
-    Name=Hyprland
-    Comment=An intelligent dynamic tiling Wayland compositor
-    Exec=${pkgs.dbus}/bin/dbus-run-session -- ${lib.getExe' cfg.package "start-hyprland"}
+    Comment=Umbrel, a Wayland compositor built on wlroots and SceneFX
+    DesktopNames=umbriel
+    Exec=${lib.getExe' pkgs.dbus "dbus-run-session"} -- ${lib.getExe' cfg.package "start-umbriel"}
+    Name=Umbriel
     Type=Application
-    DesktopNames=Hyprland
-    Keywords=tiling;wayland;compositor;
   '';
 
   # gardendevd needs libudev-garden; mdevd/keventd need libudev-zero
@@ -32,36 +31,32 @@ let
       wacomSupport = false;
     }
   );
-
-  aquamarine = pkgs.aquamarine.override (
-    lib.optionalAttrs (udevApi != null) {
-      inherit libinput;
-
-      udev = udevApi;
-    }
-  );
 in
 {
-  options.programs.hyprland = {
+  options.programs.umbriel = {
     enable = lib.mkOption {
       type = lib.types.bool;
       default = false;
       description = ''
-        Whether to enable [hyprland](${pkgs.hyprland.meta.homepage}).
+        Whether to enable [umbriel](${pkgs.umbriel.meta.homepage}).
       '';
     };
 
     package = lib.mkOption {
       type = lib.types.package;
-      default = pkgs.hyprland.override {
-        inherit aquamarine libinput;
-
-        # since we're recompiling go ahead and disable systemd
-        withSystemd = udevApi == null;
-      };
-      defaultText = lib.literalExpression "pkgs.hyprland";
+      default = pkgs.umbriel.override (
+        o:
+        let
+          wlrootsAttrs = lib.head (lib.filter (lib.hasPrefix "wlroots") (lib.attrNames o));
+        in
+        {
+          inherit libinput;
+          ${wlrootsAttrs} = o.${wlrootsAttrs}.override { inherit libinput; };
+        }
+      );
+      defaultText = lib.literalExpression "pkgs.umbriel";
       description = ''
-        The package to use for `hyprland`.
+        The package to use for `umbriel`.
       '';
     };
   };

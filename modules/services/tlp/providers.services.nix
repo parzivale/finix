@@ -40,6 +40,21 @@ in
       '';
     };
 
+  # tlp-pd, which upstream added as a finit stanza while this branch was moving the rest of
+  # this module off them. Three lines there, so it comes across as three here.
+  #
+  # `requires = [ "dbus" ]` is the one thing added rather than carried: the finit stanza named
+  # no condition at all, and this daemon takes a name on the system bus - the module puts its
+  # service file in `services.dbus.packages` a few lines up. Started before the bus it means
+  # to register with, it has nothing to register with.
+  providers.services.units.tlp-pd = lib.mkIf cfg.pd.enable {
+    description = "tlp power profiles daemon";
+
+    requires = [ "dbus" ];
+
+    type.service.command = lib.getExe cfg.pd.package;
+  };
+
     providers.services.units.tlp-stop = {
       description = "tlp system shutdown";
 

@@ -96,11 +96,11 @@ in
     finit.services.backdoor = lib.mkIf (config.providers.services.backend == "finit") {
       description = "test driver backdoor shell";
       command = backdoorScript;
-      runlevels = "234";
+      runlevel = "234";
       log = false;
 
       # the backdoor runs bash which executes commands from hvc0 until EOF, then exits
-      restart = 0;
+      restart-max = 0;
     };
 
     # every other backend is PID 1 in its own right, so there is no finit to start this and

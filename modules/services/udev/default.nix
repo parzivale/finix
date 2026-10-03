@@ -172,8 +172,19 @@ in
 
     package = lib.mkOption {
       type = lib.types.package;
+      # eudev with the s6 readiness patch, which is what the udevd unit's `notify = "s6"` waits
+      # on. Merged upstream as eudev-project/eudev#290 and released in 3.2.15, so upstream finix
+      # now takes `pkgs.eudev` plain and asserts that version.
+      #
+      # Not yet here: the nixpkgs this is pinned to carries 3.2.14, so taking the plain package
+      # means a daemon that never notifies - a boot that waits for udev and then carries on
+      # without it at the readiness timeout, saying nothing about why. The override stays until
+      # the pin moves, and then this becomes `pkgs.eudev` and upstream's assertion comes with it.
+      #
+      # The URL is the merge commit rather than the pull request's: once a PR is merged the
+      # per-commit patch under /pull/N/commits/ stops resolving, which is how upstream came to
+      # drop the override in the first place.
       default = pkgs.eudev.overrideAttrs (o: {
-        # see https://github.com/eudev-project/eudev/pull/290
         patches = (o.patches or [ ]) ++ [
           (pkgs.fetchpatch {
             name = "s6-readiness.patch";

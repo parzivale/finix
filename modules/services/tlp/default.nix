@@ -36,6 +36,24 @@ in
       '';
     };
 
+    pd = {
+      enable = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = ''
+          Whether to enable [tlp-pd](${pkgs.tlp-pd.meta.homepage}) as a system service.
+        '';
+      };
+      package = lib.mkOption {
+        type = lib.types.package;
+        default = pkgs.tlp-pd;
+        defaultText = lib.literalExpression "pkgs.tlp-pd";
+        description = ''
+          The package to use for `tlp-pd`.
+        '';
+      };
+    };
+
     settings = lib.mkOption {
       type = format.type;
       default = { };
@@ -62,7 +80,8 @@ in
 
     environment.systemPackages = [
       cfg.package
-    ];
+    ]
+    ++ lib.optionals cfg.pd.enable [ cfg.pd.package ];
 
     providers.resumeAndSuspend.hooks = {
       "tlp@suspend" = {
@@ -76,6 +95,7 @@ in
       };
     };
 
+    services.dbus.packages = lib.mkIf cfg.pd.enable [ cfg.pd.package ];
     services.udev.packages = [ cfg.package ];
 
     # TODO: revisit rules... compare with udev
