@@ -92,6 +92,15 @@ let
   # `comm` and the commands addressed by name.
   reloadable = lib.filterAttrs (_: u: (u.type.service.reload or null) != null) enabled;
 
+  # units a switch may not interrupt just because their definition changed. See the option: a
+  # display manager restarting is every session on the machine ending, including the one the
+  # switch is being run from.
+  pinned = lib.filterAttrs (_: u: !u.restartIfChanged) enabled;
+
+  pinnedNames = pkgs.writeText "services-pinned" (
+    lib.concatMapStringsSep "\n" (n: n) (lib.sort (a: b: a < b) (lib.attrNames pinned)) + "\n"
+  );
+
   reloadableNames = pkgs.writeText "services-reloadable" (
     lib.concatMapStringsSep "\n" (n: n) (lib.sort (a: b: a < b) (lib.attrNames reloadable)) + "\n"
   );
@@ -143,10 +152,20 @@ let
       # can be worked out from here - see the `reload` option.
       comm -12 "$work/changed" "${reloadableNames}" > "$work/reload"
 
+      # and the ones a switch may not interrupt. Intersected with `changed` rather than taken
+      # whole, because this is only ever about changing a unit: one that is genuinely new is
+      # still started below, and one that has gone is still stopped.
+      #
+      # Left out of both sets, so what runs keeps running with the definition it started from.
+      # Its recorded fingerprint stays the old one, which is what it should be - the change is
+      # pending, and the next switch will see it as pending again until the unit restarts for
+      # some reason of its own.
+      comm -12 "$work/changed" "${pinnedNames}" > "$work/pinned"
+
       # everything else moves the usual way. A reloaded unit is in neither list: it is not
       # stopped, so it keeps its pid, which is the whole point of reloading it.
-      comm -23 "$work/gone" "$work/reload" > "$work/stop"
-      comm -23 "$work/arrived" "$work/reload" > "$work/start-set"
+      comm -23 "$work/gone" "$work/reload" | comm -23 - "$work/pinned" > "$work/stop"
+      comm -23 "$work/arrived" "$work/reload" | comm -23 - "$work/pinned" > "$work/start-set"
 
       # `incoming` is in dependency order, so filtering it rather than the sorted set keeps
       # activations ordered after whatever they require. done via a file rather than a pipe:

@@ -801,6 +801,32 @@ in
                 '';
               };
 
+              restartIfChanged = lib.mkOption {
+                type = lib.types.bool;
+                default = true;
+                description = ''
+                  Whether a switch may stop and start this unit when its definition has changed.
+
+                  True for almost everything: a changed unit is one whose new definition is not
+                  what is running, and the point of a switch is to make the machine match the
+                  generation. Set false where applying the change costs more than leaving it
+                  pending, and the new definition then takes effect the next time the unit
+                  starts for any other reason.
+
+                  What that is for is a unit whose restart destroys something the user did not
+                  ask to lose. A display manager is the case: restarting it ends every session
+                  on the machine, so a switch which touched it would log the user out - and if
+                  the switch is being run *from* one of those sessions, it takes the rest of the
+                  switch with it. That is not hypothetical; it is how a generation comes to be
+                  activated and never recorded, because the tool driving it was killed between
+                  the two halves.
+
+                  Unrelated to being added or removed. A unit that is genuinely new is still
+                  started and one that is gone is still stopped - this says only that *changing*
+                  it is not reason enough to interrupt it.
+                '';
+              };
+
               reloadTriggers = lib.mkOption {
                 type = with lib.types; listOf (either path str);
                 default = [ ];
