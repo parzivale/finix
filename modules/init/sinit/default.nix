@@ -77,6 +77,23 @@ let
 
   latchDir = "/run/providers-services";
   latch = name: "${latchDir}/${name}.ready";
+
+  # the latch carries the moment it was created, because nothing reads its contents and
+  # something has to be able to see inside a boot.
+  #
+  # A waiter tests `[ -e ]` and never looks further, so the file has always been empty - and
+  # the only record of when a unit became ready was its mtime. That turns out not to be a
+  # measurement on this hardware: every mtime lands on an exact integer second, so a whole
+  # boot reads as three or four one-second steps and the structure inside them is invisible.
+  # Worse, the realtime clock is set partway through userspace - by the RTC driver, once it
+  # probes - so latches written before that point carry a time near zero and cannot be
+  # compared with the ones after it at all.
+  #
+  # /proc/uptime is monotonic, starts at the moment the kernel did, and is good to 10ms. One
+  # `cut` per unit, written where a `touch` was, and a boot becomes self-measuring: read the
+  # latch directory afterwards and every unit says when it was ready, in one timebase, with
+  # no clock jump in the middle of it.
+  stamp = name: "${lib.getExe' pkgs.coreutils "cut"} -d' ' -f1 /proc/uptime > ${latch name}";
   pidFile = name: "${latchDir}/${name}.pid";
   stopFile = name: "${latchDir}/${name}.stop";
 
@@ -145,7 +162,7 @@ let
         )}
       ${
         if kind == "anchor" then
-          "${touch} ${latch name}"
+          "${stamp name}"
         else if kind == "oneshot" then
           ''
             # latched on success, and only on success.
@@ -164,7 +181,7 @@ let
             # which stops at the unit that broke, rather than one which carries on and shows you
             # the consequence three steps later.
             if ${asUser unit}${v.command}; then
-              ${touch} ${latch name}
+              ${stamp name}
             else
               echo "${name}: exited non-zero, so ${latch name} is not being touched - anything requiring it waits" >&2
             fi
@@ -180,7 +197,7 @@ let
             # - a socket that never appeared, a check that kept failing - has established that the
             # daemon is not ready, and latching on the way out of it would say the opposite.
             ( ${readinessLib.scriptFor name v.readiness} \
-                && ${touch} ${latch name} ) &
+                && ${stamp name} ) &
             ${supervise name command}
           ''
         else
@@ -188,7 +205,7 @@ let
             # `fork` readiness: up the moment it is running, which is what "supervised"
             # means here. `notify` and `s6` never reach this - the contract refuses them
             # against this backend.
-            ${touch} ${latch name}
+            ${stamp name}
             ${supervise name command}
           ''
       }
