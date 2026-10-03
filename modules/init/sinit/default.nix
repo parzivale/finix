@@ -288,18 +288,32 @@ let
 
     ${lib.optionalString (shutdownScript != null) "${shutdownScript}"}
 
-    # leave the filesystems clean, which nothing here was doing.
+    # leave the filesystems clean, which nothing here was doing - but never at the cost of the
+    # reboot itself.
     #
-    # What follows is `reboot -f`, which goes straight to reboot(2) and unmounts nothing - so
-    # every filesystem was left dirty on every shutdown. btrfs hides it by replaying its log on
-    # the next mount; vfat cannot, which is why /boot carried "Volume was not properly unmounted"
-    # and fsck's dirty bit on boot after boot.
+    # What follows is `reboot -f`, which goes straight to reboot(2) and unmounts nothing, so
+    # every filesystem was left dirty on every shutdown. btrfs hides that by replaying its log
+    # on the next mount; vfat cannot, which is why /boot carried "Volume was not properly
+    # unmounted" boot after boot.
     #
-    # `-r` rather than a plain unmount: anything still busy - the store this script is running
-    # out of, for one - is remounted read-only instead, which is what marks it clean. That also
-    # leaves /nix readable, so the exec below still has something to exec.
+    # `swapoff` first, because a filesystem backing live swap does not unmount and does not
+    # remount read-only either. This machine's swapfile lives on /persistent, which is also the
+    # source of every preservation bind mount, so leaving swap on pins the one filesystem the
+    # unmount has the most to do with. That is how the first attempt at this hung: `umount -a`
+    # reached /persistent, blocked, and the reboot below was never reached - a shutdown that
+    # left the machine sitting there.
+    #
+    # Which is the real lesson, and why there is a `timeout`: everything between killing the
+    # services and reboot(2) is best-effort, and has to be best-effort by construction rather
+    # than by each step happening to return. `|| :` covers a command that fails and says
+    # nothing at all about one that never finishes.
+    #
+    # `-r` so anything still busy - the store this script is running out of, for one - is
+    # remounted read-only instead of refused, which is what marks it clean while leaving /nix
+    # readable for the exec below.
+    ${lib.getExe' pkgs.util-linuxMinimal "swapoff"} -a 2>/dev/null || :
     ${lib.getExe' pkgs.coreutils "sync"}
-    ${lib.getExe' pkgs.util-linux "umount"} -a -r 2>/dev/null || :
+    ${lib.getExe' pkgs.coreutils "timeout"} 10 ${lib.getExe' pkgs.util-linux "umount"} -a -r 2>/dev/null || :
 
     case "$1" in
       reboot) exec ${pkgs.busybox}/bin/reboot -f ;;
