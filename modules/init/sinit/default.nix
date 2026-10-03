@@ -247,6 +247,10 @@ let
   rcShutdown = pkgs.writeShellScript "rc.shutdown" ''
     export PATH=${lib.makeBinPath [ pkgs.coreutils ]}:$PATH
 
+    # `.stop` before the signal, not after: the supervise loop restarts anything whose child
+    # exits without it, so a TERM delivered first is a service that comes straight back. With
+    # the latch in place the loop breaks instead, and - this is what the wait below depends on -
+    # removes the unit's pidfile on its way out.
     for f in ${latchDir}/*.pid; do
       [ -e "$f" ] || continue
       name=$(basename "$f" .pid)
@@ -255,7 +259,26 @@ let
       kill -TERM -- -"$pid" 2>/dev/null || :
     done
 
-    ${sleep} 5
+    # wait for them to be gone, rather than for five seconds.
+    #
+    # This was `sleep 5`, unconditionally, which is what a shutdown cost whether anything was
+    # still running or not - and these are daemons being sent SIGTERM, most of which are gone in
+    # single-digit milliseconds. Five seconds of every shutdown spent waiting for nothing.
+    #
+    # The pidfiles are the thing to watch because the supervise loop removes each one as its
+    # child exits, so their absence is the system reporting that it has stopped rather than this
+    # script assuming it has. Same five seconds in the worst case - something that will not die
+    # still gets killed below - but a shutdown that goes normally now takes about a tenth of one.
+    #
+    # `set --` because an unmatched glob stays literal: `[ -e "$1" ]` is how to ask whether
+    # anything matched at all.
+    tries=50
+    while [ "$tries" -gt 0 ]; do
+      set -- ${latchDir}/*.pid
+      [ -e "$1" ] || break
+      ${sleep} 0.1
+      tries=$((tries - 1))
+    done
 
     for f in ${latchDir}/*.pid; do
       [ -e "$f" ] || continue
@@ -264,6 +287,19 @@ let
     done
 
     ${lib.optionalString (shutdownScript != null) "${shutdownScript}"}
+
+    # leave the filesystems clean, which nothing here was doing.
+    #
+    # What follows is `reboot -f`, which goes straight to reboot(2) and unmounts nothing - so
+    # every filesystem was left dirty on every shutdown. btrfs hides it by replaying its log on
+    # the next mount; vfat cannot, which is why /boot carried "Volume was not properly unmounted"
+    # and fsck's dirty bit on boot after boot.
+    #
+    # `-r` rather than a plain unmount: anything still busy - the store this script is running
+    # out of, for one - is remounted read-only instead, which is what marks it clean. That also
+    # leaves /nix readable, so the exec below still has something to exec.
+    ${lib.getExe' pkgs.coreutils "sync"}
+    ${lib.getExe' pkgs.util-linux "umount"} -a -r 2>/dev/null || :
 
     case "$1" in
       reboot) exec ${pkgs.busybox}/bin/reboot -f ;;
