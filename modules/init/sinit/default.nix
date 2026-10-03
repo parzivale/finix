@@ -288,32 +288,24 @@ let
 
     ${lib.optionalString (shutdownScript != null) "${shutdownScript}"}
 
-    # leave the filesystems clean, which nothing here was doing - but never at the cost of the
-    # reboot itself.
+    # `sync` only. The unmount that used to be here is gone, twice over.
     #
-    # What follows is `reboot -f`, which goes straight to reboot(2) and unmounts nothing, so
-    # every filesystem was left dirty on every shutdown. btrfs hides that by replaying its log
-    # on the next mount; vfat cannot, which is why /boot carried "Volume was not properly
-    # unmounted" boot after boot.
+    # It was added because `reboot -f` goes straight to reboot(2) and unmounts nothing, so every
+    # filesystem is left dirty - btrfs replays its log on the next mount, vfat cannot, and /boot
+    # carries "Volume was not properly unmounted" boot after boot. That is still true and still
+    # only cosmetic: `fsck.vfat -a` clears it whenever anyone cares.
     #
-    # `swapoff` first, because a filesystem backing live swap does not unmount and does not
-    # remount read-only either. This machine's swapfile lives on /persistent, which is also the
-    # source of every preservation bind mount, so leaving swap on pins the one filesystem the
-    # unmount has the most to do with. That is how the first attempt at this hung: `umount -a`
-    # reached /persistent, blocked, and the reboot below was never reached - a shutdown that
-    # left the machine sitting there.
+    # The first attempt hung on /persistent, which backs live swap and so neither unmounts nor
+    # remounts read-only. `swapoff -a` and a `timeout` fixed that specific failure and the next
+    # shutdown still did not reboot - something in it printed an error and the machine sat
+    # there, and with swapoff's and umount's stderr going to /dev/null there was no way to tell
+    # which step. Two attempts, two machines left needing the power button.
     #
-    # Which is the real lesson, and why there is a `timeout`: everything between killing the
-    # services and reboot(2) is best-effort, and has to be best-effort by construction rather
-    # than by each step happening to return. `|| :` covers a command that fails and says
-    # nothing at all about one that never finishes.
-    #
-    # `-r` so anything still busy - the store this script is running out of, for one - is
-    # remounted read-only instead of refused, which is what marks it clean while leaving /nix
-    # readable for the exec below.
-    ${lib.getExe' pkgs.util-linuxMinimal "swapoff"} -a 2>/dev/null || :
+    # So: nothing between the KILL loop and reboot(2) that can fail in a way nobody can see.
+    # Anything that wants to unmount here needs its progress recorded somewhere that survives a
+    # power cycle - /persistent, before it is unmounted - because the console scrolls past and
+    # syslogd is already dead by this point.
     ${lib.getExe' pkgs.coreutils "sync"}
-    ${lib.getExe' pkgs.coreutils "timeout"} 10 ${lib.getExe' pkgs.util-linux "umount"} -a -r 2>/dev/null || :
 
     case "$1" in
       reboot) exec ${pkgs.busybox}/bin/reboot -f ;;
