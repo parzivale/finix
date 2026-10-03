@@ -389,6 +389,31 @@ in
           reboot = signal "INT";
         };
 
+      # the state a person wants to read, which is not the fingerprint `switch.list` reports.
+      #
+      # sinit has no control socket and nothing to ask, so state is read from the same files the
+      # supervision is built out of: a `.pid` means a job's process is alive, a `.ready` means it
+      # latched, and a `.fingerprint` with neither means a job ran and its process is gone -
+      # which for a oneshot is how it is supposed to end up.
+      providers.services.ctl.status = toString (
+        pkgs.writeShellScript "sinit-status" ''
+          for f in ${latchDir}/*.fingerprint; do
+            [ -e "$f" ] || continue
+            name=$(${lib.getExe' pkgs.coreutils "basename"} "$f" .fingerprint)
+
+            if [ -e ${latchDir}/"$name".pid ]; then
+              state=running
+            elif [ -e ${latchDir}/"$name".ready ]; then
+              state=done
+            else
+              state=stopped
+            fi
+
+            printf '%s\t%s\n' "$name" "$state"
+          done
+        ''
+      );
+
       providers.services.switch = {
         # every job writes its own fingerprint the moment it starts, whether or not it has
         # actually reached readiness yet - "active" here means "a job for this generation's

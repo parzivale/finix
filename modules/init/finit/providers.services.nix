@@ -504,6 +504,31 @@ in
       # is to say so: report nothing running, let the engine hand over the whole tree, and reload
       # once. an init which does not self-reconcile, as dinit does not, gives a real `list` and
       # the engine's diff does the work instead.
+      # finit asserts a condition as a file under /run/finit/cond, and this module already
+      # names one per unit - `conditionOf`, the companion task's success - so state is read
+      # from the same thing dependants are ordered by. No tool to call and no output to parse:
+      # `initctl cond get` is documented for user-defined conditions, and the file is what the
+      # condition *is*.
+      #
+      # Whether a unit which has started is `running` or `done` is decided by its kind rather
+      # than observed, because the condition says only that it came up. For a oneshot that is
+      # the end state, which is what `done` means.
+      providers.services.ctl.status = toString (
+        pkgs.writeShellScript "finit-status" (
+          lib.concatStrings (
+            lib.mapAttrsToList (name: unit: ''
+              if [ -e /run/finit/cond/${conditionOf name} ]; then
+                printf '%s\t%s\n' ${lib.escapeShellArg name} ${
+                  if kindOf unit == "oneshot" then "done" else "running"
+                }
+              else
+                printf '%s\tstopped\n' ${lib.escapeShellArg name}
+              fi
+            '') (lib.filterAttrs (_: u: u.enable) cfg.units)
+          )
+        )
+      );
+
       providers.services.switch = {
         list = pkgs.writeShellScript "finit-list" ":";
 

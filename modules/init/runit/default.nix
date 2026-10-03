@@ -329,6 +329,31 @@ in
         '';
       };
 
+      # `sv status` reports the first word, and this module already depends on reading it -
+      # `switch.list` below greps `^run:` for exactly this. The words are runsv's: `run` while
+      # the process is up, `down` when it is not, `finish` while its finish script runs.
+      #
+      # The scan directory rather than the configured names, so a service directory put here by
+      # hand is reported too. It is running on this machine whether or not a generation declared
+      # it, and a listing which hid it would be the one thing this is for.
+      providers.services.ctl.status = toString (
+        pkgs.writeShellScript "runit-status" ''
+          for dir in ${scanDir}/*; do
+            [ -d "$dir" ] || continue
+            unit=$(${lib.getExe' pkgs.coreutils "basename"} "$dir")
+
+            case "$(${sv} status "$dir" 2>/dev/null)" in
+              run:*) state=running ;;
+              finish:*) state=stopping ;;
+              down:*) state=stopped ;;
+              *) state=unknown ;;
+            esac
+
+            printf '%s\t%s\n' "$unit" "$state"
+          done
+        ''
+      );
+
       providers.services.switch = {
         list = pkgs.writeShellScript "runit-list" ''
           ${reportShutdownSide}

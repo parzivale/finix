@@ -369,6 +369,29 @@ in
 
       environment.systemPackages = [ openrc ];
 
+      # openrc records what it has started as files under /run/openrc/started, which is what
+      # `switch.list` below reads. Membership there is the state, so there is no tool to call and
+      # no output to parse.
+      #
+      # Over the configured names rather than that directory, so a unit this generation declares
+      # and openrc has not started is reported as stopped rather than omitted - "it is not
+      # running" is the answer the question was asked for.
+      providers.services.ctl.status = toString (
+        pkgs.writeShellScript "openrc-status" (
+          lib.concatStrings (
+            lib.mapAttrsToList (name: unit: ''
+              if [ -e /run/openrc/started/${name} ]; then
+                printf '%s\t%s\n' ${lib.escapeShellArg name} ${
+                  if kindOf unit == "oneshot" then "done" else "running"
+                }
+              else
+                printf '%s\tstopped\n' ${lib.escapeShellArg name}
+              fi
+            '') (lib.filterAttrs (_: u: u.enable) cfg.units)
+          )
+        )
+      );
+
       providers.services.switch = {
         # openrc's own listings are the wrong tool here, and quietly so. `rc-status
         # --servicelist` enumerates the scripts in /etc/init.d - the incoming generation - and

@@ -441,6 +441,28 @@ in
         path = true;
       };
 
+      # s6-rc's live state lists what is up, which is what `switch.list` below reads. Membership
+      # is the state, so this asks once and compares names rather than calling s6-svstat per
+      # unit.
+      #
+      # Over the atomic units - the ones with something to supervise - because a bundle is a
+      # compile-time name for a set and has no state of its own to report.
+      providers.services.ctl.status = toString (
+        pkgs.writeShellScript "s6-rc-status" ''
+          up=$(${lib.getExe' s6rc "s6-rc"} -l ${live} -a list 2>/dev/null || :)
+
+          for unit in ${lib.concatStringsSep " " (lib.attrNames atomic)}; do
+            if printf '%s\n' "$up" | ${lib.getExe' pkgs.gnugrep "grep"} -qx -- "$unit"; then
+              state=running
+            else
+              state=stopped
+            fi
+
+            printf '%s\t%s\n' "$unit" "$state"
+          done
+        ''
+      );
+
       providers.services.switch = {
         list = pkgs.writeShellScript "s6-rc-list" ''
           # s6-rc decides what is running; the fingerprint only says which definition it was

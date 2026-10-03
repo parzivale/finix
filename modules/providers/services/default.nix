@@ -118,6 +118,7 @@ in
   imports = [
     ./graph.nix
     ./mounts.nix
+    ./ctl.nix
     ./switch.nix
     ./tmpfiles.nix
     ./trunk.nix

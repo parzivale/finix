@@ -263,6 +263,35 @@ let
 
   userDir = user: "dinit-user/${user}";
   socketDir = user: "/run/user-services/${user}";
+  # one unit's state in words, for whichever tree the socket names.
+  #
+  # `dinitctl list` reports every loaded service with a state glyph and `status` reports it in
+  # words, so each unit is asked rather than the glyphs parsed - they are easy to misread and not
+  # documented as an interface. Taking the socket as an argument is what lets the same reporting
+  # serve the system tree and a user's: the only difference between them is which socket answers.
+  statusScript =
+    name: sockArgs:
+    toString (
+      pkgs.writeShellScript name ''
+        ${lib.getExe' config.dinit.package "dinitctl"} ${sockArgs} list 2>/dev/null |
+          ${lib.getExe' pkgs.gnused "sed"} -n 's/.*][[:space:]]*//; s/[[:space:]].*//; /./p' |
+          while read -r unit; do
+            case "$unit" in boot|default) continue ;; esac
+            state=$(
+              ${lib.getExe' config.dinit.package "dinitctl"} ${sockArgs} status "$unit" 2>/dev/null |
+                ${lib.getExe' pkgs.gnused "sed"} -n 's/^[[:space:]]*State:[[:space:]]*//p'
+            )
+            case "$state" in
+              STARTED) state=running ;;
+              STOPPED) state=stopped ;;
+              STARTING) state=starting ;;
+              STOPPING) state=stopping ;;
+              *) state=unknown ;;
+            esac
+            printf '%s\t%s\n' "$unit" "$state"
+          done
+      ''
+    );
 
   # each user's tree, plus a root for their instance to start. the root only waits for its
   # members, so one failing unit does not fail that user's whole session - the same soft pull
@@ -456,6 +485,14 @@ in
       # dinit ships all three, and they reach it over the control socket - /run/dinitctl, which
       # is both dinit's own default and what the argv above asks for, so they need no
       # argument to find it.
+      # dinit answers directly, for both trees.
+      #
+      # `dinitctl list` reports every loaded service with a state glyph, and `status` reports it
+      # in words - the same split `switch.list` above works around. Here the words are what is
+      # wanted, so each unit is asked rather than the glyphs parsed, for the reason given there:
+      # they are easy to misread and not documented as an interface.
+      providers.services.ctl.status = statusScript "dinit-status" "";
+
       providers.services.shutdownCommands = {
         poweroff = "${config.dinit.package}/bin/poweroff";
         reboot = "${config.dinit.package}/bin/reboot";
@@ -504,7 +541,7 @@ in
         # interface.
         list = pkgs.writeShellScript "dinit-list" ''
           ${lib.getExe' config.dinit.package "dinitctl"} list 2>/dev/null |
-            ${lib.getExe' pkgs.gnused "sed"} -n 's/^\[[^]]*\][[:space:]]*\([^[:space:]]*\).*/\1/p' |
+          ${lib.getExe' pkgs.gnused "sed"} -n 's/.*][[:space:]]*//; s/[[:space:]].*//; /./p' |
             while read -r unit; do
               case "$unit" in boot|default) continue ;; esac
 
@@ -572,6 +609,22 @@ in
     # user beside PID 1 - and pays for the shared-across-sessions part with
     # `import-environment`, which per-session starting is what avoids.
     (lib.mkIf (cfg.user.backend == "dinit") {
+
+      # how to reach a user's tree, which is the thing nothing surfaced. The socket lives under
+      # /run/user-services/<user> by this module's own convention, so this module is what can say
+      # so - before this, reaching the session's own units meant naming both the store path of a
+      # binary and the socket by hand.
+      #
+      # Here rather than in the block above because the two are independent: dinit can supervise
+      # a user's tree on a machine whose system tree is something else entirely, which is exactly
+      # this machine.
+      providers.services.user.ctl =
+        user: "${lib.getExe' config.dinit.package "dinitctl"} -p ${socketDir user}/dinitctl";
+
+      # and that user's units reported the same way the system's are, so one listing can show
+      # both without a reader having to know which supervisor each row came from.
+      providers.services.user.status =
+        user: statusScript "dinit-status-${user}" "-p ${socketDir user}/dinitctl";
       providers.services.user.manager.supervisor.command =
         user:
         "${config.dinit.package}/bin/dinit --user -d /etc/${userDir user} -p ${socketDir user}/dinitctl boot";
