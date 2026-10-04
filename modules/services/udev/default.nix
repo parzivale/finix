@@ -172,27 +172,32 @@ in
 
     package = lib.mkOption {
       type = lib.types.package;
-      # eudev with the s6 readiness patch, which is what the udevd unit's `notify = "s6"` waits
-      # on. Merged upstream as eudev-project/eudev#290 and released in 3.2.15, so upstream finix
-      # now takes `pkgs.eudev` plain and asserts that version.
+      # Plain `pkgs.eudev`, which is what upstream finix takes.
       #
-      # Not yet here: the nixpkgs this is pinned to carries 3.2.14, so taking the plain package
-      # means a daemon that never notifies - a boot that waits for udev and then carries on
-      # without it at the readiness timeout, saying nothing about why. The override stays until
-      # the pin moves, and then this becomes `pkgs.eudev` and upstream's assertion comes with it.
+      # This used to carry eudev-project/eudev#290 as a fetchpatch, for the `--ready-notify=FD`
+      # option it adds: the nixpkgs this was pinned to still had 3.2.14, where taking the plain
+      # package meant a udevd that never reports readiness and an initrd that waits for it,
+      # times out, and carries on without saying why.
       #
-      # The URL is the merge commit rather than the pull request's: once a PR is merged the
-      # per-commit patch under /pull/N/commits/ stops resolving, which is how upstream came to
-      # drop the override in the first place.
-      default = pkgs.eudev.overrideAttrs (o: {
-        patches = (o.patches or [ ]) ++ [
-          (pkgs.fetchpatch {
-            name = "s6-readiness.patch";
-            url = "https://github.com/eudev-project/eudev/commit/48e9923a1d0218d714989d8aec119e301aa930ae.patch";
-            sha256 = "sha256-Icor2v2OYizquLW0ytYONjhCUW+oTs5srABamQR9Uvk=";
-          })
-        ];
-      });
+      # 3.2.15 released with that merged, and the pin has now moved to it, so the override had
+      # to go: patch(1) found its own change already in the source and refused the build.
+      #
+      #   applying patch /nix/store/...-s6-readiness.patch
+      #   patching file src/udev/udevd.c
+      #   Reversed (or previously applied) patch detected!  Assume -R? [n]
+      #   Skipping patch.
+      #   6 out of 6 hunks ignored -- saving rejects to file src/udev/udevd.c.rej
+      #
+      # Which is the good failure: an override that is no longer needed stops the build rather
+      # than quietly producing something. `strings udevd` on the plain 3.2.15 confirms what
+      # replaced it - `-r --ready-notify=FD  Notify readiness via file descriptor`.
+      #
+      # Still needed on this branch, which is worth saying because the system unit no longer
+      # asks for it: `providers.services` spawns udevd with `readiness = "fork"`, %n being a
+      # finit substitution no other init has. It is the initrd's finit stanza below that still
+      # passes `--ready-notify=%n` with `notify = "s6"`, so the version floor below is load
+      # bearing for any host with `boot.initrd.enable`.
+      default = pkgs.eudev;
       defaultText = lib.literalExpression "pkgs.eudev";
       description = ''
         The package to use for `eudev`.
@@ -234,6 +239,17 @@ in
   };
 
   config = lib.mkIf cfg.enable {
+    # Upstream's, kept because it is still load bearing here: the initrd's udevd passes
+    # `--ready-notify=%n`, which is 3.2.15 or newer, and an older eudev would simply not report
+    # readiness rather than failing to start. Stated rather than assumed now that nothing
+    # pins the version by patching it.
+    assertions = [
+      {
+        assertion = lib.versionAtLeast cfg.package.version "3.2.15";
+        message = "eudev has to be version >= 3.2.15";
+      }
+    ];
+
     # services.udev.packages = [ extraUdevRules extraHwdbFile ];
     services.udev.path = [
       config.programs.coreutils.package
