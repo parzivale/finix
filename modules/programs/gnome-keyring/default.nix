@@ -22,11 +22,13 @@ in
     services.dbus.packages = [
       pkgs.gnome-keyring
 
-      # `gcr`, not `gcr_3`: that attribute is gone from nixpkgs, so this module
-      # stopped evaluating at all. It is the prompter's service file that is wanted
-      # here - gcr owns `org.gnome.keyring.SystemPrompter` - and `gcr` is the
-      # attribute nixos' own gnome-keyring module names for it.
-      pkgs.gcr
+      # `gcr_3`, not `gcr`: the plain attribute is a `throw` in aliases.nix again -
+      # "removed from nixpkgs, use a `gcr_*` attribute with an explicit ABI version" -
+      # which is the opposite of what it was when this line last changed, and stopped
+      # the module evaluating a second time. `gcr_3` is what nixos' own gnome-keyring
+      # module names, and the prompter's service file is what is wanted here: gcr owns
+      # `org.gnome.keyring.SystemPrompter`.
+      pkgs.gcr_3
     ];
 
     xdg.portal.portals = [
