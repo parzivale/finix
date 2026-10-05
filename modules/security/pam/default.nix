@@ -142,10 +142,6 @@ in
         "/etc/profiles/per-user/@{PAM_USER}/bin"
         "/run/current-system/sw/bin"
       ];
-      XCURSOR_PATH = [
-        "/run/current-system/sw/share/icons"
-        "/run/current-system/sw/share/pixmaps"
-      ];
       XDG_CONFIG_DIRS = [
         "/etc/xdg"
         "/run/current-system/sw/etc/xdg"
