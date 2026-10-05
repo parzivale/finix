@@ -255,27 +255,6 @@ let
   rcShutdown = pkgs.writeShellScript "rc.shutdown" ''
     export PATH=${lib.makeBinPath [ pkgs.coreutils ]}:$PATH
 
-    # a record of what this was asked to do, written before anything is killed.
-    #
-    # Nothing about a shutdown is observable after the fact. The console scrolls past and the
-    # machine is gone; syslogd is one of the units the loop below TERMs, so anything the kernel
-    # prints afterwards - macsmc-reboot's own "Issuing restart (phra)" or "Issuing power off
-    # (off1)", which is the difference between a restart being refused and one never being asked
-    # for - has nowhere to go; and the kernel ring buffer does not survive the power cycle, so
-    # `dmesg` on the next boot shows none of it.
-    #
-    # That is how two attempts at unmounting here cost two power cycles and produced one word of
-    # evidence between them. So: /persistent, which is mounted and writable at this point and is
-    # the last thing anything here would unmount, and `sync` so the line is on the disk before
-    # the rest of this script runs.
-    #
-    # The argument is the open question. nxinit spawns this as `rc.shutdown reboot` or
-    # `rc.shutdown poweroff` and the case at the end picks the syscall from it - so a machine
-    # which powers off when asked to reboot is either being passed the wrong word, or being
-    # passed the right one and refused by the SMC. One line distinguishes them.
-    printf '%s %s\n' "$(${lib.getExe' pkgs.coreutils "cut"} -d' ' -f1 /proc/uptime)" \
-      "''${1-<no argument>}" >> /persistent/shutdown.log
-    ${lib.getExe' pkgs.coreutils "sync"}
 
     # `.stop` before the signal, not after: the supervise loop restarts anything whose child
     # exits without it, so a TERM delivered first is a service that comes straight back. With
@@ -337,10 +316,21 @@ let
     #
     # The glob matches no cgroup this script is in: nxinit and its children sit in the root, which
     # has no cgroup.procs of its own to match.
+    # The cgroup this script is in is excluded, and so are pid 1 and this shell. Without that
+    # the loop signals itself: a VM with no elogind has no session cgroups, the glob then
+    # matches whatever top-level cgroups do exist, and rc.shutdown TERMs its own process and
+    # stops there - the marker before this loop printed, the one after it never ran. On a
+    # desktop it happens to be safe, pid 1 and its children sitting in the root cgroup which
+    # has no `*/cgroup.procs` to match, but that is a property of the layout rather than
+    # anything this asked for.
+    self_cg=/sys/fs/cgroup$(${lib.getExe' pkgs.coreutils "cut"} -d: -f3 /proc/self/cgroup 2>/dev/null)
     for procs in /sys/fs/cgroup/*/cgroup.procs; do
       [ -e "$procs" ] || continue
+      [ "''${procs%/cgroup.procs}" = "$self_cg" ] && continue
       while read -r p; do
         [ -n "$p" ] || continue
+        [ "$p" = "$$" ] && continue
+        [ "$p" = 1 ] && continue
         kill -TERM "$p" 2>/dev/null || :
       done < "$procs"
     done
@@ -374,6 +364,7 @@ let
 
       for procs in /sys/fs/cgroup/*/cgroup.procs; do
         [ -e "$procs" ] || continue
+        [ "''${procs%/cgroup.procs}" = "$self_cg" ] && continue
         if read -r _ < "$procs" 2>/dev/null; then
           pending=1
         fi
@@ -396,6 +387,7 @@ let
     # is the failure mode of reading cgroup.procs and signalling it entry by entry.
     for k in /sys/fs/cgroup/*/cgroup.kill; do
       [ -e "$k" ] || continue
+      [ "''${k%/cgroup.kill}" = "$self_cg" ] && continue
       echo 1 > "$k" 2>/dev/null || :
     done
 

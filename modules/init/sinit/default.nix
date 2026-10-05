@@ -308,10 +308,21 @@ let
     #
     # The glob matches no cgroup this script is in: sinit and its children sit in the root, which
     # has no cgroup.procs of its own to match.
+    # The cgroup this script is in is excluded, and so are pid 1 and this shell. Without that
+    # the loop signals itself: a VM with no elogind has no session cgroups, the glob then
+    # matches whatever top-level cgroups do exist, and rc.shutdown TERMs its own process and
+    # stops there - the marker before this loop printed, the one after it never ran. On a
+    # desktop it happens to be safe, pid 1 and its children sitting in the root cgroup which
+    # has no `*/cgroup.procs` to match, but that is a property of the layout rather than
+    # anything this asked for.
+    self_cg=/sys/fs/cgroup$(${lib.getExe' pkgs.coreutils "cut"} -d: -f3 /proc/self/cgroup 2>/dev/null)
     for procs in /sys/fs/cgroup/*/cgroup.procs; do
       [ -e "$procs" ] || continue
+      [ "''${procs%/cgroup.procs}" = "$self_cg" ] && continue
       while read -r p; do
         [ -n "$p" ] || continue
+        [ "$p" = "$$" ] && continue
+        [ "$p" = 1 ] && continue
         kill -TERM "$p" 2>/dev/null || :
       done < "$procs"
     done
@@ -345,6 +356,7 @@ let
 
       for procs in /sys/fs/cgroup/*/cgroup.procs; do
         [ -e "$procs" ] || continue
+        [ "''${procs%/cgroup.procs}" = "$self_cg" ] && continue
         if read -r _ < "$procs" 2>/dev/null; then
           pending=1
         fi
@@ -367,6 +379,7 @@ let
     # is the failure mode of reading cgroup.procs and signalling it entry by entry.
     for k in /sys/fs/cgroup/*/cgroup.kill; do
       [ -e "$k" ] || continue
+      [ "''${k%/cgroup.kill}" = "$self_cg" ] && continue
       echo 1 > "$k" 2>/dev/null || :
     done
 
