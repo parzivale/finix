@@ -1,0 +1,93 @@
+diff --git a/src/nxinit.ha b/src/nxinit.ha
+index 7a43c2a..def3864 100644
+--- a/src/nxinit.ha
++++ b/src/nxinit.ha
+@@ -6,6 +6,14 @@ use os::exec;
+ use fs;
+ use rt;
+ 
++//the two commands this init is built around, substituted at build time.
++//
++//the same arrangement as sinit's config.def.h: pid 1 execs rcinit and nothing
++//else, and answers a shutdown signal by spawning rcshutdown with the word for
++//what was asked. both are absolute paths into the store.
++const RC_INIT: str = "@rcinit@";
++const RC_SHUTDOWN: str = "@rcshutdown@";
++
+ //magic!
+ const REBOOT_MAGIC1: u64 = 0xfee1dead;
+ const REBOOT_MAGIC2: u64 = 0x28121969;
+@@ -49,6 +57,40 @@ fn sigwait(set: *signal::sigset) (signal::sig | rt::errno) = {
+ 	return ret: signal::sig;
+ };
+ 
++//spawn rcshutdown with the word for what was asked, and let it finish the job.
++//
++//not a wait: rcshutdown is what calls reboot(2) at the end of its own work -
++//stopping services, syncing, and only then asking the kernel - exactly as
++//sinit's rc.shutdown does. waiting here would deadlock on a script whose last
++//act is to take the machine down.
++//
++//the direct syscall is the fallback and only that. if rcshutdown cannot be
++//spawned at all there is nothing left that could stop services, so going down
++//uncleanly beats sitting in the sigwait loop with the user holding the button.
++fn shutdown(how: str, blocked: signal::sigset, fallback: *fn() void) void = {
++  match (exec::cmd(RC_SHUTDOWN, how)) {
++    case let cmd: exec::command => {
++      let cmd = cmd;
++      match (exec::fork()) {
++        case exec::process => return;
++
++        case void => {
++            signal::setprocmask(signal::how::UNBLOCK, &blocked);
++            unix::setsid();
++            let err = exec::exec(&cmd);
++            fmt::fatalf("exec failed: {}", exec::strerror(err));
++        };
++
++        case exec::error => yield;
++      };
++    };
++
++    case => yield;
++  };
++
++  fallback();
++};
++
+ export fn main() void = {
+   //check if pid1
+   if (unix::getpid() != 1) {
+@@ -64,29 +106,24 @@ export fn main() void = {
+   //set sigset and mask it
+   let set: signal::sigset = signal::newsigset(
+       signal::sig::CHLD,
+-      signal::sig::ALRM,
+       signal::sig::USR1,
+       signal::sig::USR2,
+   );
+   signal::setprocmask(signal::how::BLOCK, &set);
+ 
+   //spawn commands
+-  let cmd = exec::cmd("/bin/sh")!;
++  let cmd = exec::cmd(RC_INIT)!;
+   spawn(&cmd, set);
+ 
+   //main loop
+   for (true) {
+-    //alarm for reap
+-    signal::alarm(30);
+-
+     //error handling of the permanent fix UHH
+     match (sigwait(&set)) {
+       case let sig: signal::sig =>
+         switch (sig) {
+           case signal::sig::CHLD => reap();
+-          case signal::sig::ALRM => reap();
+-          case signal::sig::USR1 => reboot();
+-          case signal::sig::USR2 => poweroff();
++          case signal::sig::USR1 => shutdown("reboot", set, &reboot);
++          case signal::sig::USR2 => shutdown("poweroff", set, &poweroff);
+           case => yield;
+         };
+ 

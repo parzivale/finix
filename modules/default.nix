@@ -92,6 +92,7 @@ in
   dinit = ./init/dinit;
   s6-rc = ./init/s6-rc;
   runit = ./init/runit;
+  nxinit = ./init/nxinit;
   sinit = ./init/sinit;
   openrc = ./init/openrc;
 
