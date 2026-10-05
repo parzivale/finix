@@ -260,6 +260,34 @@ let
       kill -TERM -- -"$pid" 2>/dev/null || :
     done
 
+    # Not shared with the other thin backend, and deliberately not - see below. nxinit's copy
+    # of this is the same code; both are Linux-only and the seam they would share is not
+    # settled.
+    #
+    # Factoring it into `shutdownLib` was tried and backed out. It removes a duplicate and
+    # cements a Linux assumption into shared code at the same time, which is the wrong trade
+    # while finix might grow a BSD. The question that has to be answered first is what the
+    # interface is, not where the shell lives:
+    #
+    #   - there is no portable primitive for "end this login session's process tree". The
+    #     cgroup is doing something POSIX has no answer to: a grouping inherited on fork which
+    #     `setsid` cannot escape.
+    #
+    #   - the POSIX session is not it, which is worth recording because it is the obvious
+    #     guess. Measured on a running desktop: one elogind login session held 87 processes
+    #     across at least nine POSIX sessions - 58 under the compositor's, and a separate one
+    #     per terminal and per wrapper, because each calls setsid() for itself. Selecting by
+    #     SID reaches a fraction of the tree and there is no way to enumerate the rest.
+    #
+    #   - the BSD counterpart is the reaper facility - procctl(2), PROC_REAP_ACQUIRE to claim
+    #     a subtree and PROC_REAP_KILL to signal all of it - not anything cgroup-shaped.
+    #     Linux's nearest relative, PR_SET_CHILD_SUBREAPER, has no kill-the-descendants
+    #     operation, which is why cgroups are what gets used here.
+    #
+    # So if this is ever shared it wants to be an operation with a per-OS implementation
+    # rather than a shell fragment with `/sys/fs/cgroup` paths in it. Until someone needs the
+    # BSD half, two copies of twenty lines is the cheaper mistake.
+    #
     # the session, which the loop above cannot reach.
     #
     # Those pidfiles name process group leaders, and a process group is advisory: greetd's
