@@ -463,6 +463,38 @@ in
       # backend gets it.
       providers.services.exec = [ (lib.getExe' nxinit' "nxinit") ];
 
+      # /dev/fd, because this backend cannot exec a shell script without it.
+      #
+      # Hare's `os::exec` does not use execve(2). `exec::cmd` opens the target - O_PATH - and
+      # `exec::exec` runs that descriptor with execveat(2) and AT_EMPTY_PATH. For an ELF that
+      # is equivalent; for a `#!` script it is not, because the kernel has no pathname to hand
+      # the interpreter and synthesises /dev/fd/N instead. rc.init is a shell script, so bash
+      # is exec'd with /dev/fd/3 as its argument and has to open it.
+      #
+      # Which is fine on a running machine and not fine here. /dev/fd is a symlink udev makes
+      # when it takes over /dev - it is in udevd's binary, not in any rule - and udev is a unit
+      # rc.init starts. So the symlink appears about half a second after the moment this needs
+      # it, and the thing that would create it is downstream of the exec that fails:
+      #
+      #   finix-init: exec /nix/store/...-nxinit/bin/nxinit
+      #   /nix/store/...-bash/bin/bash: /dev/fd/3: No such file or directory
+      #
+      # sinit never meets this: execv(2) takes a path, so the kernel resolves the shebang
+      # against a real filename and /dev/fd is never consulted.
+      #
+      # A `pre` op rather than anything in finix-init itself, which is the distinction that
+      # option exists to make - "add an op when a backend needs one, not before". `symlink`
+      # unlinks first, so a switch onto a machine that already has one is fine, and `pre` runs
+      # after mounts and activation and immediately before the exec, which is exactly the
+      # window.
+      providers.services.pre = [
+        {
+          op = "symlink";
+          from = "/proc/self/fd";
+          to = "/dev/fd";
+        }
+      ];
+
       # nxinit only ever acts on this by reacting to a signal sent to PID 1 - unlike every other
       # backend here, there is no command which asks it to shut down directly, only one which
       # asks the kernel to deliver the signal nxinit's own sigwait loop is waiting on. It is what
