@@ -1,0 +1,47 @@
+diff --git a/src/nxinit.ha b/src/nxinit.ha
+index 7a43c2a..c3050f8 100644
+--- a/src/nxinit.ha
++++ b/src/nxinit.ha
+@@ -55,6 +55,13 @@ export fn main() void = {
+     os::exit(1);
+   };
+ 
++  //what to run, from the command line rather than hardcoded.
++  //an init is told what its userspace is by whoever starts it - the kernel's
++  //init= for pid 1 - so the one child it execs cannot be a constant.
++  if (len(os::args) < 2) {
++    fmt::fatalf("usage: {} <command> [args...]", os::args[0]);
++  };
++
+   //cd into root
+   match (os::chdir("/")) {
+     case void => yield;
+@@ -64,27 +71,22 @@ export fn main() void = {
+   //set sigset and mask it
+   let set: signal::sigset = signal::newsigset(
+       signal::sig::CHLD,
+-      signal::sig::ALRM,
+       signal::sig::USR1,
+       signal::sig::USR2,
+   );
+   signal::setprocmask(signal::how::BLOCK, &set);
+ 
+   //spawn commands
+-  let cmd = exec::cmd("/bin/sh")!;
++  let cmd = exec::cmd(os::args[1], os::args[2..]...)!;
+   spawn(&cmd, set);
+ 
+   //main loop
+   for (true) {
+-    //alarm for reap
+-    signal::alarm(30);
+-
+     //error handling of the permanent fix UHH
+     match (sigwait(&set)) {
+       case let sig: signal::sig =>
+         switch (sig) {
+           case signal::sig::CHLD => reap();
+-          case signal::sig::ALRM => reap();
+           case signal::sig::USR1 => reboot();
+           case signal::sig::USR2 => poweroff();
+           case => yield;
