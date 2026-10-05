@@ -52,14 +52,19 @@ let
 
   # reaching a user's supervisor. One case per user with a tree, because the socket is per-user
   # and the function the backend supplies is what knows how to name it. Empty when no
-  # implementation claims the user namespace, which `supported` below accounts for.
-  userDispatch = lib.optionalString (cfg.user.ctl != null) (
-    lib.concatStrings (
-      lib.mapAttrsToList (user: _: ''
-        ${user}) ctl=(${cfg.user.ctl user}) ;;
-      '') userTrees
-    )
-  );
+  # implementation claims the user namespace, which `supported` below accounts for - and which
+  # is why the `case` is generated here rather than written out in the script: with no arms
+  # there is nothing to dispatch on, and an arm-less `case` is both pointless and, with a
+  # catch-all that exits, enough to make the next line unreachable and fail shellcheck.
+  userDispatch = lib.optionalString (cfg.user.ctl != null && userTrees != { }) ''
+    case "$1" in
+      ${lib.concatStrings (
+        lib.mapAttrsToList (user: _: ''
+          ${user}) ctl=(${cfg.user.ctl user}) ;;
+        '') userTrees
+      )}
+    esac
+  '';
 
   initctl = pkgs.writeShellApplication {
     name = "initctl";
@@ -129,11 +134,26 @@ let
 
       # the command for a tree, as an array: the system's operations take a unit on stdin, a
       # user's supervisor takes a subcommand and a name, so the caller picks which it is.
+      #
+      # The whole function collapses to the refusal when no implementation claims the user
+      # namespace - `userDispatch` is empty then, which the comment on it already says to
+      # expect. Written as a lookup rather than a `case` for exactly that reason: a `case`
+      # whose only arm is the catch-all, and whose catch-all exits, leaves the line after it
+      # unreachable, and `writeShellApplication` runs shellcheck:
+      #
+      #   In .../bin/initctl line 137:
+      #     printf '%s\n' "''${ctl[@]}"
+      #     ^-----------------------^ SC2317 (info): Command appears to be unreachable.
+      #
+      # which fails the build of every configuration that has no user tree - a fresh host
+      # being the obvious one, since the user supervisor is rarely the first thing wired up.
       user_ctl() {
         local ctl=()
-        case "$1" in
-          ${userDispatch}*) echo "initctl: no supervisor for '$1'" >&2; exit 1 ;;
-        esac
+        ${userDispatch}
+        if [ ''${#ctl[@]} -eq 0 ]; then
+          echo "initctl: no supervisor for '$1'" >&2
+          exit 1
+        fi
         printf '%s\n' "''${ctl[@]}"
       }
 
