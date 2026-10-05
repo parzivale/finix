@@ -247,6 +247,7 @@ let
   rcShutdown = pkgs.writeShellScript "rc.shutdown" ''
     export PATH=${lib.makeBinPath [ pkgs.coreutils ]}:$PATH
 
+
     # `.stop` before the signal, not after: the supervise loop restarts anything whose child
     # exits without it, so a TERM delivered first is a service that comes straight back. With
     # the latch in place the loop breaks instead, and - this is what the wait below depends on -
@@ -259,31 +260,86 @@ let
       kill -TERM -- -"$pid" 2>/dev/null || :
     done
 
+    # the session, which the loop above cannot reach.
+    #
+    # Those pidfiles name process group leaders, and a process group is advisory: greetd's
+    # worker starts the user's session in a new one - which is what PAM and dbus-run-session do -
+    # so `kill -- -$greetd` signals greetd alone and leaves the compositor, the user's service
+    # tree and every application of theirs running. On this machine that is fifty processes, niri
+    # among them, still holding /dev/dri at the moment reboot(2) is called. The session has
+    # therefore never been stopped on this backend; it has only ever died with the machine.
+    #
+    # elogind has already put them somewhere that cannot be escaped, which is the part worth
+    # using rather than reimplementing: a cgroup per session, /sys/fs/cgroup/<id>, inherited on
+    # fork and unaffected by setsid. Nothing in it can get out the way a process group can.
+    #
+    # TERM by hand rather than `cgroup.kill`, which is SIGKILL only: a compositor wants the
+    # chance to release the display before the kernel takes the device out from under it, and
+    # finit - which stops services by cgroup and reboots this machine where this does not - is
+    # the reason to think that matters here.
+    #
+    # The glob matches no cgroup this script is in: sinit and its children sit in the root, which
+    # has no cgroup.procs of its own to match.
+    for procs in /sys/fs/cgroup/*/cgroup.procs; do
+      [ -e "$procs" ] || continue
+      while read -r p; do
+        [ -n "$p" ] || continue
+        kill -TERM "$p" 2>/dev/null || :
+      done < "$procs"
+    done
+
     # wait for them to be gone, rather than for five seconds.
     #
     # This was `sleep 5`, unconditionally, which is what a shutdown cost whether anything was
     # still running or not - and these are daemons being sent SIGTERM, most of which are gone in
     # single-digit milliseconds. Five seconds of every shutdown spent waiting for nothing.
     #
-    # The pidfiles are the thing to watch because the supervise loop removes each one as its
-    # child exits, so their absence is the system reporting that it has stopped rather than this
-    # script assuming it has. Same five seconds in the worst case - something that will not die
-    # still gets killed below - but a shutdown that goes normally now takes about a tenth of one.
+    # Two things are being waited for. The pidfiles, because the supervise loop removes each one
+    # as its child exits, so their absence is the system reporting that it has stopped rather
+    # than this script assuming it. And the session cgroups, because the TERM above is otherwise
+    # cosmetic: pidfiles can be gone in a tenth of a second, and killing the compositor a tenth
+    # of a second after asking it to leave is not meaningfully different from not asking.
+    #
+    # `read` rather than `[ -s ]`: cgroup.procs is a kernfs file and stats as zero length
+    # whatever it contains, so the only way to know whether it is empty is to try to read a line.
+    #
+    # Same five seconds in the worst case - whatever has not gone is killed below - but a
+    # shutdown that goes normally takes about a tenth of one.
     #
     # `set --` because an unmatched glob stays literal: `[ -e "$1" ]` is how to ask whether
     # anything matched at all.
     tries=50
     while [ "$tries" -gt 0 ]; do
+      pending=0
+
       set -- ${latchDir}/*.pid
-      [ -e "$1" ] || break
+      [ -e "$1" ] && pending=1
+
+      for procs in /sys/fs/cgroup/*/cgroup.procs; do
+        [ -e "$procs" ] || continue
+        if read -r _ < "$procs" 2>/dev/null; then
+          pending=1
+        fi
+      done
+
+      [ "$pending" = 0 ] && break
       ${sleep} 0.1
       tries=$((tries - 1))
     done
+
 
     for f in ${latchDir}/*.pid; do
       [ -e "$f" ] || continue
       pid=$(cat "$f")
       kill -KILL -- -"$pid" 2>/dev/null || :
+    done
+
+    # and the hammer, for anything in a session cgroup that did not take the TERM. One write
+    # kills the whole subtree at once, so nothing can fork while the list is being walked - which
+    # is the failure mode of reading cgroup.procs and signalling it entry by entry.
+    for k in /sys/fs/cgroup/*/cgroup.kill; do
+      [ -e "$k" ] || continue
+      echo 1 > "$k" 2>/dev/null || :
     done
 
     ${lib.optionalString (shutdownScript != null) "${shutdownScript}"}
