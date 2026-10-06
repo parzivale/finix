@@ -286,22 +286,22 @@ in
         A program which prompts for a passphrase or a token's PIN, exported as
         {env}`SSH_ASKPASS`, or null to leave it unset.
 
-        Worth setting on a graphical session even though nothing here requires it. ssh's
-        default is `SSH_ASKPASS_REQUIRE=prefer`, which means: use this program when
-        {env}`DISPLAY` or {env}`WAYLAND_DISPLAY` is set, and the terminal otherwise. So inside
-        a terminal on a Wayland session ssh reaches for it, finds nothing - the openssh package
-        ships no askpass of its own - and reports
+        Only reached when there is no terminal to ask on. ssh prompts on the tty whenever it
+        has one - the test is `isatty(stdin)`, not whether a display is set - so somebody
+        running `ssh-add` in a terminal never gets here, on X11 or Wayland or neither.
+
+        What does get here is a prompt with stdin redirected: a unit, a hook, an editor's git
+        integration, anything run without a controlling terminal. With this null such a prompt
+        cannot be answered at all, because the openssh package ships no askpass of its own and
+        the compiled-in default does not exist:
 
         ```
         ssh_askpass: exec(.../libexec/ssh-askpass): No such file or directory
         ```
 
-        before falling back. Harmless for a key with no passphrase and not harmless for one
-        that has to be unlocked.
-
-        The alternative, for somebody who would rather be asked in the terminal they typed in,
-        is to leave this null and set {env}`SSH_ASKPASS_REQUIRE` to `never` instead. Neither is
-        more correct; they are different places to be asked.
+        {env}`SSH_ASKPASS_REQUIRE` is the other half of this and is left to the environment:
+        `force` uses the program even when there is a tty, `never` refuses it even when there
+        is not.
       '';
     };
   };
