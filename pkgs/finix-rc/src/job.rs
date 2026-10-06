@@ -13,8 +13,32 @@
 use crate::latch::Latches;
 use crate::manifest::{Kind, Manifest, Unit};
 use crate::proc;
-use std::process::{Command, ExitCode};
+use crate::syslog;
+use std::io;
+use std::process::{Child, Command, ExitCode, Stdio};
 use std::time::Duration;
+
+/// Spawn with both streams captured and relayed to syslog.
+///
+/// Every command a job runs goes through this - the service, a oneshot, a readiness check -
+/// because a unit which fails is exactly the one whose output is wanted, and a readiness command
+/// that keeps giving up says why on stderr.
+///
+/// The relay threads own the pipes and end at EOF, which is the child exiting. Nothing has to be
+/// joined, so a respawn loop can call this again on every pass without accumulating anything.
+fn spawn_logged(cmd: &mut Command) -> io::Result<Child> {
+    let mut child = cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
+
+    if let Some(stdout) = child.stdout.take() {
+        syslog::relay(stdout, libc::LOG_INFO);
+    }
+
+    if let Some(stderr) = child.stderr.take() {
+        syslog::relay(stderr, libc::LOG_ERR);
+    }
+
+    Ok(child)
+}
 
 /// The backoff `finix-wait` uses, for the same reason: these are all things which have just
 /// been asked to happen, so the first retry is almost always the one that matters, and the
@@ -32,6 +56,10 @@ pub fn run(manifest: &Manifest, name: &str) -> ExitCode {
         eprintln!("finix-rc job: no unit named {name} in this generation");
         return ExitCode::from(1);
     };
+
+    // tagged with the unit's name, which is what makes a log line attributable - the same thing
+    // finit's `initctl` tag does. One job process serves one unit, so this is said once.
+    syslog::open(name);
 
     let latches = Latches::new(&manifest.latch_dir);
     if let Err(e) = latches.ensure() {
@@ -173,7 +201,8 @@ fn oneshot(latches: &Latches, manifest: &Manifest, name: &str, unit: &Unit) -> E
         return ExitCode::from(1);
     };
 
-    let status = command_argv(manifest, unit, command).status();
+    let status = spawn_logged(&mut command_argv(manifest, unit, command))
+        .and_then(|mut child| child.wait());
 
     match status {
         Ok(status) if status.success() => {
@@ -218,10 +247,8 @@ fn service(latches: &Latches, manifest: &Manifest, name: &str, unit: &Unit) -> E
             let unit_name = name.to_string();
 
             std::thread::spawn(move || {
-                let ok = Command::new(&shell)
-                    .arg("-c")
-                    .arg(&readiness)
-                    .status()
+                let ok = spawn_logged(Command::new(&shell).arg("-c").arg(&readiness))
+                    .and_then(|mut child| child.wait())
                     .map(|s| s.success())
                     .unwrap_or(false);
 
@@ -266,7 +293,7 @@ fn supervise(latches: &Latches, manifest: &Manifest, name: &str, unit: &Unit) ->
 
     loop {
         let mut cmd = command_argv(manifest, unit, command);
-        let child = proc::in_new_session(&mut cmd).spawn();
+        let child = spawn_logged(proc::in_new_session(&mut cmd));
 
         match child {
             Ok(mut child) => {

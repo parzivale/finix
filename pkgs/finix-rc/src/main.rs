@@ -44,6 +44,7 @@ mod latch;
 mod manifest;
 mod proc;
 mod shutdown;
+mod syslog;
 mod switch;
 
 use manifest::Manifest;
