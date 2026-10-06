@@ -1,0 +1,31 @@
+[package]
+name = "finix-rc"
+version = "0.1.0"
+edition = "2021"
+description = "the supervision a thin init does not have: jobs, the trunk, shutdown and switch"
+license = "MIT"
+
+[dependencies]
+# syscalls, not commands. Everything this replaces was a coreutils fork per step - `touch` a
+# latch, `cat` a pidfile, `kill` a process group, `sleep` a backoff - on paths where there are
+# hundreds of steps and, in rc.shutdown's case, where the machine is already half gone.
+#
+# `libc` rather than rustix, which is what finix-init uses. Two reasons, both about this crate
+# specifically: reboot(2) and the RB_* constants are not in rustix 0.38's safe surface, and the
+# process-group signalling here wants kill(-pgid) which is a negative pid - a shape rustix's
+# typed Pid deliberately will not represent. Both would be `unsafe` blocks around the raw call
+# anyway, so the binding that already is one is the honest choice.
+libc = "0.2"
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+# this crate is rc.init, which on a thin backend is the one process that must not go away. A
+# panic that unwinds out of a supervise loop leaves the machine with a service nothing is
+# watching and no indication that anything happened; aborting is at least loud.
+panic = "abort"
+
+opt-level = "s"
+lto = true
+strip = "symbols"

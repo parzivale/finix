@@ -39,6 +39,10 @@ let
     switching = ./core/switching.nix;
     users = ./core/users.nix;
     shutdown = ./core/shutdown.nix;
+
+    # the other half of shutdown, and deliberately its own file: `shutdown` asserting poweroff
+    # passed for months against a backend which could only power off. See core/reboot.nix.
+    reboot = ./core/reboot.nix;
     ctty = ./core/ctty.nix;
 
     # ordering and shutdown again, with the timing made hostile. Kept separate from them so a
