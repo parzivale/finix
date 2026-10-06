@@ -78,5 +78,16 @@ in
         # the whole test. "Power down." here instead means the machine was asked to do the other
         # thing, and this waits until the suite's timeout rather than returning.
         machine.wait_for_console_text("Restarting system")
+
+    # not decoration, and not an assertion either: the driver's epilogue runs `machine.execute`
+    # on every machine it still believes is up, and the backdoor shell is gone by now - so
+    # leaving without this ends a passing test in
+    #
+    #   BrokenPipeError: [Errno 32] Broken pipe
+    #
+    # from driver.py's own cleanup, after every subtest has succeeded. This is what marks the
+    # machine as intentionally down. `core/shutdown.nix` ends the same way for the same reason;
+    # qemu runs with -no-reboot, so a guest restart stops it exactly as a power-off does.
+    machine.wait_for_shutdown()
   '';
 }
