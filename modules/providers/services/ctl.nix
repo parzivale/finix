@@ -41,200 +41,64 @@ let
   # opening a conversation with every supervisor on the machine to find out. It also means a
   # name that exists in two trees can be reported as ambiguous instead of acted on in whichever
   # one answered first.
-  index = pkgs.writeText "initctl-index" (
-    lib.concatStrings (
-      map (n: "system\t${n}\n") (lib.attrNames enabled)
-      ++ lib.concatLists (
-        lib.mapAttrsToList (user: tree: map (n: "${user}\t${n}\n") (lib.attrNames tree.units)) userTrees
-      )
-    )
+  index =
+    map (n: {
+      tree = "system";
+      unit = n;
+    }) (lib.attrNames enabled)
+    ++ lib.concatLists (
+      lib.mapAttrsToList (
+        user: tree:
+        map (n: {
+          tree = user;
+          unit = n;
+        }) (lib.attrNames tree.units)
+      ) userTrees
+    );
+
+  # everything the tool reaches for, as data.
+  #
+  # Each of these is a command line some backend filled in, and that is the whole design: one
+  # front-end, seven implementations, none of which this has to understand. A backend is added by
+  # filling in the options below and nothing in pkgs/finix-ctl changes.
+  manifest = pkgs.writeText "initctl-manifest.json" (
+    builtins.toJSON {
+      shell = lib.getExe pkgs.bash;
+
+      inherit index;
+
+      system = {
+        status = cfg.ctl.status;
+        activate = toString sw.activate;
+        deactivate = toString sw.deactivate;
+      };
+
+      users = lib.optionalAttrs (cfg.user.ctl != null && cfg.user.status != null) (
+        lib.mapAttrs (user: _: {
+          ctl = cfg.user.ctl user;
+          status = cfg.user.status user;
+        }) userTrees
+      );
+
+      shutdown = {
+        reboot = cfg.shutdownCommands.reboot or null;
+        poweroff = cfg.shutdownCommands.poweroff or null;
+        halt = cfg.shutdownCommands.halt or null;
+      };
+    }
   );
 
-  # reaching a user's supervisor. One case per user with a tree, because the socket is per-user
-  # and the function the backend supplies is what knows how to name it. Empty when no
-  # implementation claims the user namespace, which `supported` below accounts for - and which
-  # is why the `case` is generated here rather than written out in the script: with no arms
-  # there is nothing to dispatch on, and an arm-less `case` is both pointless and, with a
-  # catch-all that exits, enough to make the next line unreachable and fail shellcheck.
-  userDispatch = lib.optionalString (cfg.user.ctl != null && userTrees != { }) ''
-    case "$1" in
-      ${lib.concatStrings (
-        lib.mapAttrsToList (user: _: ''
-          ${user}) ctl=(${cfg.user.ctl user}) ;;
-        '') userTrees
-      )}
-    esac
+  # `makeBinaryWrapper`, not `makeWrapper`: the latter writes a shell script, and the point of
+  # the port was to stop this command being one. The compiled wrapper execs straight through with
+  # the manifest prepended, so `initctl` on PATH is an ELF from the first instruction.
+  #
+  # A wrapper at all because the manifest is per-configuration and the binary is not: it is built
+  # once and this is what binds it to the generation it was evaluated for.
+  initctl = pkgs.runCommand "initctl" { nativeBuildInputs = [ pkgs.makeBinaryWrapper ]; } ''
+    mkdir -p $out/bin
+    makeWrapper ${lib.getExe (pkgs.callPackage ../../../pkgs/finix-ctl { })} $out/bin/initctl \
+      --add-flags ${manifest}
   '';
-
-  initctl = pkgs.writeShellApplication {
-    name = "initctl";
-    runtimeInputs = [
-      pkgs.coreutils
-      pkgs.gawk
-      pkgs.gnugrep
-    ];
-    text = ''
-      index=${index}
-
-      usage() {
-        cat >&2 <<'EOF'
-      usage: initctl <command> [unit] [--user <name> | --system]
-
-        list                 every unit, in every tree
-        status <unit>        one unit's state
-        start|stop <unit>    ...
-        restart <unit>       stop then start, unless the backend has its own
-        reboot|poweroff|halt the machine
-
-      A unit is named on its own and found in your own tree first, then the system's.
-      `--system` forces the system tree for a name that is in both; `--user` names
-      another user's.
-      EOF
-        exit 2
-      }
-
-      # the tree a name lives in, or a refusal naming the choice to be made.
-      #
-      # Sets `tree` rather than printing it, because printing meant being called in `$(...)` and
-      # a failure there exits the subshell rather than the script: the first version reported
-      # "no unit named ..." and then exited 0, which is the wrong answer to give a shell.
-      #
-      # An unqualified name resolves to the caller's own tree before the system's. A person
-      # typing `initctl restart mako` means the mako in their session, and having to say so with
-      # `--user` on every command is the thing this tool exists to stop. `--system` forces the
-      # other way for a name that exists in both, and `--user` names someone else's.
-      resolve() {
-        local unit=$1 want=''${2-} where="" cands pref n
-        [ -z "$want" ] || where=" in $want"
-
-        cands=$(awk -F'\t' -v u="$unit" -v w="$want" \
-          '$2 == u && (w == "" || $1 == w) { print $1 }' "$index")
-
-        if [ -z "$cands" ]; then
-          echo "initctl: no unit named '$unit'$where" >&2
-          return 1
-        fi
-
-        for pref in "$(id -un)" system; do
-          if printf '%s\n' "$cands" | grep -qx -- "$pref"; then
-            tree=$pref
-            return 0
-          fi
-        done
-
-        n=$(printf '%s\n' "$cands" | wc -l)
-        if [ "$n" = 1 ]; then
-          tree=$cands
-          return 0
-        fi
-
-        echo "initctl: '$unit' is in: $(printf '%s' "$cands" | tr '\n' ' ')- name one with --user" >&2
-        return 1
-      }
-
-      # the command for a tree, as an array: the system's operations take a unit on stdin, a
-      # user's supervisor takes a subcommand and a name, so the caller picks which it is.
-      #
-      # The whole function collapses to the refusal when no implementation claims the user
-      # namespace - `userDispatch` is empty then, which the comment on it already says to
-      # expect. Written as a lookup rather than a `case` for exactly that reason: a `case`
-      # whose only arm is the catch-all, and whose catch-all exits, leaves the line after it
-      # unreachable, and `writeShellApplication` runs shellcheck:
-      #
-      #   In .../bin/initctl line 137:
-      #     printf '%s\n' "''${ctl[@]}"
-      #     ^-----------------------^ SC2317 (info): Command appears to be unreachable.
-      #
-      # which fails the build of every configuration that has no user tree - a fresh host
-      # being the obvious one, since the user supervisor is rarely the first thing wired up.
-      user_ctl() {
-        local ctl=()
-        ${userDispatch}
-        if [ ''${#ctl[@]} -eq 0 ]; then
-          echo "initctl: no supervisor for '$1'" >&2
-          exit 1
-        fi
-        printf '%s\n' "''${ctl[@]}"
-      }
-
-      # arguments in any order, because the first version only recognised `--user` immediately
-      # after the command and silently ignored it anywhere else - so `initctl status nix-daemon
-      # --user bella` reported the system unit as though the flag had not been given, which is a
-      # worse answer than refusing it.
-      cmd=""
-      unit=""
-      user=""
-
-      while [ $# -gt 0 ]; do
-        case "$1" in
-          --user)
-            user=''${2-}
-            [ -n "$user" ] || usage
-            shift 2
-            ;;
-          --system)
-            user=system
-            shift
-            ;;
-          -*) usage ;;
-          *)
-            if [ -z "$cmd" ]; then
-              cmd=$1
-            elif [ -z "$unit" ]; then
-              unit=$1
-            else
-              usage
-            fi
-            shift
-            ;;
-        esac
-      done
-
-      [ -n "$cmd" ] || usage
-
-      case "$cmd" in
-        list)
-          printf '%-10s %-28s %s\n' TREE UNIT STATE
-          ${cfg.ctl.status} | while IFS="$(printf '\t')" read -r unit state; do
-            printf '%-10s %-28s %s\n' system "$unit" "$state"
-          done
-          ${lib.optionalString (cfg.user.status != null) (
-            lib.concatStrings (
-              lib.mapAttrsToList (u: _: ''
-                ${cfg.user.status u} | while IFS="$(printf '\t')" read -r unit state; do
-                  printf '%-10s %-28s %s\n' ${u} "$unit" "$state"
-                done
-              '') userTrees
-            )
-          )}
-          ;;
-
-        status|start|stop|restart)
-          [ -n "$unit" ] || usage
-
-          resolve "$unit" "$user" || exit 1
-
-          if [ "$tree" = system ]; then
-            case "$cmd" in
-              status)  ${cfg.ctl.status} | awk -F'\t' -v u="$unit" '$1 == u { print $2 }' ;;
-              start)   printf '%s\n' "$unit" | ${sw.activate} ;;
-              stop)    printf '%s\n' "$unit" | ${sw.deactivate} ;;
-              restart) printf '%s\n' "$unit" | ${sw.deactivate}; printf '%s\n' "$unit" | ${sw.activate} ;;
-            esac
-          else
-            mapfile -t ctl < <(user_ctl "$tree")
-            "''${ctl[@]}" "$cmd" "$unit"
-          fi
-          ;;
-
-        reboot)   exec ${cfg.shutdownCommands.reboot or "false"} ;;
-        poweroff) exec ${cfg.shutdownCommands.poweroff or "false"} ;;
-        halt)     exec ${cfg.shutdownCommands.halt or "false"} ;;
-
-        *) usage ;;
-      esac
-    '';
-  };
 in
 {
   options.providers.services = {

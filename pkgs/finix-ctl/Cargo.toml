@@ -1,0 +1,25 @@
+[package]
+name = "finix-ctl"
+version = "0.1.0"
+edition = "2021"
+description = "one front-end for inspecting and controlling units, whichever init is underneath"
+license = "MIT"
+
+# the binary is `initctl`, not `finix-ctl`: it is installed at hiPrio over whatever tool the
+# selected init ships under that name, which only works if it carries that name.
+[[bin]]
+name = "initctl"
+path = "src/main.rs"
+
+[dependencies]
+# `getpwuid`, and nothing else. See src/main.rs: this is what `id -un` was, and it is the one
+# thing here that cannot be done by reading a file.
+libc = "0.2"
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = "symbols"

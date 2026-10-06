@@ -43,6 +43,8 @@ let
     # the other half of shutdown, and deliberately its own file: `shutdown` asserting poweroff
     # passed for months against a backend which could only power off. See core/reboot.nix.
     reboot = ./core/reboot.nix;
+
+    initctl = ./core/initctl.nix;
     ctty = ./core/ctty.nix;
 
     # ordering and shutdown again, with the timing made hostile. Kept separate from them so a
@@ -50,11 +52,24 @@ let
     stress = ./core/stress.nix;
   };
 
+  # rows which cannot run against every implementation, and why not. Kept apart from `core` so
+  # that an exclusion is a thing somebody wrote down rather than a test quietly missing.
+  coreNarrowed = {
+    initctl-control = {
+      file = ./core/initctl-control.nix;
+
+      # finit reconciles declaratively - `switch.activate` and `switch.deactivate` are both
+      # `initctl reload` - so it never sees the unit name a per-unit stop would need. See the
+      # header of core/initctl-control.nix.
+      without = [ "finit" ];
+    };
+  };
+
   # one row of the matrix: the same test file, instantiated once per implementation
   row =
-    file:
+    names: file:
     lib.recurseIntoAttrs (
-      lib.genAttrs backends (
+      lib.genAttrs names (
         backend:
         mkTest (
           import file {
@@ -82,4 +97,7 @@ let
   # and a look at the text it produced, not four machines which would boot identically.
   graph = import ./core/graph.nix { inherit lib pkgs testLib; };
 in
-lib.mapAttrs (_: row) core // perBackend // { inherit graph; }
+lib.mapAttrs (_: row backends) core
+// lib.mapAttrs (_: spec: row (lib.subtractLists spec.without backends) spec.file) coreNarrowed
+// perBackend
+// { inherit graph; }
