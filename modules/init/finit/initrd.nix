@@ -177,6 +177,16 @@ in
       { source = "${config.finit.package}/lib/finit/plugins/pidfile.so"; }
       { source = "${config.finit.package}/lib/finit/rescue.conf"; }
       { source = "${config.finit.package}/lib/finit/tmpfiles.d"; }
-    ];
+    ]
+    # `/sbin/modprobe` inside the initrd is already kmod's real modprobe (boot/initrd.nix
+    # puts it on `PATH` with `lib.hiPrio`, which is also the kernel's own default
+    # `modprobe_path`), so uevents during stage 1 already call it - but with no
+    # modprobe.d here, it has no blacklist to read. Without this, a module
+    # `programs.modprobe.blacklist`s only stops loading once the real root's /etc takes
+    # over after switch-root, same race as r8169 vs r8126 but for the whole of stage 1.
+    ++ lib.optional config.programs.modprobe.enable {
+      target = "/etc/modprobe.d/00-nixos.conf";
+      source = config.environment.etc."modprobe.d/00-nixos.conf".source;
+    };
   };
 }
