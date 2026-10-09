@@ -95,6 +95,7 @@ in
   nxinit = ./init/nxinit;
   sinit = ./init/sinit;
   openrc = ./init/openrc;
+  systemd = ./init/systemd;
 
   # hardware
 
