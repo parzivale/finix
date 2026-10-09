@@ -655,9 +655,15 @@ in
       # both without a reader having to know which supervisor each row came from.
       providers.services.user.status =
         user: statusScript "dinit-status-${user}" "-p ${socketDir user}/dinitctl";
-      providers.services.user.manager.supervisor.command =
-        user:
-        "${config.dinit.package}/bin/dinit --user -d /etc/${userDir user} -p ${socketDir user}/dinitctl boot";
+      providers.services.user.manager.supervisor.command = user: [
+        "${config.dinit.package}/bin/dinit"
+        "--user"
+        "-d"
+        "/etc/${userDir user}"
+        "-p"
+        "${socketDir user}/dinitctl"
+        "boot"
+      ];
 
       environment.etc = lib.concatMapAttrs userFiles cfg.users;
 

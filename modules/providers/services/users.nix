@@ -59,198 +59,82 @@ let
     ) cfg.users
   );
 
-  # the arms of the launcher's `case`: one per user with a tree, naming what supervises it.
+  # the launcher, which is a binary - see pkgs/finix-session-launch. What it does and in which
+  # order is documented there; what is here is the configuration it reads, and the one design
+  # decision worth stating at this end: it is a directory of files rather than a format.
   #
-  # baked in rather than passed as an argument so that a session names a user and nothing else.
-  # what runs their tree is the implementation's business, and a session that had to spell it out
-  # would be naming a backend - which is the one thing a `providers` consumer never does.
-  supervisorArms = lib.concatMapStrings (user: ''
-    ${user})
-      ${cfg.user.manager.supervisor.command user} &
-      supervisor=$!
-      ;;
-  '') (if cfg.user.manager ? supervisor then lib.attrNames cfg.users else [ ]);
-  # and what stops it, where the process the launcher owns is not the thing to ask. One arm per
-  # user, only when the implementation supplies `supervisor.stop`; otherwise this is empty and
-  # the launcher signals instead.
-  supervisorStopArms = lib.concatMapStrings (user: ''
-    ${user})
-      ${cfg.user.manager.supervisor.stop user} || :
-      ;;
-  '')
-    (
-      if cfg.user.manager ? supervisor && cfg.user.manager.supervisor.stop != null then
-        lib.attrNames cfg.users
-      else
-        [ ]
+  # Files because the alternative was a parser. Everything the launcher needs is a string - a
+  # command, a signal name, a variable's value - and a tree of one-value files is read with
+  # `fs::read_to_string` and nothing else, which keeps the crate dependency-free the way
+  # finix-wait is. The shape is:
+  #
+  #   stop-signal              the signal which stops a supervisor; see `supervisor.stopSignal`
+  #   kill                     coreutils' kill, which is how a named signal is sent
+  #   shell                    what runs the commands below
+  #   users/<name>/supervisor  `supervisor.command` for that user
+  #   users/<name>/stop        `supervisor.stop`, where the implementation has one
+  #   users/<name>/variables   her `sessionVariables`, one NAME=VALUE per line
+  #
+  # Baked into /etc rather than passed as arguments so that a session names a user and nothing
+  # else: what supervises their tree is the implementation's business, and a session which had
+  # to spell it out would be naming a backend - the one thing a `providers` consumer never does.
+  launcherPackage = pkgs.callPackage ../../../pkgs/finix-session-launch { };
+
+  hasSupervisor = cfg.user.manager ? supervisor;
+
+  # one NAME=VALUE per line, and the values are literal now. The shell this replaced exported
+  # them from inside double quotes, so a value could extend the variable it was replacing the way
+  # `environment.d(5)` allows - and, being shell, a value containing a command substitution would
+  # have run it. Nothing here expands anything, which is the point: a variable's value is a
+  # string, and `$HOME/x` now means a path with a dollar in it.
+  #
+  # `providers.services.users.<name>.sessionVariables` warns about a value which looks like it
+  # expected otherwise; see the assertion below.
+  variablesFile =
+    vars:
+    pkgs.writeText "session-variables" (
+      lib.concatStringsSep "\n" (lib.mapAttrsToList (name: value: "${name}=${value}") vars)
     );
 
-  # which signal, for the implementations that are stopped by one. A property of the
-  # implementation rather than of the user, so it is read once here.
-  stopSignal =
-    if cfg.user.manager ? supervisor then cfg.user.manager.supervisor.stopSignal else "TERM";
+  # an argv, one argument per line. Which is the format and not an encoding: an argument with a
+  # space in it is one line and so still one argument, and nothing needs quoting because nothing
+  # parses it. What a line-per-argument file cannot carry is an argument containing a newline,
+  # which no store path and no value in this contract has.
+  argvFile = name: argv: pkgs.writeText name (lib.concatStringsSep "\n" argv);
 
-  # the same shape as `supervisorArms`, for the variables a session is given rather than the
-  # thing that supervises it.
-  #
-  # `lib.toShellVars` renders an attrset as assignments with values quoted, which is nearly what
-  # is wanted and not quite: a value is allowed to refer to the variable it is replacing, the way
-  # `environment.d(5)` lets one extend a path, and `toShellVars` quotes in a way that would
-  # export the text rather than the result.
-  #
-  # Double quotes rather than none, though. Parameter expansion happens inside them, so
-  # `''${XDG_CONFIG_DIRS:+:$XDG_CONFIG_DIRS}` still extends the variable - what they prevent is
-  # word splitting, and unquoted a value with a space in it becomes two arguments to `export`,
-  # the second of them a bare word. Store paths do not have spaces in them; values arriving here
-  # are not all store paths.
-  sessionVariableArms = lib.concatMapStrings (
-    user:
-    let
-      vars = cfg.users.${user}.sessionVariables;
-    in
-    lib.optionalString (vars != { }) ''
-      ${user})
-      ${lib.concatStringsSep "\n" (
-        lib.mapAttrsToList (name: value: "    export ${name}=\"${value}\"") vars
-      )}
-        ;;
+  launcherConfig = pkgs.runCommandLocal "session-launch-config" { } (
     ''
-  ) (lib.attrNames cfg.users);
+      mkdir -p $out/users
+      printf '%s' ${
+        lib.escapeShellArg (if hasSupervisor then cfg.user.manager.supervisor.stopSignal else "TERM")
+      } > $out/stop-signal
+      printf '%s' ${lib.getExe' pkgs.coreutils "kill"} > $out/kill
+    ''
+    + lib.concatMapStrings (
+      user:
+      let
+        u = cfg.users.${user};
+      in
+      ''
+        mkdir -p $out/users/${user}
+      ''
+      + lib.optionalString hasSupervisor ''
+        cp ${argvFile "supervisor-${user}" (cfg.user.manager.supervisor.command user)} $out/users/${user}/supervisor
+      ''
+      + lib.optionalString (hasSupervisor && cfg.user.manager.supervisor.stop != null) ''
+        cp ${argvFile "supervisor-stop-${user}" (cfg.user.manager.supervisor.stop user)} $out/users/${user}/stop
+      ''
+      + lib.optionalString (u.sessionVariables != { }) ''
+        cp ${variablesFile u.sessionVariables} $out/users/${user}/variables
+      ''
+    ) (lib.attrNames cfg.users)
+  );
 
-  launcher = pkgs.writeShellScript "session-launch" ''
-    set -eu
-
-    user=
-    sessionEnv=
-
-    while [ "$#" -gt 0 ]; do
-      case "$1" in
-        --user)  user="$2";  shift 2 ;;
-        --session-env) sessionEnv="$2"; shift 2 ;;
-        --)      shift; break ;;
-        *) echo "session-launch: unrecognised argument $1" >&2; exit 2 ;;
-      esac
-    done
-
-    [ -n "$user" ] || { echo "session-launch: --user is required" >&2; exit 2; }
-    [ "$#" -gt 0 ] || { echo "session-launch: nothing to run" >&2; exit 2; }
-
-    # the session's environment, before anything in the session exists.
-    #
-    # Before the payload and not after it, unlike the block below: the payload is what spawns a
-    # session's applications, so anything it is not told it cannot pass on. Setting these
-    # afterwards would reach the supervisor and miss everything the compositor starts, which is
-    # the half that was already broken.
-    ${lib.optionalString (sessionVariableArms != "") ''
-      case "$user" in
-      ${sessionVariableArms}
-        *) ;;
-      esac
-    ''}
-
-    # the payload - a compositor, a shell, whatever the session is - in the background, because
-    # this process has to outlive it by long enough to stop the supervisor.
-    "$@" &
-    payload=$!
-
-    # the payload is running but may not yet be usable, and what makes it usable is often also
-    # what has to be told to the tree: a wayland compositor binds a socket whose name it chose,
-    # and every client needs to be told which one.
-    #
-    # both from one command, because they are one fact. `--session-env` is polled until it
-    # succeeds - that is readiness - and what it prints is exported here before the supervisor
-    # starts. a compositor with nothing to publish prints nothing and is a readiness check.
-    #
-    # it has to be this way round rather than the payload exporting for itself: the payload is a
-    # child of this process, so nothing it sets can reach back here, and a sibling started
-    # afterwards would not see it either. that is the one thing inheritance cannot do, and the
-    # reason systemd has `import-environment` at all. this is that, as one command supplied by
-    # whoever knows what the session publishes.
-    #
-    # unbounded, unlike the system unit this replaces: there, nothing else knew whether a session
-    # was ever coming, so waiting forever meant a machine stuck with no way to say why, and a
-    # deadline was the only honest answer. here the payload is this process's own child, so the
-    # wait ends when it exits whether or not it ever became ready. what a deadline would add is a
-    # report, so that is what the warning is.
-    if [ -n "$sessionEnv" ]; then
-      waited=0
-      until published=$(${lib.getExe pkgs.bashNonInteractive} -c "$sessionEnv" 2>/dev/null); do
-        if ! kill -0 "$payload" 2>/dev/null; then
-          set +e; wait "$payload"; status=$?; set -e
-          echo "session-launch: $1 exited before the session was ready" >&2
-          exit "$status"
-        fi
-
-        ${lib.getExe' pkgs.coreutils "sleep"} 0.1
-        waited=$((waited + 1))
-
-        if [ "$waited" = 300 ]; then
-          echo "session-launch: still waiting for the session after 30s" >&2
-        fi
-      done
-
-      # one NAME=VALUE per line. `export` a line at a time rather than `export $(...)`, which
-      # would split a value containing a space into arguments of its own.
-      while IFS= read -r assignment; do
-        [ -n "$assignment" ] || continue
-        export "$assignment"
-      done <<EOF
-    $published
-    EOF
-    fi
-
-    # the supervisor, started here and so a child of the session: it inherits XDG_RUNTIME_DIR,
-    # DBUS_SESSION_BUS_ADDRESS and whatever the payload published into this environment, and
-    # every unit it starts inherits them in turn. that inheritance is the entire mechanism.
-    #
-    # ordered after the readiness check for the same reason: a variable the payload sets on
-    # becoming ready is in this environment by now, and would not have been a moment earlier.
-    supervisor=
-    case "$user" in
-      ${supervisorArms}
-      *) echo "session-launch: no service tree is declared for $user" >&2 ;;
-    esac
-
-    # one session per user is assumed rather than enforced. two would put two supervisors on the
-    # same XDG_RUNTIME_DIR, and their trees would contend for the sockets in it - two sound
-    # servers on one `pipewire-0`. refusing the second, or reference-counting so that the first
-    # session starts the tree and the last stops it, both belong here when it matters.
-
-    set +e
-    wait "$payload"
-    status=$?
-    set -e
-
-    # the session is over, so the tree goes with it. this is the half a supervisor started at
-    # boot cannot do at all: nothing tells it that a session ended, so its units simply keep
-    # running with nothing to serve.
-    if [ -n "$supervisor" ]; then
-      # how, which is the implementation's to say rather than this script's to assume. A signal
-      # to the process this started, with the implementation naming which one - or a command of
-      # its own, where that process is not the supervisor. See `supervisor.stopSignal` and
-      # `supervisor.stop`.
-      ${
-        if supervisorStopArms != "" then
-          ''
-            case "$user" in
-            ${supervisorStopArms}
-              *) kill -${stopSignal} "$supervisor" 2>/dev/null || : ;;
-            esac
-          ''
-        else
-          ''kill -${stopSignal} "$supervisor" 2>/dev/null || :''
-      }
-
-      waited=0
-      while kill -0 "$supervisor" 2>/dev/null && [ "$waited" -lt 50 ]; do
-        ${lib.getExe' pkgs.coreutils "sleep"} 0.1
-        waited=$((waited + 1))
-      done
-
-      kill -KILL "$supervisor" 2>/dev/null || :
-    fi
-
-    exit "$status"
+  # the executable itself, and a symlink rather than the package: this option is interpolated
+  # straight into greetd's configuration and into tests as one path with no arguments, which a
+  # derivation with a `bin/` in it would break.
+  launcher = pkgs.runCommandLocal "session-launch" { } ''
+    ln -s ${lib.getExe launcherPackage} $out
   '';
 in
 {
@@ -303,9 +187,11 @@ in
           '';
           type = lib.types.submodule {
             options.command = lib.mkOption {
-              type = lib.types.functionTo lib.types.str;
+              type = lib.types.functionTo (lib.types.listOf lib.types.str);
               description = ''
-                Given a username, the invocation which supervises that user's units.
+                Given a username, the argv which supervises that user's units - the program and
+                its arguments, executed directly. There is no shell, so a value here is never
+                interpreted: a redirection or a pipe among these would be a literal argument.
 
                 It is run by {option}`providers.services.user.sessionLauncher`, as the user,
                 inside their session - so it inherits that session's environment, and must not
@@ -337,7 +223,7 @@ in
             };
 
             options.stop = lib.mkOption {
-              type = with lib.types; nullOr (functionTo str);
+              type = with lib.types; nullOr (functionTo (listOf str));
               default = null;
               description = ''
                 Given a username, a command which stops that user's supervisor - run as the
@@ -364,15 +250,15 @@ in
       type = lib.types.package;
       readOnly = true;
       default = launcher;
-      defaultText = lib.literalMD "a generated script";
+      defaultText = lib.literalMD "a generated binary";
       description = ''
         What a login session runs instead of running its payload directly:
 
         ```
-        sessionLauncher --user <name> [--session-env <command>] -- <payload> [args...]
+        sessionLauncher --user <name> [--session-env <program>] -- <payload> [args...]
         ```
 
-        It starts the payload, polls `--session-env` until it succeeds, exports what that
+        It starts the payload, runs `--session-env` until it succeeds, exports what that
         printed, starts that user's supervisor with it, and stops the supervisor when the payload
         exits. The payload's exit status is its own.
 
@@ -381,6 +267,11 @@ in
         called. Succeeding means the session is usable; what it prints, as one `NAME=VALUE` per
         line, is what the session has to tell the tree about itself - `WAYLAND_DISPLAY`, whose
         value the compositor chose after it started and which therefore cannot be inherited.
+
+        A program, executed with no arguments, rather than a command for a shell to evaluate -
+        as is every other command this runs. A caller with something to say in shell says it in
+        a script, which is what one that had a shell command was already passing: a store path
+        is one word either way.
       '';
     };
 
@@ -466,6 +357,31 @@ in
   };
 
   config = {
+    # what the launcher reads. Only where there is a tree to launch: a machine with no
+    # `providers.services.users` has nothing to write and nothing that would read it.
+    environment.etc = lib.mkIf (cfg.users != { }) {
+      "finix/session-launch".source = launcherConfig;
+    };
+
+    # a session variable whose value looks like it expected a shell.
+    #
+    # The launcher used to be shell and these were expanded by it, so `$XDG_CONFIG_DIRS` in a
+    # value extended the variable the way environment.d(5) allows. The binary sets them
+    # literally, which is the safer rule and a change in behaviour for anything that relied on
+    # the old one - so it is reported rather than left to be discovered as a path with a dollar
+    # in it. home-manager's own session variables are the likely source.
+    warnings = lib.concatLists (
+      lib.mapAttrsToList (
+        user: u:
+        lib.mapAttrsToList (
+          name: _:
+          "providers.services.users.${user}.sessionVariables.${name} contains a `$`, which the"
+          + " session launcher no longer expands - it is set literally. Compute the value in"
+          + " Nix instead."
+        ) (lib.filterAttrs (_: value: lib.hasInfix "$" (toString value)) u.sessionVariables)
+      ) cfg.users
+    );
+
     assertions = [
       {
         assertion = cfg.users != { } -> cfg.user.manager ? supervisor;

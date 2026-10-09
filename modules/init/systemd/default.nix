@@ -445,7 +445,6 @@ let
     Service=${busAlias}
   '';
 
-
   # and the one file of systemd's that finix's dbus has to read. The units above only make pid 1
   # *try*: it connects, asks for `org.freedesktop.systemd1`, and dbus refuses, because dbus
   # denies `own` by default and the policy permitting root that name is a file systemd ships
@@ -756,8 +755,17 @@ let
   # The launcher still gives its child five seconds before SIGKILL, which is less than
   # `TimeoutStopSec` above - not a leak: `systemctl stop` enqueues a job in pid 1, and the job
   # outlives the client that asked for it, so her tree goes on stopping in order either way.
-  managerStart = user: "${systemctl} start --wait ${managerFor user}";
-  managerStop = user: "${systemctl} stop ${managerFor user}";
+  managerStart = user: [
+    systemctl
+    "start"
+    "--wait"
+    (managerFor user)
+  ];
+  managerStop = user: [
+    systemctl
+    "stop"
+    (managerFor user)
+  ];
 
   userUnits =
     user: u:

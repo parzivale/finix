@@ -1,0 +1,18 @@
+[package]
+name = "finix-session-launch"
+version = "0.1.0"
+edition = "2021"
+description = "start a session's payload and the service tree beside it"
+license = "MIT"
+
+# none, like finix-wait. What this does is spawn processes, poll them, read a few files and
+# sleep, all of which std does. The one thing std will not do is send a named signal - there is
+# no API for anything but SIGKILL - and that is one `kill` fork per logout rather than a
+# dependency and a vendored lockfile. finix-rc avoids coreutils forks because it does hundreds
+# of them on a boot path; this does one, when a session ends.
+[dependencies]
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = "symbols"

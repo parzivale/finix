@@ -412,7 +412,9 @@ in
     })
 
     (lib.mkIf (cfg.user.backend == "runit") {
-      providers.services.user.manager.supervisor.command = user: userSupervisor user cfg.users.${user};
+      providers.services.user.manager.supervisor.command = user: [
+        (userSupervisor user cfg.users.${user})
+      ];
       providers.services.user.manager.supervisor.stopSignal = userStopSignal;
       providers.services.user.ctl = userCtl;
       providers.services.user.status = user: statusScript "user-${user}" (userScanDir user);
