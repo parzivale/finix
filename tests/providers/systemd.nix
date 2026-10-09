@@ -235,33 +235,6 @@
           machine.sleep(10)
           print(machine.succeed("cat /run/session-launch.log || true"))
 
-          # DIAGNOSTIC, to be removed. pid 1 will not connect to the system bus until it finds
-          # units named dbus.socket and dbus.service in the right states; these print what those
-          # states actually are, rather than what they were inferred to be.
-          print(machine.succeed("systemctl list-units --all --no-legend 'dbus*' 'finix-bus-stub*' || true"))
-          print(machine.succeed("systemctl show -p Id -p Names -p ActiveState -p SubState dbus.service || true"))
-          print(machine.succeed("systemctl show -p Id -p Names -p ActiveState -p SubState dbus.socket || true"))
-          print(machine.succeed("systemctl status dbus.socket 2>&1 || true"))
-          print(machine.succeed("ls -l /run/dbus/ || true"))
-          print(machine.succeed(
-              "dbus-send --system --dest=org.freedesktop.DBus --print-reply --type=method_call "
-              "/ org.freedesktop.DBus.ListNames 2>&1 | grep -c systemd1 || true"
-          ))
-
-          # pid 1 requests its bus name with sd_bus_request_name_async() and no callback, so a
-          # refusal is silent on that side, and dbus does not log ownership denials either.
-          # Debug logging is the only thing that says which of the two is happening; restarting
-          # the bus is what re-triggers the check, since manager_recheck_dbus() runs on unit
-          # state changes.
-          machine.succeed("systemctl log-level debug")
-          machine.succeed("systemctl restart finix-dbus.service || true")
-          machine.sleep(5)
-          print(machine.succeed("systemctl start finix-user-manager@alice.service 2>&1 || true"))
-          print(machine.succeed(
-              "dbus-send --system --dest=org.freedesktop.DBus --print-reply --type=method_call "
-              "/ org.freedesktop.DBus.ListNames 2>&1 | grep -c systemd1 || true"
-          ))
-
           # the manager came up, which is most of what this subtest is for. `systemd --user`
           # refuses to start without $XDG_RUNTIME_DIR in its environment - "Trying to run as
           # user instance, but $XDG_RUNTIME_DIR is not set" - and that cannot be written into

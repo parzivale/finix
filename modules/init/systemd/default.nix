@@ -402,49 +402,49 @@ let
   busAlias = "${prefix}dbus.service";
 
   # the socket has no such honest form, because finix's dbus binds its own socket rather than
-  # being activated from one - so there is no socket unit to alias. This one exists to be in
+  # being activated from one - so there is no socket unit to alias. This one exists to reach
   # `SOCKET_RUNNING` and nothing else: an abstract-namespace address, so it occupies no path
   # that dbus or anything else could want.
   #
-  # Ordered after the bus, which took two goes to get right. `Service=` orders a socket *before*
-  # the unit it activates, so naming the bus in both at once is a cycle - and systemd resolves a
-  # cycle by deleting a job from it: "Job finix-dbus.service/start deleted to break ordering
-  # cycle starting with dbus.socket/start", which is dbus never starting and the trunk never
-  # completing. With `Service=` pointed at the inert unit below, nothing else orders this
-  # against the bus and the `After=` is free.
+  # `Service=` names the bus, and that is the whole of the mechanism rather than a detail.
+  # `socket_trigger_notify` in systemd's socket.c is what moves a socket into the state pid 1
+  # is looking for:
   #
-  # The ordering is not decoration. pid 1 re-examines the pair on particular triggers rather
-  # than continuously, and unordered this socket reached its running state ~200ms *before* the
-  # bus reached its own - so both conditions were true afterwards and never together at a moment
-  # anything looked. The name went unclaimed with nothing logged anywhere: dbus never saw a
-  # request to refuse, and systemd never said it had declined to connect.
+  #   if (SERVICE(other)->state == SERVICE_RUNNING)
+  #           socket_set_state(s, SOCKET_RUNNING);
+  #
+  # `other` there is the unit `Service=` names. So a socket reaches `SOCKET_RUNNING` only when
+  # the service it triggers is running, and pointing this at an inert oneshot - which is what it
+  # did first, to dodge the two problems below - left it in `SOCKET_LISTENING` for the life of
+  # the machine. Which is not a state `manager_dbus_is_running` accepts, so pid 1 never
+  # connected, so every unprivileged `systemctl` failed with "The name org.freedesktop.systemd1
+  # was not provided by any .service files" - including the one a session runs to start its own
+  # manager, which is the whole user role. Nothing logged it: the socket was listening and the
+  # bus was running, and the state that was missing was the relation between them.
+  #
+  # Pointed at the bus, that state is the bus's own and not a claim about it, which is the same
+  # property the alias above has.
+  #
+  # And no ordering of its own, which is what the first attempt got wrong in the other
+  # direction. `Service=` already adds `UNIT_BEFORE` with `UNIT_TRIGGERS` - socket.c again -
+  # so the socket is ordered before the bus for free. Saying `After=${busAlias}` as well is
+  # both halves of the problem that produced the stub: it is a cycle, which systemd resolves by
+  # deleting a job from it ("Job finix-dbus.service/start deleted to break ordering cycle
+  # starting with dbus.socket/start", the bus never starting and the trunk never completing),
+  # and it starts the socket after the bus, which systemd refuses outright - "Socket service %s
+  # already active, refusing", `socket_start` declining a socket whose service is up. Starting
+  # before the bus is the order that avoids both, and is the order real dbus.socket runs in.
   busStubSocket = ''
     [Unit]
     Description=the name pid 1 looks for before it will use the system bus
     Documentation=man:systemd.socket(5)
     Requires=${busAlias}
-    After=${busAlias}
 
     [Socket]
     ListenStream=@finix-systemd-bus-stub
-
-    # pointed at an inert unit rather than at the bus, which is the second thing that stops
-    # this socket from ever listening. A socket unit whose service is already running is one
-    # systemd declines to start - "Socket service %s already active, refusing." - and the bus
-    # is running by the time anything gets here. `Service=` has to name something, and left
-    # unset it names `dbus.service` by its own name, which is the alias. So it names this
-    # instead: a unit that exists to be nothing, and that nothing will ever connect to.
-    Service=${prefix}bus-stub.service
+    Service=${busAlias}
   '';
 
-  busStubService = ''
-    [Unit]
-    Description=nothing; see dbus.socket, which has to name a service it will never start
-
-    [Service]
-    Type=oneshot
-    ExecStart=${lib.getExe' pkgs.coreutils "true"}
-  '';
 
   # and the one file of systemd's that finix's dbus has to read. The units above only make pid 1
   # *try*: it connects, asks for `org.freedesktop.systemd1`, and dbus refuses, because dbus
@@ -461,6 +461,23 @@ let
     mkdir -p $out/share/dbus-1/system.d
     ln -s ${scfg.package}/share/dbus-1/system.d/org.freedesktop.systemd1.conf \
       $out/share/dbus-1/system.d/
+  '';
+
+  # and the action definition, which is the other half of letting a session start its own
+  # manager. The rule under `cfg.user.backend` below answers a question polkit has to recognise
+  # first: an action id is resolved against the `.policy` files polkit has read, and one it has
+  # never heard of is an error rather than a request it can decide. systemd reports that error
+  # in the same words as a refusal - "Access denied" - so a missing action file and a denied
+  # request are indistinguishable from the caller's side.
+  #
+  # Only this file, for the reason `busPolicy` takes only one: the package's other actions
+  # cover login1, hostname1, resolve1 and the rest, which finix answers with elogind and its
+  # own services. The defaults in here are `auth_admin` in all three slots, which is why the
+  # rule is needed at all - a session launcher has nobody to prompt.
+  polkitActions = pkgs.runCommandLocal "finix-systemd-polkit-actions" { } ''
+    mkdir -p $out/share/polkit-1/actions
+    ln -s ${scfg.package}/share/polkit-1/actions/org.freedesktop.systemd1.policy \
+      $out/share/polkit-1/actions/
   '';
 
   # only when there is a dbus to speak of. A machine without one has nothing for pid 1 to
@@ -501,7 +518,6 @@ let
     ${lib.optionalString busNames ''
       ln -s ${busAlias} $out/dbus.service
       ln -s ${pkgs.writeText "finix-unit-dbus.socket" busStubSocket} $out/dbus.socket
-      ln -s ${pkgs.writeText "finix-unit-bus-stub.service" busStubService} "$out/${prefix}bus-stub.service"
       ln -s ../dbus.socket "$out/${rootTarget}.wants/dbus.socket"
     ''}
 
@@ -1143,7 +1159,10 @@ in
         "${userDir user}".source = userUnitDir user u;
       }) cfg.users;
 
-      environment.systemPackages = [ systemdTools ];
+      environment.systemPackages = [
+        systemdTools
+        polkitActions
+      ];
 
       # $XDG_RUNTIME_DIR, which `systemd --user` keeps its control socket and its own state in
       # and will not start without.
