@@ -194,23 +194,195 @@ let
       '';
 
   # the whole point of this backend: the database is built here, not assembled at boot. a
+  # the whole point of this backend: the database is built here, not assembled at boot. a
   # configuration error is a build failure rather than something discovered on the machine.
-  database = pkgs.runCommand "s6-rc-database" { nativeBuildInputs = [ s6rc ]; } ''
-    mkdir -p $out
-    ${lib.concatStrings (lib.mapAttrsToList unitDir bootSide)}
+  #
+  # A function of the scope, because a user's tree is the same compilation over a different unit
+  # set. Nothing else about `unitDir` or `runScript` is scope-bound - s6 needs no latch files
+  # and no writable copy of anything, the database being read-only and `s6-rc-init` populating
+  # the scan directory from it - so this is the whole of what the user scope needed from the
+  # system's machinery.
+  databaseFor =
+    label: units:
+    pkgs.runCommand "s6-rc-database-${label}" { nativeBuildInputs = [ s6rc ]; } ''
+      mkdir -p $out
+      ${lib.concatStrings (lib.mapAttrsToList unitDir units)}
 
-    mkdir -p $out/source/everything
-    printf 'bundle\n' > $out/source/everything/type
-    printf '%s' ${
-      lib.escapeShellArg (lib.concatMapStrings (n: "${n}\n") (lib.attrNames bootSide))
-    } > $out/source/everything/contents
+      mkdir -p $out/source/everything
+      printf 'bundle\n' > $out/source/everything/type
+      printf '%s' ${
+        lib.escapeShellArg (lib.concatMapStrings (n: "${n}\n") (lib.attrNames units))
+      } > $out/source/everything/contents
 
-    s6-rc-compile $out/db $out/source
-  '';
+      s6-rc-compile $out/db $out/source
+    '';
+
+  database = databaseFor "system" bootSide;
 
   live = "/run/s6-rc";
   scanDir = "/run/service";
 
+  # ---- the user scope ----------------------------------------------------------------
+  #
+  # s6 supervises a user's tree with the same two programs it supervises the system's with, and
+  # neither wants to be pid 1 or to be root: `s6-svscan` watches a directory and `s6-rc` changes
+  # state against a live directory. What differs is where those live and who may write to them.
+  #
+  # Less had to be rearranged here than for any other backend. The database is compiled into the
+  # store and read from there, so unlike runit there is nothing to copy out; `s6-rc-init`
+  # populates the scan directory itself from that database, so unlike dinit there is no tree to
+  # write into /etc; and s6 speaks readiness natively, so unlike runit there are no latch files
+  # to keep per scope.
+  userRoot = user: "/run/user-services/${user}";
+  userLive = user: "${userRoot user}/live";
+  userScanDir = user: "${userRoot user}/service";
+
+  userUnits = u: lib.filterAttrs (_: unit: unit.enable) u.units;
+  userDatabase = user: u: databaseFor "user-${user}" (userUnits u);
+
+  # the teardown, and it is s6's own mechanism rather than anything of the contract's.
+  #
+  # `supervisor.stopSignal` stays TERM, which is what s6-svscan already means: s6-svscan(1) -
+  # "Instruct all the s6-supervise processes to stop their service and exit; wait for the whole
+  # supervision tree to die [...] then exec into .s6-svscan/finish or exit 0". The exact
+  # opposite of runit, where TERM makes runsvdir exit and abandon everything it was watching.
+  #
+  # What this script adds is the order. A bare TERM stops every service at once; bringing the
+  # set down through `s6-rc` first stops them in dependency order, which is what the system's
+  # own rc.shutdown does with the same command. The live directory goes with it, so the next
+  # session starts from nothing rather than finding a database already initialised.
+  userSigterm =
+    user:
+    pkgs.writeShellScript "s6-rc-user-sigterm-${user}" ''
+      ${lib.getExe' s6rc "s6-rc"} -l ${userLive user} -bDa change || :
+      ${lib.getExe' pkgs.coreutils "rm"} -rf ${userLive user}
+      exec ${lib.getExe' pkgs.s6 "s6-svscanctl"} -t ${userScanDir user}
+    '';
+
+  # what a session runs. The process the launcher owns is s6-svscan itself - this `exec`s into
+  # what a session runs. The process the launcher owns is s6-svscan itself - this `exec`s into
+  # it - so stopping it is the signal above and nothing has to stay alive to translate one.
+  #
+  # The database is copied out of the store first, and that is not an optimisation. s6-rc-init
+  # copies the service directories it finds in the database verbatim, modes included, and then
+  # writes a `down` file into each copy so that the supervisors it starts do not start the
+  # services yet. A database in the store is mode 555, so the copies are 555, and writing into
+  # one fails for anybody but root:
+  #
+  #   s6-rc-init: fatal: unable to supervise service directories in <live>/servicedirs:
+  #                      Permission denied
+  #
+  # which is what s6-rc-init(1) means by "it must be run as root". Root never notices, so the
+  # system scope has been handing it a store path since this backend was written. A writable
+  # copy per session costs one `cp` of a few kilobytes and is the whole of the difference.
+  #
+  # The database still has to be initialised against a *running* s6-svscan: `s6-rc-init`
+  # populates the scan directory and waits for the supervisors it created to come up, which
+  # cannot happen before there is a scanner. So it runs beside, after waiting for the control
+  # fifo s6-svscan creates when it is ready - which is also how `s6-svscanctl` knows where to
+  # talk, so waiting for it is waiting for exactly the thing that matters.
+  userSupervisor =
+    user: u:
+    toString (
+      pkgs.writeShellScript "s6-rc-user-supervisor-${user}" ''
+        set -e
+        export PATH=${
+          lib.makeBinPath [
+            pkgs.coreutils
+            pkgs.s6
+            s6rc
+          ]
+        }:$PATH
+
+        # a tree already being supervised here means a second session for this user, and the
+        # directories below are not safe to clear underneath it. Refusing is both halves of
+        # that: the first session keeps its tree, and the launcher reports a supervisor which
+        # exited rather than leaving a session silently without one.
+        if [ -p ${userScanDir user}/.s6-svscan/control ]; then
+          echo "s6-rc: a supervision tree for ${user} is already running" >&2
+          exit 1
+        fi
+
+        # from nothing, every session. `s6-rc-init` refuses a live directory which already
+        # exists, and a scan directory left behind by a session that crashed would have
+        # s6-svscan supervising its service directories before `s6-rc` had any say in what
+        # should be up - which is every unit at once, in no order.
+        #
+        # `chmod` first, because what is being removed may not be writable: a tree left by a
+        # generation whose database came from the store has 555 service directories in it, and
+        # `rm -rf` cannot empty a directory it cannot write to.
+        chmod -R u+w ${userRoot user}/db ${userLive user} ${userScanDir user} 2>/dev/null || :
+        rm -rf ${userRoot user}/db ${userLive user} ${userScanDir user}
+
+        cp -rL ${userDatabase user u}/db ${userRoot user}/db
+        chmod -R u+rwX ${userRoot user}/db
+
+        mkdir -p ${userScanDir user}/.s6-svscan
+        ln -sf ${userSigterm user} ${userScanDir user}/.s6-svscan/SIGTERM
+
+        (
+          while [ ! -p ${userScanDir user}/.s6-svscan/control ]; do
+            sleep 0.05
+          done
+
+          s6-rc-init -c ${userRoot user}/db -l ${userLive user} ${userScanDir user}
+          s6-rc -l ${userLive user} -up change everything
+        ) &
+
+        exec s6-svscan ${userScanDir user}
+      ''
+    );
+
+  # `<verb> <unit>`, which is the shape the contract asks for and not s6-rc's own: s6-rc says
+  # what state a set should be in - `-u change` up, `-d change` down - rather than taking a verb.
+  userCtl =
+    user:
+    toString (
+      pkgs.writeShellScript "s6-rc-user-ctl-${user}" ''
+        verb="$1"
+        shift
+
+        s6rc() { exec ${lib.getExe' s6rc "s6-rc"} -l ${userLive user} "$@"; }
+
+        case "$verb" in
+          start) s6rc -u change "$@" ;;
+          stop) s6rc -d change "$@" ;;
+          restart)
+            ${lib.getExe' s6rc "s6-rc"} -l ${userLive user} -d change "$@"
+            s6rc -u change "$@"
+            ;;
+          status) exec ${lib.getExe' pkgs.s6 "s6-svstat"} ${userScanDir user}/"$1" ;;
+          *)
+            echo "s6-rc: unknown verb $verb" >&2
+            exit 2
+            ;;
+        esac
+      ''
+    );
+
+  # the same question the system's `ctl.status` answers, over a user's live directory:
+  # membership of the up set is the state, so this asks once rather than per unit.
+  userStatus =
+    user: u:
+    toString (
+      pkgs.writeShellScript "s6-rc-user-status-${user}" ''
+        up=$(${lib.getExe' s6rc "s6-rc"} -l ${userLive user} -a list 2>/dev/null || :)
+
+        for unit in ${
+          lib.concatStringsSep " " (
+            lib.attrNames (lib.filterAttrs (_: unit: kindOf unit != "anchor") (userUnits u))
+          )
+        }; do
+          if printf '%s\n' "$up" | ${lib.getExe' pkgs.gnugrep "grep"} -qx -- "$unit"; then
+            state=running
+          else
+            state=stopped
+          fi
+
+          printf '%s\t%s\n' "$unit" "$state"
+        done
+      ''
+    );
   # where the running generation's fingerprints live, and the store copy /run is seeded from at
   # boot. Not /etc: switch-to-configuration runs activation before it runs the engine, so /etc
   # already describes the generation being switched into by the time `list` is asked what is
@@ -385,6 +557,29 @@ in
     '';
   };
 
+  # the same question for the user scope, and independent of the one above in both directions:
+  # `s6-svscan` is a program that watches a directory, so it serves a session beside any pid 1,
+  # and an s6 which *is* pid 1 does not serve a session unless this says so.
+  #
+  # Named for the role rather than as `s6-rc.user.enable`, matching the dinit, systemd and runit
+  # modules.
+  options.s6-rc.userSupervisor.enable = lib.mkOption {
+    type = lib.types.bool;
+    default = false;
+    example = true;
+    description = ''
+      Whether an `s6-svscan` started by each user's session supervises that user's units,
+      with `s6-rc` bringing them up against it.
+
+      Enabling it points {option}`providers.services.user.backend` at `s6-rc`, which is what
+      actually selects an implementation for that scope - so this is a default, and a machine
+      naming a backend directly still wins.
+
+      Independent of {option}`s6-rc.enable`. With no {option}`providers.services.users`
+      declared it names an implementation for a scope with nothing in it, which is inert.
+    '';
+  };
+
   options.providers.services = {
     backend = lib.mkOption {
       type = lib.types.enum [ "s6-rc" ];
@@ -410,6 +605,41 @@ in
     # this module supplies an implementation for `providers.services`
     (lib.mkIf config.s6-rc.enable {
       providers.services.backend = lib.mkDefault "s6-rc";
+    })
+
+    # and the user scope, which is a separate claim - see the block above `userSupervisor` for
+    # why an s6-svscan per session beside a different pid 1 is the intended shape.
+    (lib.mkIf config.s6-rc.userSupervisor.enable {
+      providers.services.user.backend = lib.mkDefault "s6-rc";
+    })
+
+    (lib.mkIf (cfg.user.backend == "s6-rc") {
+      providers.services.user.manager.supervisor.command = user: [
+        (userSupervisor user cfg.users.${user})
+      ];
+
+      # no `stop`, and `stopSignal` left at its default: TERM is already what s6-svscan means
+      # by stop. See `userSigterm`, which the scan directory names so that the set comes down in
+      # dependency order rather than all at once.
+
+      providers.services.user.ctl = userCtl;
+      providers.services.user.status = user: userStatus user cfg.users.${user};
+
+      # the user's root, which has to exist and belong to them before their session can write a
+      # live directory and a scan directory into it - and so is boot work, being the one part of
+      # this that needs root. The same unit the dinit and runit backends declare for the same
+      # reason; only one implementation serves this scope on a machine, so only one is emitted.
+      providers.services.units = lib.mapAttrs' (
+        user: _:
+        lib.nameValuePair "user-services-dir--${user}" {
+          description = "supervision directory for ${user}";
+          requires = [ "sysinit" ];
+          type.oneshot.command = pkgs.writeShellScript "user-services-dir-${user}" ''
+            ${lib.getExe' pkgs.coreutils "mkdir"} -p ${userRoot user}
+            ${lib.getExe' pkgs.coreutils "chown"} ${user} ${userRoot user}
+          '';
+        }
+      ) cfg.users;
     })
 
     (lib.mkIf (cfg.backend == "s6-rc") {
