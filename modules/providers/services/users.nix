@@ -335,12 +335,17 @@ in
               {option}`providers.services.user.sessionLauncherEnv` is for the other case, a
               value only knowable once the session is running.
 
-              Values are expanded by the shell the launcher is, so a variable may extend
-              itself the way `environment.d(5)` allows - `$XDG_CONFIG_DIRS` and
-              `''${XDG_CONFIG_DIRS:+:$XDG_CONFIG_DIRS}` both do what they look like. That is
-              also the caveat: a value is shell, so one containing a command substitution
-              would run it. They come from the configuration, which is as trusted as the
-              launcher itself, but nothing here sanitises them.
+              A value may refer to other variables, so one can extend itself the way
+              `environment.d(5)` allows: `$XDG_CONFIG_DIRS`, `''${XDG_CONFIG_DIRS}`,
+              `''${XDG_CONFIG_DIRS:+:$XDG_CONFIG_DIRS}` and the `:-` form all do what they look
+              like, resolved against the session's environment and against the variables set
+              before this one.
+
+              Those four forms are the whole of it. The launcher substitutes them itself and has
+              no shell, so a value containing a command substitution is the text it is written
+              as rather than a command that runs - which is the one way the shell this replaced
+              could have been made to do something. A `$` that begins none of the four is a
+              literal `$`, and there is no way to write one that would.
             '';
           };
 
@@ -363,22 +368,28 @@ in
       "finix/session-launch".source = launcherConfig;
     };
 
-    # a session variable whose value looks like it expected a shell.
+    # a session variable whose value expects a shell rather than a substitution.
     #
-    # The launcher used to be shell and these were expanded by it, so `$XDG_CONFIG_DIRS` in a
-    # value extended the variable the way environment.d(5) allows. The binary sets them
-    # literally, which is the safer rule and a change in behaviour for anything that relied on
-    # the old one - so it is reported rather than left to be discovered as a path with a dollar
-    # in it. home-manager's own session variables are the likely source.
+    # `$NAME` and the `${NAME:+text}` forms still work, which is what environment.d(5) means by
+    # extending a variable and what `SSH_AUTH_SOCK` and `XDG_CONFIG_DIRS` both rely on. A command
+    # substitution does not: the launcher has no shell to run one in, so `$(...)` and a backtick
+    # are the characters they are. That used to execute, so it is reported rather than left to
+    # be discovered as a path with a `$(` in it.
     warnings = lib.concatLists (
       lib.mapAttrsToList (
         user: u:
-        lib.mapAttrsToList (
-          name: _:
-          "providers.services.users.${user}.sessionVariables.${name} contains a `$`, which the"
-          + " session launcher no longer expands - it is set literally. Compute the value in"
-          + " Nix instead."
-        ) (lib.filterAttrs (_: value: lib.hasInfix "$" (toString value)) u.sessionVariables)
+        lib.mapAttrsToList
+          (
+            name: _:
+            "providers.services.users.${user}.sessionVariables.${name} contains a command"
+            + " substitution, which the session launcher does not evaluate - there is no shell in"
+            + " it. The value is used as written. Compute it in Nix instead."
+          )
+          (
+            lib.filterAttrs (
+              _: value: lib.hasInfix "$(" (toString value) || lib.hasInfix "`" (toString value)
+            ) u.sessionVariables
+          )
       ) cfg.users
     );
 

@@ -29,9 +29,19 @@
       daemon =
         name: marker:
         pkgs.writeShellScript name ''
-          export PATH=${lib.makeBinPath [ pkgs.coreutils ]}:$PATH
+          export PATH=${
+            lib.makeBinPath [
+              pkgs.coreutils
+              pkgs.gnugrep
+            ]
+          }:$PATH
           mkdir -p /run/svc-test
           id -un > /run/svc-test/${name}.user
+
+          # what the tree was actually told, which is the only place the launcher's substitution
+          # can be observed: these reach a unit by inheritance and nowhere else.
+          env | grep '^PROBE_' | sort > /run/svc-test/${name}.env
+
           exec sleep ${marker}
         '';
     in
@@ -59,6 +69,23 @@
           ${pkgs.coreutils}/bin/chmod 1777 /run/svc-test
         '';
         requires = [ "sysinit" ];
+      };
+
+      # the substitution the launcher does, which is not a shell's. BASE is plain; the three
+      # below it refer to it and to each other, and are set in the order Nix wrote them - so
+      # alphabetically, which is why they are named to sort that way.
+      #
+      # EXTENDED is the shape that made this necessary: `XDG_CONFIG_DIRS` on a real machine is a
+      # store path plus `${XDG_CONFIG_DIRS:+:$XDG_CONFIG_DIRS}`, and `SSH_AUTH_SOCK` is
+      # `$XDG_RUNTIME_DIR/ssh-agent`. LITERAL is the other half of the claim: a command
+      # substitution is text, because there is nothing here that could run one.
+      providers.services.users.alice.sessionVariables = {
+        PROBE_A_BASE = "/base";
+        PROBE_B_SIMPLE = "$PROBE_A_BASE/simple";
+        PROBE_C_BRACED = "\${PROBE_A_BASE}/braced";
+        PROBE_D_EXTENDED = "/first\${PROBE_A_BASE:+:$PROBE_A_BASE}";
+        PROBE_E_UNSET = "/only\${PROBE_NOT_SET:+:$PROBE_NOT_SET}";
+        PROBE_F_LITERAL = "$(echo ran)";
       };
 
       providers.services.users.alice.units = {
@@ -116,6 +143,30 @@
           machine.wait_until_succeeds("test -f /run/svc-test/alice-helper.user", timeout=90)
           assert machine.succeed("cat /run/svc-test/alice-agent.user").strip() == "alice"
           assert machine.succeed("cat /run/svc-test/alice-helper.user").strip() == "alice"
+
+      with subtest("her session variables reached the tree, substituted"):
+          # read out of a unit's own environment rather than the configuration: inheritance is
+          # the mechanism, so what a unit has is the only thing worth asserting.
+          env = dict(
+              line.split("=", 1)
+              for line in machine.succeed("cat /run/svc-test/alice-agent.env").splitlines()
+              if line
+          )
+
+          assert env["PROBE_A_BASE"] == "/base", env
+          assert env["PROBE_B_SIMPLE"] == "/base/simple", env
+          assert env["PROBE_C_BRACED"] == "/base/braced", env
+
+          # the shape `XDG_CONFIG_DIRS` has on a real machine: extend, if there is anything to
+          # extend. The alternate text is itself a reference, so it has to be substituted too.
+          assert env["PROBE_D_EXTENDED"] == "/first:/base", env
+
+          # and the same form where the variable is unset, which contributes nothing
+          assert env["PROBE_E_UNSET"] == "/only", env
+
+          # the half that says this is not a shell. A command substitution is the text it was
+          # written as; had a shell seen it, this would read `ran`.
+          assert env["PROBE_F_LITERAL"] == "$(echo ran)", env
 
       with subtest("and are reported the way the contract asks"):
           # providers.services.user.status, which is what `initctl` reads a user's tree through

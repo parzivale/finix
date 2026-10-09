@@ -2,12 +2,18 @@
 //
 // The shell this replaces is in the history of modules/providers/services/users.nix. It was the
 // largest piece of generated shell left in the contract, and the reason to replace it is not
-// speed - it runs once per login - but that everything it handled was shell. A session variable
-// was expanded by the shell that exported it, so a value could extend itself the way
-// environment.d(5) allows and a value containing a command substitution would have run it. A
-// supervisor was a command line evaluated by a shell. Neither is true here: a variable's value
-// is a string that is set, and a command is an argv that is executed. No shell runs at any point
-// in a session's life, so there is nothing anywhere in this path that can interpret a value.
+// speed - it runs once per login - but that everything it handled was shell, and so everything
+// it handled could run. A supervisor was a command line a shell evaluated; it is an argv that is
+// executed here, so a redirection or a pipe among those values is a literal argument. A session
+// variable was exported from inside double quotes, which expanded it - and a value containing a
+// command substitution would have run that too.
+//
+// Variables are still substituted, because two real ones cannot be anything else:
+// `SSH_AUTH_SOCK` is `$XDG_RUNTIME_DIR/ssh-agent`, whose runtime directory holds a uid nobody
+// pinned, and `XDG_CONFIG_DIRS` extends itself the way environment.d(5) allows. What does it is
+// `expand` below - four forms, none of which is a subshell, so a command substitution in a value
+// is text. That is the difference worth having: no shell runs at any point in a session's life,
+// so a value in this configuration cannot execute anything.
 //
 // The configuration is a directory of files rather than a parsed format, which is what keeps
 // this dependency-free. Nix writes it; the layout is documented in users.nix beside the code
@@ -212,6 +218,117 @@ fn parse_args() -> Args {
 }
 
 /// a command from an argv. The first element is the program; there is no shell, so a redirection
+/// substitute variable references in a session variable's value.
+///
+/// Not a shell, and the difference is the point. Four forms are recognised - `$NAME`,
+/// `${NAME}`, `${NAME:+text}` and `${NAME:-text}` - and nothing else means anything. A `$`
+/// which does not begin one of them is a literal `$`, so a value containing `$(hostname)` or a
+/// backtick is that text and not a command: there is no subshell here to run one, which is the
+/// property the shell version could not offer.
+///
+/// This exists because two real values need it. `SSH_AUTH_SOCK` is
+/// `$XDG_RUNTIME_DIR/ssh-agent`, which cannot be computed at build time - the runtime directory
+/// holds a uid, and a configuration which does not pin one has no uid to write down. And
+/// `XDG_CONFIG_DIRS` is a store path plus `${XDG_CONFIG_DIRS:+:$XDG_CONFIG_DIRS}`, which is how
+/// environment.d(5) spells "extend this, if there is anything to extend".
+///
+/// `:+` and `:-` are the same two the shell has: `:+` substitutes its text when the variable is
+/// set and non-empty, `:-` when it is not. The text is substituted in turn, which is what makes
+/// the `XDG_CONFIG_DIRS` form work - the thing being appended is itself a reference.
+///
+/// Unset is empty, as in a shell. A reference to a variable this pass has already set sees the
+/// new value, because they are set one at a time in the order Nix wrote them - the same
+/// sequential behaviour the exports had.
+fn expand(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = String::with_capacity(input.len());
+    let mut i = 0;
+
+    while i < bytes.len() {
+        if bytes[i] != b'$' {
+            // not a reference. Pushed by byte index rather than by char because the only thing
+            // being matched is ASCII, and a multi-byte character cannot contain one of these.
+            let start = i;
+            while i < bytes.len() && bytes[i] != b'$' {
+                i += 1;
+            }
+            out.push_str(&input[start..i]);
+            continue;
+        }
+
+        // `${...}`
+        if let Some(b'{') = bytes.get(i + 1) {
+            if let Some(end) = input[i + 2..].find('}') {
+                let body = &input[i + 2..i + 2 + end];
+                i = i + 3 + end;
+
+                let (name, alternate) = match body.find(":+") {
+                    Some(at) => (&body[..at], Some((true, &body[at + 2..]))),
+                    None => match body.find(":-") {
+                        Some(at) => (&body[..at], Some((false, &body[at + 2..]))),
+                        None => (body, None),
+                    },
+                };
+
+                if !is_name(name) {
+                    // not a reference after all, so it is the text it looks like
+                    out.push_str("${");
+                    out.push_str(body);
+                    out.push('}');
+                    continue;
+                }
+
+                let value = env::var(name).unwrap_or_default();
+                match alternate {
+                    Some((when_set, text)) => {
+                        if when_set == !value.is_empty() {
+                            out.push_str(&expand(text));
+                        }
+                    }
+                    None => out.push_str(&value),
+                }
+                continue;
+            }
+
+            // an unclosed `${`, which is text
+            out.push('$');
+            i += 1;
+            continue;
+        }
+
+        // `$NAME`
+        let start = i + 1;
+        let mut end = start;
+        while end < bytes.len() && is_name_byte(bytes[end], end == start) {
+            end += 1;
+        }
+
+        if end == start {
+            // a bare `$`: literal, which is what makes `$(hostname)` text rather than a command
+            out.push('$');
+            i += 1;
+            continue;
+        }
+
+        out.push_str(&env::var(&input[start..end]).unwrap_or_default());
+        i = end;
+    }
+
+    out
+}
+
+fn is_name_byte(b: u8, first: bool) -> bool {
+    b == b'_' || b.is_ascii_alphabetic() || (!first && b.is_ascii_digit())
+}
+
+fn is_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .bytes()
+            .enumerate()
+            .all(|(i, b)| is_name_byte(b, i == 0))
+}
+
 /// or a pipe in a configuration value is a literal argument rather than something that happens.
 fn command(argv: &[String]) -> Command {
     let mut c = Command::new(&argv[0]);
@@ -353,7 +470,7 @@ fn main() {
     // supervisor started at boot: everything the payload spawns inherits from here.
     if let Some(user) = user {
         for (name, value) in &user.variables {
-            env::set_var(name, value);
+            env::set_var(name, expand(value));
         }
     }
 
