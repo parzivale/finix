@@ -251,12 +251,11 @@ let
       latchDir = userLatchDir user;
     };
 
-  # what a session runs, and it is not `runsvdir` directly for two reasons.
-  #
-  # The tree has to be copied out of the store first. `runsv` creates `supervise/` inside each
-  # service directory it supervises, so a store path cannot be scanned - the same constraint
-  # stage 1 handles for the system, done here instead because this is the first thing in the
-  # session that is allowed to write to the user's directory.
+  # what a session runs, and it is not `runsvdir` alone because the tree has to be copied out of
+  # the store first. `runsv` creates `supervise/` inside each service directory it supervises,
+  # so a store path cannot be scanned - the same constraint stage 1 handles for the system, done
+  # here instead because this is the first thing in the session allowed to write to the user's
+  # directory.
   #
   # Copied per unit rather than as `rm -rf` and `cp -r`, which is what the system's stage 1 can
   # afford and this cannot: stage 1 runs once, before any supervisor exists, and this runs
@@ -267,17 +266,10 @@ let
   # user is what the launcher assumes; this is that assumption failing safely rather than
   # destructively.
   #
-  # And the signals have to be translated, which is the part that would be silently wrong.
-  # `sessionLauncher` stops a supervisor with SIGTERM, and runsvdir(8) is explicit about what
-  # that means: "If runsvdir receives a TERM signal, it exits with 0 immediately" - leaving every
-  # runsv, and so every one of the user's daemons, running with nothing supervising them. The
-  # session would end, the supervisor would exit promptly and cleanly, and the tree would simply
-  # stay. HUP is the signal that stops the tree: runsvdir sends TERM to each runsv and exits 111,
-  # and runsv on TERM "acts as if the character x was written to the control pipe", which
-  # terminates its service and exits. So TERM is caught here and HUP is what reaches runsvdir.
-  #
-  # Which is also why runsvdir is a child rather than an exec: a shell that has exec'd cannot
-  # catch anything.
+  # It does `exec`, and the stopping is `supervisor.stop` below. This used to catch TERM and
+  # re-send HUP itself, from inside a shell that stayed alive to do it - which worked, and put
+  # knowledge of what TERM means to runsvdir in a wrapper that only runit could ever need. The
+  # contract asks the implementation now, so there is nothing left here to stay alive for.
   userSupervisor =
     user: u:
     toString (
@@ -317,21 +309,19 @@ let
         # none of. The services themselves already get a session each: the run script execs
         # through setsid for exactly that. Leaving runsv in the session's own process group also
         # means a group-wide kill on logout reaches the tree, which is a backstop rather than
-        # the mechanism - the launcher stopping this process is still what tears it down.
-        ${pkgs.runit}/bin/runsvdir ${userScanDir user} &
-        supervisor=$!
-
-        trap '${lib.getExe' pkgs.coreutils "kill"} -HUP "$supervisor" 2>/dev/null || :' TERM INT
-
-        # `wait` returns as soon as the trap has run, with the supervisor still being stopped -
-        # so it is waited for again rather than once. Without the loop this returns the moment
-        # the session asks it to stop, and the launcher's `kill -KILL` five seconds later would
-        # be racing a teardown that had not finished.
-        while ${lib.getExe' pkgs.coreutils "kill"} -0 "$supervisor" 2>/dev/null; do
-          wait "$supervisor" || :
-        done
+        # the mechanism - `supervisor.stop` is what tears it down.
+        exec ${pkgs.runit}/bin/runsvdir ${userScanDir user}
       ''
     );
+
+  # HUP, and the whole reason `supervisor.stopSignal` exists. runsvdir(8): a TERM makes it "exit with 0
+  # immediately", leaving every runsv - and so every one of the user's daemons - running with
+  # nothing supervising them. A HUP sends TERM to each runsv and exits 111, and runsv on TERM
+  # "acts as if the character x was written to the control pipe", which terminates its service
+  # and exits.
+  #
+  # The launcher sends it to the process it started, which here is runsvdir itself.
+  userStopSignal = "HUP";
 
   # `sv` takes a subcommand and a service, and resolves a bare name through SVDIR - which is
   # what lets this be the `ctl` shape the contract asks for, a command taking `<verb> <unit>`.
@@ -423,6 +413,7 @@ in
 
     (lib.mkIf (cfg.user.backend == "runit") {
       providers.services.user.manager.supervisor.command = user: userSupervisor user cfg.users.${user};
+      providers.services.user.manager.supervisor.stopSignal = userStopSignal;
       providers.services.user.ctl = userCtl;
       providers.services.user.status = user: statusScript "user-${user}" (userScanDir user);
 

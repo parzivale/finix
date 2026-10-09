@@ -70,6 +70,25 @@ let
       supervisor=$!
       ;;
   '') (if cfg.user.manager ? supervisor then lib.attrNames cfg.users else [ ]);
+  # and what stops it, where the process the launcher owns is not the thing to ask. One arm per
+  # user, only when the implementation supplies `supervisor.stop`; otherwise this is empty and
+  # the launcher signals instead.
+  supervisorStopArms = lib.concatMapStrings (user: ''
+    ${user})
+      ${cfg.user.manager.supervisor.stop user} || :
+      ;;
+  '')
+    (
+      if cfg.user.manager ? supervisor && cfg.user.manager.supervisor.stop != null then
+        lib.attrNames cfg.users
+      else
+        [ ]
+    );
+
+  # which signal, for the implementations that are stopped by one. A property of the
+  # implementation rather than of the user, so it is read once here.
+  stopSignal =
+    if cfg.user.manager ? supervisor then cfg.user.manager.supervisor.stopSignal else "TERM";
 
   # the same shape as `supervisorArms`, for the variables a session is given rather than the
   # thing that supervises it.
@@ -206,7 +225,21 @@ let
     # boot cannot do at all: nothing tells it that a session ended, so its units simply keep
     # running with nothing to serve.
     if [ -n "$supervisor" ]; then
-      kill -TERM "$supervisor" 2>/dev/null || :
+      # how, which is the implementation's to say rather than this script's to assume. A signal
+      # to the process this started, with the implementation naming which one - or a command of
+      # its own, where that process is not the supervisor. See `supervisor.stopSignal` and
+      # `supervisor.stop`.
+      ${
+        if supervisorStopArms != "" then
+          ''
+            case "$user" in
+            ${supervisorStopArms}
+              *) kill -${stopSignal} "$supervisor" 2>/dev/null || : ;;
+            esac
+          ''
+        else
+          ''kill -${stopSignal} "$supervisor" 2>/dev/null || :''
+      }
 
       waited=0
       while kill -0 "$supervisor" 2>/dev/null && [ "$waited" -lt 50 ]; do
@@ -277,6 +310,49 @@ in
                 It is run by {option}`providers.services.user.sessionLauncher`, as the user,
                 inside their session - so it inherits that session's environment, and must not
                 daemonise away from it.
+              '';
+            };
+
+            # stopping one, which is two questions rather than one. Most supervisors stop when
+            # the process the launcher owns is signalled, and differ only in which signal;
+            # for one of them that process is not the supervisor at all.
+            options.stopSignal = lib.mkOption {
+              type = lib.types.str;
+              default = "TERM";
+              example = "HUP";
+              description = ''
+                The signal which asks this implementation's supervisor to stop supervising,
+                sent by {option}`providers.services.user.sessionLauncher` to the process it
+                started when the session ends.
+
+                TERM for almost everything, and `HUP` for runit, where the difference is not
+                cosmetic: `runsvdir` on TERM "exits with 0 immediately" and leaves every
+                `runsv` it was monitoring running, so the session would end, the supervisor
+                would exit cleanly, and the whole tree would stay - which from the outside is
+                indistinguishable from a correct teardown.
+
+                The launcher escalates to SIGKILL if the process is still there five seconds
+                later, whatever this is.
+              '';
+            };
+
+            options.stop = lib.mkOption {
+              type = with lib.types; nullOr (functionTo str);
+              default = null;
+              description = ''
+                Given a username, a command which stops that user's supervisor - run as the
+                user when the session ends, in place of signalling.
+
+                Null, the default, means {option}`stopSignal` is enough. Set this where the
+                process the launcher owns is not the supervisor and so cannot be asked:
+                systemd is the case, where a `systemd --user` is a unit of pid 1's and the
+                launcher's child is the `systemctl start --wait` which asked for it. Signalling
+                that client says nothing about the job it enqueued; `systemctl stop` is the only
+                thing that does.
+
+                The launcher still waits for its own child afterwards, and still escalates to
+                SIGKILL - so a stop which stops nothing is bounded rather than a session which
+                never ends.
               '';
             };
           };

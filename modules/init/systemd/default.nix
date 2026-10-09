@@ -741,29 +741,23 @@ let
     StandardError=${scfg.standardOutput}
   '';
 
-  # what the session actually runs: a stand-in for the manager, because the contract's
-  # supervisor is a foreground process the launcher owns and the manager is a unit PID 1 owns.
+  # what the session actually runs, and what stops it. The contract's supervisor is a foreground
+  # process the launcher owns; the manager is a unit pid 1 owns. So the launcher's child is a
+  # client, not the manager.
   #
-  # `start --wait` is both halves - systemctl(1): "synchronously wait for started units to
-  # terminate again" - so this blocks for exactly as long as the manager runs, which is what the
-  # launcher is waiting on.
+  # `start --wait` is both halves of the start - systemctl(1): "synchronously wait for started
+  # units to terminate again" - so it blocks for exactly as long as the manager runs, which is
+  # what the launcher waits on.
   #
-  # The trap is the logout path. The launcher sends TERM and gives it five seconds before KILL,
-  # which is less than `TimeoutStopSec` above - that is fine and not a leak: `systemctl stop`
-  # enqueues a job in PID 1 and the job outlives the client that asked for it, so her tree goes
-  # on stopping in order after this script is gone.
-  managerProxy =
-    user:
-    pkgs.writeShellScript "systemd-user-manager-${user}" ''
-      unit=${managerFor user}
-
-      trap '${systemctl} stop "$unit" >/dev/null 2>&1 || :; exit 0' TERM INT HUP
-
-      # backgrounded so the trap is reached: a foreground `systemctl` would keep the shell in a
-      # wait the signal could not interrupt.
-      ${systemctl} start --wait "$unit" &
-      wait $! || echo "session-launch: could not start $unit for ${user}" >&2
-    '';
+  # And `stop` is why `supervisor.stop` exists. Signalling the client says nothing about the job
+  # it enqueued, so this used to be a shell script wrapped around the client, trapping TERM and
+  # running `systemctl stop` from the handler. The contract asks now, and the wrapper is gone.
+  #
+  # The launcher still gives its child five seconds before SIGKILL, which is less than
+  # `TimeoutStopSec` above - not a leak: `systemctl stop` enqueues a job in pid 1, and the job
+  # outlives the client that asked for it, so her tree goes on stopping in order either way.
+  managerStart = user: "${systemctl} start --wait ${managerFor user}";
+  managerStop = user: "${systemctl} stop ${managerFor user}";
 
   userUnits =
     user: u:
@@ -1204,10 +1198,12 @@ in
         }
       ) cfg.users;
 
-      # the proxy, not the manager. See managerProxy: the manager has to be a unit so systemd
-      # can give it a cgroup of its own, and the contract's supervisor is a process the launcher
-      # owns - so what the session runs is a stand-in whose lifetime is the manager's.
-      providers.services.user.manager.supervisor.command = user: toString (managerProxy user);
+      # a client, not the manager. The manager has to be a unit so systemd can give it a cgroup
+      # of its own, and the contract's supervisor is a process the launcher owns - so what the
+      # session runs is `systemctl start --wait`, whose lifetime is the manager's, and what
+      # stops it is a `systemctl stop` rather than a signal to that client. See `managerStart`.
+      providers.services.user.manager.supervisor.command = managerStart;
+      providers.services.user.manager.supervisor.stop = managerStop;
 
       # taking a subcommand and a unit name, as `dinitctl` does - so the configuration's name
       # has to be turned into systemd's before `systemctl` sees it.
