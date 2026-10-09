@@ -31,6 +31,7 @@ let
     "s6-rc"
     "sinit"
     "openrc"
+    "systemd"
   ];
 
   core = {
