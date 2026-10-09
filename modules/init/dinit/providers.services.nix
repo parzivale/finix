@@ -405,6 +405,29 @@ in
     '';
   };
 
+  # the same question for the user scope, asked separately because the answers are
+  # independent: a user's supervisor is a program their session runs, so dinit can serve that
+  # scope beside any PID 1, and a dinit which *is* PID 1 does not serve it unless this says so.
+  #
+  # Not `dinit.user.enable`, which would read as enabling `dinit.user.services` - dinit's own
+  # user-level service descriptions, which this has nothing to do with.
+  options.dinit.userSupervisor.enable = lib.mkOption {
+    type = lib.types.bool;
+    default = false;
+    example = true;
+    description = ''
+      Whether a dinit started by each user's session supervises that user's units.
+
+      Enabling it points {option}`providers.services.user.backend` at `dinit`, which is what
+      actually selects an implementation for that scope - so this is a default, and a machine
+      naming a backend directly still wins.
+
+      Independent of {option}`dinit.enable` in both directions. With no
+      {option}`providers.services.users` declared it names an implementation for a scope with
+      nothing in it, which is inert.
+    '';
+  };
+
   options.providers.services = {
     backend = lib.mkOption {
       type = lib.types.enum [ "dinit" ];
@@ -415,6 +438,13 @@ in
     # this module supplies an implementation for `providers.services`
     (lib.mkIf config.dinit.enable {
       providers.services.backend = lib.mkDefault "dinit";
+    })
+
+    # and the same for the user scope, which is a separate claim and not implied by the one
+    # above - see the block at the foot of this file for why a dinit per session beside a
+    # different PID 1 is the intended shape rather than a duplication.
+    (lib.mkIf config.dinit.userSupervisor.enable {
+      providers.services.user.backend = lib.mkDefault "dinit";
     })
 
     (lib.mkIf (cfg.backend == "dinit") {
