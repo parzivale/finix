@@ -881,10 +881,9 @@ in
     };
 
     # the user scope, which for this backend is the one place the answer is not independent of
-    # the system's. `systemd --user` calls `sd_booted()` and refuses outright unless systemd is
-    # PID 1, so unlike dinit this cannot serve a session beside another init - the assertions
-    # under `cfg.user.backend == "systemd"` below say so, and say it for a machine which named
-    # the backend by hand as well as for one which set this.
+    # the system's - by this module's choice rather than systemd's. See the assertions under
+    # `cfg.user.backend == "systemd"` below, which say it for a machine that named the backend
+    # by hand as well as for one which set this.
     userSupervisor.enable = lib.mkOption {
       type = lib.types.bool;
       default = false;
@@ -897,10 +896,11 @@ in
         what actually selects an implementation for that scope - so this is a default, and a
         machine naming a backend directly still wins.
 
-        Requires {option}`systemd.enable`, because `systemd --user` refuses to start unless
-        systemd is PID 1, and {option}`services.polkit.enable`, because a user's manager is a
-        system unit their session has to ask PID 1 to start. Both are asserted rather than
-        implied; see the messages there for why neither can be worked around.
+        Requires {option}`systemd.enable`, because this module arranges the user scope out of
+        pid 1 systemd - the `/run/systemd/system` marker `systemd --user` looks for, and the
+        delegated cgroup its manager unit is given - and {option}`services.polkit.enable`,
+        because that manager is a system unit their session has to ask pid 1 to start. Both are
+        asserted; see the messages there for what each would take to lift.
       '';
     };
   };
@@ -1070,25 +1070,35 @@ in
     # than redundant: pid 1 began before any session existed and will outlive it, so it can have
     # neither the session's environment nor its lifetime.
     #
-    # Unlike every other backend's user role, this one is not available on a machine running
-    # something else as pid 1 - see the assertion below.
+    # Unlike every other backend's user role, this one is offered only on a machine which runs
+    # systemd as pid 1 as well - a restriction this module chooses rather than one systemd
+    # imposes; see the assertion below.
     (lib.mkIf (cfg.user.backend == "systemd") {
-      # the one place this backend is narrower than the others.
+      # the one place this backend is narrower than the others, and narrower by choice rather
+      # than by anything systemd cannot do.
       #
       # dinit, s6 and runit will supervise a user's tree whatever pid 1 is, because a user
-      # supervisor is just a program the session runs. `systemd --user` is not: it calls
-      # `sd_booted()` first and refuses outright -
+      # supervisor is just a program the session runs. `systemd --user` very nearly is too. It
+      # calls `sd_booted()` first and refuses -
       #
       #   Trying to run as user instance, but the system has not been booted with systemd.
       #
-      # - which is a check for /run/systemd/system, the marker pid 1 creates. Creating that
-      # directory would get past it and is not an option: `sd_booted()` is how every program
-      # linked against libsystemd decides whether this is a systemd machine, so faking it tells
-      # dbus, polkit and anything else that asks a lie far outside the scope of this module.
+      # - but that is `access_nofollow("/run/systemd/system/")` and nothing else. Nothing in the
+      # manager inspects pid 1. So the first obstacle is a marker directory which could simply
+      # be created, and is not, because `sd_booted()` is how every program linked against
+      # libsystemd decides whether this is a systemd machine: faking it tells dbus, polkit and
+      # anything else that asks a lie far outside the scope of this module.
       #
-      # So the user role requires the system role. Asserted rather than left to be discovered
-      # from a session which silently has no tree, because the refusal above is printed by a
-      # process the session launcher started with its output going nowhere.
+      # The second is the substantial one. A user manager needs a cgroup subtree it may write
+      # to; upstream delegates one from pid 1 with `Delegate=pids memory cpu` in
+      # `user@.service`, and without it the manager comes up and then every unit in the tree
+      # dies in `cg_create`. Any init could delegate the same subtree - it is a mkdir and a
+      # chown, not a pid 1 power - so this is work somebody could do, in a module which would no
+      # longer be built around the `user@` unit below.
+      #
+      # Until somebody wants that, the user role requires the system role. Asserted rather than
+      # left to be discovered from a session which silently has no tree, because the refusal
+      # above is printed by a process the session launcher started with its output going nowhere.
       assertions = [
         {
           assertion = cfg.backend == "systemd";
@@ -1096,12 +1106,16 @@ in
             providers.services.user.backend is "systemd", but providers.services.backend is
             "${cfg.backend}".
 
-            `systemd --user` refuses to start unless systemd is PID 1: it checks for
-            /run/systemd/system and exits with "the system has not been booted with systemd".
-            Unlike the other user supervisors, it cannot be run beside a different init.
+            `systemd --user` refuses to start unless /run/systemd/system exists - "the system
+            has not been booted with systemd" - and this module does not create that marker
+            while something else is pid 1, because every program linked against libsystemd
+            reads it as "this is a systemd machine". The manager also needs a cgroup subtree
+            delegated to it, which here comes from pid 1 systemd.
 
-            Either set providers.services.backend = "systemd" as well, or name one of the
-            other implementations as the user backend.
+            Neither is a property of systemd that cannot be worked around; both are this
+            backend's to arrange, and it does not. So either set providers.services.backend =
+            "systemd" as well, or name one of the other implementations for the user scope -
+            dinit, unlike this one, supervises a user's tree whatever is pid 1.
           '';
         }
 
