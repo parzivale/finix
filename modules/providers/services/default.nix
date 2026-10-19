@@ -801,6 +801,25 @@ in
                 '';
               };
 
+              terminal = lib.mkOption {
+                type = lib.types.bool;
+                default = false;
+                description = ''
+                  Whether this unit's command opens a terminal itself and makes it its standard
+                  input, output and error - a getty, or a greeter run through one. An
+                  implementation must then leave the unit's output alone rather than capture it.
+
+                  Capturing is not merely pointless for such a program, it is harmful. finit's
+                  `log` forks a logger as a child of the unit's own process; the getty points its
+                  output at the terminal, the logger exits, and the unit is left holding a child
+                  it never made. `login` is then exec'd into that process, forks the shell, and
+                  waits for *any* child - reaping the logger instead, concluding the session is
+                  over, and exiting, at which point the kernel hangs up the shell before it has
+                  run a line. Every login on the machine returns straight to the prompt with
+                  nothing printed. tests/getty-login.nix pins it.
+                '';
+              };
+
               restartIfChanged = lib.mkOption {
                 type = lib.types.bool;
                 default = true;

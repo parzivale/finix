@@ -192,7 +192,11 @@ let
       # `log` is finit's own answer, implemented with logit, and this is the behaviour every
       # other init gives by default. Applied to companions and anchors as well, which run `true`
       # and have nothing to say - there is no reason to make the rule conditional.
-      log = true;
+      #
+      # Except for a unit which takes the terminal for its own output, where `logit` is worse
+      # than useless: it is a child of the unit's process, which `login` later inherits and
+      # mistakes for the shell. See `terminal` in the contract.
+      log = !unit.terminal;
     }
     // lib.optionalAttrs (unit.path != [ ]) { inherit (unit) path; }
     // lib.optionalAttrs (unit.user != null) { inherit (unit) user; }
