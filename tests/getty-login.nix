@@ -17,7 +17,7 @@
   name = "getty-login";
 
   nodes.machine =
-    { ... }:
+    { pkgs, ... }:
     {
       services.mdevd.enable = true;
       providers.services.backend = "finit";
@@ -33,6 +33,14 @@
 
       # hunter2
       users.users.root.password = "$6$finixtest$XnkNVzZcIMosI5WKEF6TR4qvVcmPRQGzwoE0hpycLqVMHtufkCdmdnjGMhI1rIBwRLt6HSebAnSM.eDKf3ZmS/";
+
+      # the case this was found on: an ordinary user whose login shell is fish, named as a package
+      # the way that configuration does rather than through programs.fish
+      users.users.vitrial = {
+        isNormalUser = true;
+        shell = pkgs.fish;
+        password = "$6$finixtest$XnkNVzZcIMosI5WKEF6TR4qvVcmPRQGzwoE0hpycLqVMHtufkCdmdnjGMhI1rIBwRLt6HSebAnSM.eDKf3ZmS/";
+      };
     };
 
   testScript = ''
@@ -51,6 +59,19 @@
         machine.sleep(2)
         machine.send_chars("echo alive > /tmp/alive\n")
         machine.wait_for_file("/tmp/alive", timeout=15)
+
+    with subtest("an ordinary user gets fish on tty2"):
+        machine.send_key("alt-f2")
+        machine.wait_until_succeeds("[ $(fgconsole) = 2 ]", timeout=15)
+        machine.wait_until_tty_matches("2", "login: ", timeout=15)
+        machine.send_chars("vitrial\n")
+        machine.wait_until_tty_matches("2", "Password: ", timeout=15)
+        machine.send_chars("hunter2\n")
+        machine.sleep(3)
+        machine.send_chars("echo $FISH_VERSION > /tmp/fish\n")
+        machine.wait_for_file("/tmp/fish", timeout=15)
+        machine.succeed("[ -s /tmp/fish ]")
+        machine.succeed("[ $(stat -c %U /tmp/fish) = vitrial ]")
 
     with subtest("finit is not capturing the terminal's output"):
         machine.fail("grep -qw log /etc/finit.d/tty-tty1.conf")
