@@ -102,6 +102,20 @@ let
 in
 {
   options.providers.services = {
+    ctl.enable = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      example = false;
+      description = ''
+        Whether to install `initctl`, the front-end over every implementation's units, where the
+        implementation can support it.
+
+        Turning it off leaves `initctl` to whatever else provides one - on finit that is finit's
+        own, which talks only to the system tree - and each implementation's tool reachable under
+        its own name.
+      '';
+    };
+
     ctl.status = lib.mkOption {
       type = with lib.types; nullOr str;
       default = null;
@@ -157,7 +171,7 @@ in
     };
   };
 
-  config = {
+  config = lib.mkIf cfg.ctl.enable {
     environment.systemPackages = lib.mkIf supported [ (lib.hiPrio initctl) ];
 
     warnings = lib.optional (cfg.backend != "none" && cfg.units != { } && !supported) ''
