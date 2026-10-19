@@ -55,6 +55,7 @@ in
       ]
       ++ lib.optional config.services.udev.enable "udev-coldplug"
       ++ lib.optional config.services.mdevd.enable "coldplug"
+      ++ lib.optional config.services.gardendevd.enable "gardendevd-coldplug"
 
       # and the thing which mounts /var/log, where there is one.
       #

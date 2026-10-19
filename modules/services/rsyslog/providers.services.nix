@@ -40,7 +40,8 @@ in
         "tmpfiles-setup"
       ]
       ++ lib.optional config.services.udev.enable "udev-coldplug"
-      ++ lib.optional config.services.mdevd.enable "coldplug";
+      ++ lib.optional config.services.mdevd.enable "coldplug"
+      ++ lib.optional config.services.gardendevd.enable "gardendevd-coldplug";
     };
   };
 }

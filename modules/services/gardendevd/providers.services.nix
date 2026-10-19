@@ -39,18 +39,40 @@ in
       };
     };
 
-    providers.services.units.gardendevd-settle = {
-      description = "trigger device events and wait for gardendevd to settle";
+    # the trigger and the settle, split the way udev's are and for the same reason.
+    #
+    # These were one unit on the head of the trunk, so `sysinit` waited for the whole device
+    # queue to drain before the rest of the boot could proceed. That is the cost udev paid too,
+    # but here it was worse than slow: a rule whose helper never returns - the zfs package's
+    # rules are on every machine with zfs enabled - holds the settle, the settle held `sysinit`,
+    # and the boot stopped after the head tier with nothing on the console to say why.
+    #
+    # `gardendevctl trigger` only queues the events, so the coldplug stays on the head of the
+    # trunk, where devices have to start appearing, and costs nothing to wait for.
+    providers.services.units.gardendevd-coldplug = {
+      description = "trigger coldplug events";
 
       requires = [
         (lib.head config.providers.services.trunk.levels)
         "gardendevd"
       ];
 
-      type.oneshot.command = pkgs.writeShellScript "gardendevd-settle" ''
-        ${cfg.package}/bin/gardendevctl trigger -c add -t all
-        ${cfg.package}/bin/gardendevctl settle -t 30
-      '';
+      type.oneshot.command = "${cfg.package}/bin/gardendevctl trigger -c add -t all";
+    };
+
+    # and the wait, attached to no tier.
+    #
+    # `requires` names no trunk level, so no barrier waits for this: it runs for whoever asks for
+    # it by name. That is the few consumers which want "enumeration is finished" as a global
+    # property - ifupdown-ng waiting out interface renames, keyd grabbing every keyboard - and
+    # which name it already. Anything else wants `type.service.readiness.waitFor.path`; see
+    # udev's `udev-settle` for the longer argument.
+    providers.services.units.gardendevd-settle = {
+      description = "wait for the device queue to drain";
+
+      requires = [ "gardendevd-coldplug" ];
+
+      type.oneshot.command = "${cfg.package}/bin/gardendevctl settle -t 30";
     };
   };
 }

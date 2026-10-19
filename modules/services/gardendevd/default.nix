@@ -151,13 +151,11 @@ in
           done
         '';
 
-    # the two `run` stanzas become one oneshot. They were ordered against each other by finit
-    # priority, which no other implementation has - and the ordering is the whole point, since
-    # settling before the trigger settles nothing. In one script it is the shell's guarantee,
-    # the same conclusion the shutdown side reached.
-    #
-    # Named `gardendevd-settle`, beside udev's `udev-settle` and mdevd's `coldplug`: attached
-    # to the head tier, so `sysinit` waits for the device nodes to be there.
+    # the two `run` stanzas become two oneshots, `gardendevd-coldplug` and `gardendevd-settle`,
+    # beside udev's units of the same names. They were ordered against each other by finit
+    # priority, which no other implementation has; now the settle `requires` the trigger,
+    # which says the same thing to every implementation. Only the trigger is on the trunk -
+    # see providers.services.nix for why the settle is not.
     # TODO: share between device managers
     system.activation.scripts.gardendevd = lib.mkIf config.boot.kernel.enable {
       text = ''
