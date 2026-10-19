@@ -1,5 +1,6 @@
 {
   config,
+  options,
   pkgs,
   lib,
   ...
@@ -31,6 +32,22 @@ in
         pkgs.util-linux // {
           mainProgram = "agetty";
         };
+      '';
+    };
+
+    args = lib.mkOption {
+      inherit (options.providers.ttys.args) type;
+      default = "agetty";
+      description = ''
+        How {option}`services.getty.package` is invoked, as {option}`providers.ttys.args`:
+        `"agetty"`, `"busybox"`, or a function. It has to match the package - a busybox
+        `getty` handed agetty's flags refuses them and respawns forever.
+      '';
+      example = lib.literalExpression ''
+        {
+          package = pkgs.busybox // { meta.mainProgram = "getty"; };
+          args = "busybox";
+        }
       '';
     };
 

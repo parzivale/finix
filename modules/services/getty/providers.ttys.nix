@@ -13,16 +13,16 @@ let
   cfg = config.services.getty;
 
   # The same helper the implementations use for a device claimed with no command. Reached for
-  # here because an autologin is not a different program - it is the same agetty with one more
-  # argument - and what the helper knows is the part which is easy to get wrong: agetty's
+  # here because an autologin is not a different program - it is the same getty with one more
+  # argument - and what the helper knows is the part which is easy to get wrong: a getty's
   # compiled-in login program is /bin/login, which does not exist here, so a command built
-  # without `--login-program` respawns forever against a missing file.
+  # without naming one respawns forever against a missing file.
   loginLib = import ../../providers/ttys/login.nix { inherit pkgs lib; };
 in
 {
   config = lib.mkIf cfg.enable {
     providers.ttys = {
-      inherit (cfg) package extraArgs;
+      inherit (cfg) package args extraArgs;
 
       devices = lib.mkMerge [
         # at default priority, so that a display manager or an autologin claims a device simply
@@ -53,8 +53,8 @@ in
         # manager wanting the same terminal still wins the ordinary way, by saying so.
         #
         # A command has to be named rather than left to the provider, because the provider has
-        # no per-device arguments to put `--autologin` in - `providers.ttys.extraArgs` is one
-        # list for every terminal, and this argument is for one of them.
+        # no per-device autologin - `providers.ttys.args` is one invocation for every terminal,
+        # and this user is for one of them.
         (lib.mkIf (cfg.autologinUser != null) {
           ${lib.head cfg.ttys} =
             let
@@ -63,18 +63,12 @@ in
             {
               description = "autologin as ${cfg.autologinUser} on /dev/${device}";
 
+              # the getty's own `args` says how it logs a user in, or throws if it cannot -
+              # busybox's has no autologin at all
               command = loginLib.commandFor {
                 inherit device;
-                inherit (cfg) package;
-
-                # `--login-pause` waits for a keypress before handing the terminal over. With
-                # no prompt to read, that is the only thing which makes whatever the boot left
-                # on the screen readable.
-                extraArgs = cfg.extraArgs ++ [
-                  "--autologin"
-                  cfg.autologinUser
-                  "--login-pause"
-                ];
+                inherit (cfg) package args extraArgs;
+                autologin = cfg.autologinUser;
               };
 
               requires = [ "multi-user" ];

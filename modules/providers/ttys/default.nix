@@ -46,6 +46,13 @@ let
       descriptionClass = "conjunction";
     };
 
+  # a getty's argument syntax: a function, or the name of one login.nix provides
+  argsType =
+    with lib.types;
+    coercedTo (enum (lib.attrNames loginLib.args)) (name: loginLib.args.${name}) (
+      functionTo (listOf str)
+    );
+
   enabled = lib.filterAttrs (_: device: device.enable) cfg.devices;
 in
 {
@@ -65,11 +72,32 @@ in
       '';
     };
 
+    args = lib.mkOption {
+      type = argsType;
+      default = "agetty";
+      description = ''
+        How {option}`package` is invoked: a function from
+        `{ device, login, autologin, extraArgs }` to its argument list, or the name of one
+        provided here - `"agetty"` or `"busybox"`.
+
+        The getty's command line is its own syntax, and the contract cannot know it. `autologin`
+        is a user name or `null`; a getty which cannot log anyone in without a prompt should
+        throw when it is set.
+      '';
+      example = lib.literalExpression ''
+        {
+          package = pkgs.busybox // { meta.mainProgram = "getty"; };
+          args = "busybox";
+        }
+      '';
+    };
+
     extraArgs = lib.mkOption {
       type = with lib.types; listOf str;
       default = [ ];
       description = ''
-        Additional arguments for the login prompt named by {option}`package`.
+        Additional arguments for the login prompt named by {option}`package`, placed where
+        {option}`args` puts them.
       '';
     };
 
@@ -155,7 +183,7 @@ in
             device.command
           else
             loginLib.commandFor {
-              inherit (cfg) package extraArgs;
+              inherit (cfg) package args extraArgs;
               device = name;
             };
       }
