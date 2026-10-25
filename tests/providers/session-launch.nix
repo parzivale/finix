@@ -32,6 +32,9 @@
 
       environment.systemPackages = [ pkgs.procps ];
 
+      # so that the launcher has a session bus to start - see the last subtest.
+      services.dbus.enable = true;
+
       users.users.alice = {
         group = "users";
         home = "/home/alice";
@@ -98,6 +101,32 @@
           # and it did not take the five seconds a kill-then-wait would have: that path ends in a
           # line of its own, which is not here.
           machine.fail("grep -q 'did not stop' /run/session-launch.log")
+
+      with subtest("a session gets a bus of its own, and it goes with the session"):
+          # what `dbus-run-session` used to be wrapped around every session for. The address is
+          # in the runtime directory under a name the daemon chose, not at a fixed path, and the
+          # payload learns it by inheriting it - which is the only way anything does.
+          machine.succeed("install -d -o 3001 -g 100 -m 700 /run/user/3001")
+          machine.succeed(
+              "setpriv --reuid=3001 --regid=100 --clear-groups "
+              "env -u DBUS_SESSION_BUS_ADDRESS XDG_RUNTIME_DIR=/run/user/3001 "
+              "${nodes.machine.config.providers.services.user.sessionLauncher} "
+              "-- sh -c 'echo \"$DBUS_SESSION_BUS_ADDRESS\" > /tmp/bus-address; exec sleep infinity' "
+              ">/run/session-launch-bus.log 2>&1 &"
+          )
+
+          machine.wait_until_succeeds(
+              "grep -q '^unix:path=/run/user/3001/dbus-' /tmp/bus-address", timeout=30
+          )
+          machine.succeed("pgrep -u alice -x dbus-daemon")
+
+          # no `--user` was given: the launcher found alice from its own uid.
+          machine.fail("grep -q 'was not given' /run/session-launch-bus.log")
+
+          machine.succeed("pkill -u alice -x -f 'sleep infinity'")
+          machine.wait_until_fails(
+              "pgrep -u alice -x dbus-daemon", timeout=timedelta(seconds=30)
+          )
 
       machine.shutdown()
     '';

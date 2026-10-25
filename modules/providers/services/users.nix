@@ -70,6 +70,7 @@ let
   #
   #   stop-signal              the signal which stops a supervisor; see `supervisor.stopSignal`
   #   kill                     coreutils' kill, which is how a named signal is sent
+  #   bus                      the session bus daemon, where the machine runs dbus
   #   shell                    what runs the commands below
   #   users/<name>/supervisor  `supervisor.command` for that user
   #   users/<name>/stop        `supervisor.stop`, where the implementation has one
@@ -109,6 +110,18 @@ let
         lib.escapeShellArg (if hasSupervisor then cfg.user.manager.supervisor.stopSignal else "TERM")
       } > $out/stop-signal
       printf '%s' ${lib.getExe' pkgs.coreutils "kill"} > $out/kill
+    ''
+    # the session bus, which the launcher starts before the payload unless the session already
+    # has one. `--session` and nothing more: the launcher adds the flags that make the daemon its
+    # child and say where it listens, and what the daemon reads is /etc/dbus-1/session.conf, which
+    # the dbus module writes with every package's service directories in it.
+    + lib.optionalString config.services.dbus.enable ''
+      cp ${
+        argvFile "session-bus" [
+          "${config.services.dbus.package}/bin/dbus-daemon"
+          "--session"
+        ]
+      } $out/bus
     ''
     + lib.concatMapStrings (
       user:
@@ -255,12 +268,23 @@ in
         What a login session runs instead of running its payload directly:
 
         ```
-        sessionLauncher --user <name> [--session-env <program>] -- <payload> [args...]
+        sessionLauncher [--user <name>] [--session-env <program>] [--log <tag>] -- <payload> [args...]
         ```
 
-        It starts the payload, runs `--session-env` until it succeeds, exports what that
-        printed, starts that user's supervisor with it, and stops the supervisor when the payload
-        exits. The payload's exit status is its own.
+        It starts a session bus when {option}`services.dbus.enable` is set and the session does
+        not already have one, starts the payload, runs `--session-env` until it succeeds, exports
+        what that printed, starts that user's supervisor with it, and stops the supervisor and
+        then the bus when the payload exits. The payload's exit status is its own.
+
+        The bus listens on a socket in `$XDG_RUNTIME_DIR` under a name the daemon chooses, and
+        its address reaches the session the way everything else here does, by inheritance - so
+        no session needs `dbus-run-session` around it.
+
+        `--user` defaults to the user the launcher runs as, so that one session entry can serve
+        everyone a greeter offers it to.
+
+        `--log` relays the payload's, the supervisor's and the bus's output to syslog under that
+        tag, with colour stripped, rather than leaving it on the terminal the session was given.
 
         `--session-env` is the only compositor-specific part of a graphical session, and is
         supplied by the caller so that nothing here needs to know what a wayland socket is

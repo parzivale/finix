@@ -23,24 +23,30 @@
 //
 //   1. set the user's session variables, before the payload exists. The payload spawns a
 //      session's applications, so anything it is not told it cannot pass on.
-//   2. start the payload - a compositor, a shell, whatever the session is.
-//   3. run `--session-env` until it succeeds. Succeeding is readiness; what it prints is what
+//   2. start the session bus, unless the session already has one. Before the payload for the
+//      same reason as the variables, and because a compositor registers names on it as it
+//      starts - one which comes up without a bus does not go looking for it later.
+//   3. start the payload - a compositor, a shell, whatever the session is.
+//   4. run `--session-env` until it succeeds. Succeeding is readiness; what it prints is what
 //      the session has to tell the tree about itself, a wayland socket's name being the case
 //      that matters. The payload cannot do this for itself: it is this process's child, so
 //      nothing it exports reaches back here.
-//   4. start the supervisor, which inherits all of that and passes it to every unit it runs.
+//   5. start the supervisor, which inherits all of that and passes it to every unit it runs.
 //      That inheritance is the entire mechanism.
-//   5. wait for the payload. When it exits the session is over, so the tree goes with it.
+//   6. wait for the payload. When it exits the session is over, so the tree goes with it, and
+//      the bus after the tree: the units are what was talking on it.
 
 use std::collections::BTreeMap;
 use std::env;
 use std::ffi::OsString;
 use std::fs;
-use std::io::{self, Write};
+use std::io::{self, BufRead, BufReader, PipeWriter, Write};
+use std::os::unix::net::UnixDatagram;
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
-use std::thread::sleep;
+use std::sync::Mutex;
+use std::thread::{self, sleep, JoinHandle};
 use std::time::Duration;
 
 /// where the generated configuration lives. Not a flag: `sessionLauncher` is interpolated
@@ -60,9 +66,35 @@ const READY_REPORT_AFTER: u32 = 300;
 /// contract promises: whatever `stop` does or fails to do, a session ends.
 const STOP_GRACE: u32 = 50;
 
+/// where `--log` sends the session's output: syslog's socket, spoken to directly. A datagram per
+/// line is the whole protocol, and std has the socket, so this stays dependency-free where
+/// finix-rc reaches for libc's syslog(3).
+const SYSLOG_SOCKET: &str = "/dev/log";
+
+/// facility `user`, severity `info`. One priority for both streams, because by the time they
+/// reach the relay they are one pipe: a compositor's stderr is where it logs, not where it
+/// reports errors.
+const SYSLOG_PRIORITY: u8 = 14;
+
+/// how long teardown waits for the relay to drain. What a payload says as it dies - the reason it
+/// died - is the line most worth having, and the last one to arrive.
+const DRAIN_GRACE: u32 = 10;
+
+/// the writing end of the `--log` relay, once there is one. `warn` writes here too, so a session
+/// that logs says everything in one place, this program's own complaints included.
+static LOG: Mutex<Option<PipeWriter>> = Mutex::new(None);
+
 fn warn(args: std::fmt::Arguments) {
-    let mut err = io::stderr();
-    let _ = writeln!(err, "session-launch: {args}");
+    let line = format!("session-launch: {args}\n");
+
+    if let Ok(log) = LOG.lock() {
+        if let Some(mut writer) = log.as_ref() {
+            let _ = writer.write_all(line.as_bytes());
+            return;
+        }
+    }
+
+    let _ = io::stderr().write_all(line.as_bytes());
 }
 
 macro_rules! warn {
@@ -88,6 +120,9 @@ struct Config {
     /// exec, and the path comes from the configuration rather than from a PATH this process
     /// cannot vouch for.
     kill: PathBuf,
+    /// the session bus daemon, as an argv this adds its own flags to, or None on a machine
+    /// without dbus. From the configuration rather than PATH for the same reason `kill` is.
+    bus: Option<Vec<String>>,
     users: BTreeMap<String, UserConfig>,
 }
 
@@ -157,6 +192,7 @@ impl Config {
         Ok(Config {
             stop_signal,
             kill,
+            bus: read_argv(&dir.join("bus")),
             users,
         })
     }
@@ -167,7 +203,34 @@ struct Args {
     /// an executable, run with no arguments. A shell command would need a shell; the contract
     /// asks for a program, and a caller with something to say in shell says it in a script.
     session_env: Option<PathBuf>,
+    /// the syslog tag to relay the session's output under, or None to leave it where it was.
+    log: Option<String>,
     payload: Vec<OsString>,
+}
+
+/// the user this process runs as, by name - what `--user` defaults to.
+///
+/// Optional because a session entry cannot know it: a `.desktop` file a greeter offers is one
+/// file for everyone who logs in, so a launcher which had to be told the name could not be what
+/// that file runs. From the real uid and /etc/passwd rather than `$USER`, which is whatever the
+/// caller left in the environment - under `setpriv --reuid`, the previous user's.
+fn current_user() -> Option<String> {
+    let status = fs::read_to_string("/proc/self/status").ok()?;
+    let uid = status
+        .lines()
+        .find_map(|line| line.strip_prefix("Uid:"))?
+        .split_whitespace()
+        .next()?
+        .to_string();
+
+    fs::read_to_string("/etc/passwd")
+        .ok()?
+        .lines()
+        .find_map(|line| {
+            let mut fields = line.split(':');
+            let name = fields.next()?;
+            (fields.nth(1)? == uid).then(|| name.to_string())
+        })
 }
 
 fn usage(message: &str) -> ! {
@@ -178,6 +241,7 @@ fn usage(message: &str) -> ! {
 fn parse_args() -> Args {
     let mut user = None;
     let mut session_env = None;
+    let mut log = None;
     let mut payload = Vec::new();
 
     let mut args = env::args_os().skip(1);
@@ -195,6 +259,12 @@ fn parse_args() -> Args {
                     None => usage("--session-env needs a value"),
                 })
             }
+            "--log" => {
+                log = Some(match args.next() {
+                    Some(v) => v.to_string_lossy().into_owned(),
+                    None => usage("--log needs a tag"),
+                })
+            }
             "--" => {
                 payload.extend(args);
                 break;
@@ -203,8 +273,8 @@ fn parse_args() -> Args {
         }
     }
 
-    let Some(user) = user else {
-        usage("--user is required")
+    let Some(user) = user.or_else(current_user) else {
+        usage("--user was not given, and the current uid has no entry in /etc/passwd")
     };
     if payload.is_empty() {
         usage("nothing to run");
@@ -213,6 +283,7 @@ fn parse_args() -> Args {
     Args {
         user,
         session_env,
+        log,
         payload,
     }
 }
@@ -415,6 +486,23 @@ fn await_payload(payload: &mut Child, supervisor: Option<&mut Child>, user: &str
     }
 }
 
+/// wait for a child that has been asked to stop, killing it if it takes longer than the grace
+/// period. Shared by the supervisor and the bus, which are stopped differently and must both end.
+fn reap_within_grace(child: &mut Child, what: &str) {
+    let mut waited = 0u32;
+    while waited < STOP_GRACE {
+        if let Ok(Some(_)) = child.try_wait() {
+            return;
+        }
+        sleep(POLL);
+        waited += 1;
+    }
+
+    warn!("{what} did not stop; killing it");
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 /// stop the supervisor, by whichever means the implementation named, and make sure it is gone.
 fn stop_supervisor(config: &Config, user: &UserConfig, name: &str, child: &mut Child) {
     if let Ok(Some(_)) = child.try_wait() {
@@ -434,22 +522,215 @@ fn stop_supervisor(config: &Config, user: &UserConfig, name: &str, child: &mut C
         }
     }
 
-    let mut waited = 0u32;
-    while waited < STOP_GRACE {
-        if let Ok(Some(_)) = child.try_wait() {
-            return;
+    reap_within_grace(child, &format!("the supervisor for {name}"));
+}
+
+/// stdout and stderr for a child: the relay's pipe when `--log` asked for one, and this
+/// process's own streams otherwise, which is what a child gets by default.
+fn output() -> (Stdio, Stdio) {
+    let clone = || {
+        LOG.lock()
+            .ok()?
+            .as_ref()
+            .and_then(|writer| writer.try_clone().ok())
+            .map(Stdio::from)
+    };
+
+    match (clone(), clone()) {
+        (Some(out), Some(err)) => (out, err),
+        _ => (Stdio::inherit(), Stdio::inherit()),
+    }
+}
+
+/// SGR sequences removed, and nothing else. A log is not a terminal, and colour arrives as
+/// `ESC [ <digits and semicolons> m` - dinit's `[ OK ]` among it - which syslog would keep as
+/// noise. Other escapes, an OSC palette sequence say, are not what anything renders colour with,
+/// and are left as they came.
+fn strip_sgr(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut rest = line;
+
+    while let Some(at) = rest.find("\x1b[") {
+        out.push_str(&rest[..at]);
+        let after = &rest[at + 2..];
+        let params = after
+            .bytes()
+            .take_while(|b| b.is_ascii_digit() || *b == b';')
+            .count();
+
+        if after.as_bytes().get(params) == Some(&b'm') {
+            rest = &after[params + 1..];
+        } else {
+            out.push_str("\x1b[");
+            rest = after;
         }
-        sleep(POLL);
-        waited += 1;
     }
 
-    warn!("the supervisor for {name} did not stop; killing it");
-    let _ = child.kill();
-    let _ = child.wait();
+    out.push_str(rest);
+    out
+}
+
+/// relay everything written to the returned pipe to syslog, a line per message, under `tag`.
+///
+/// What it replaces is a session wrapper's `exec > >(sed | logger)`: a shell, two more processes,
+/// and a pipeline that existed because greetd gives a session a terminal and keeps nothing it
+/// says. Here it is a thread, and the colour is stripped by the same code that sends the line.
+///
+/// A line that cannot be sent goes to this process's own stderr instead, so a machine with no
+/// syslog daemon - or one whose daemon restarted mid-session - loses nothing it would not have
+/// lost anyway. A restart is retried once with a fresh connection before falling back.
+fn relay(tag: String) -> io::Result<(PipeWriter, JoinHandle<()>)> {
+    let (reader, writer) = io::pipe()?;
+    let pid = std::process::id();
+
+    let connect = || {
+        let socket = UnixDatagram::unbound().ok()?;
+        socket.connect(SYSLOG_SOCKET).ok()?;
+        Some(socket)
+    };
+
+    let handle = thread::spawn(move || {
+        let mut socket = connect();
+        let mut err = io::stderr();
+
+        for line in BufReader::new(reader).split(b'\n') {
+            let Ok(line) = line else { break };
+            let text = strip_sgr(&String::from_utf8_lossy(&line));
+            let message = format!("<{SYSLOG_PRIORITY}>{tag}[{pid}]: {text}");
+
+            let mut sent = socket
+                .as_ref()
+                .is_some_and(|s| s.send(message.as_bytes()).is_ok());
+            if !sent {
+                socket = connect();
+                sent = socket
+                    .as_ref()
+                    .is_some_and(|s| s.send(message.as_bytes()).is_ok());
+            }
+            if !sent {
+                let _ = writeln!(err, "{text}");
+            }
+        }
+    });
+
+    Ok((writer, handle))
+}
+
+/// start the session bus, unless the session already has one.
+///
+/// What `dbus-run-session` did around every session, done here so that a session is one command:
+/// a bus is something every graphical session needs and none of them should have to remember.
+/// One already in the environment is used as it is - a nested session, or one started under
+/// something else that provides a bus - because a second would split the session in two.
+///
+/// `unix:dir=` rather than a fixed path: the socket is in the session's runtime directory, so it
+/// goes when the session does, under a name the daemon picks, so two sessions of one user do not
+/// contend for it. What that gives up is being findable by convention - something outside the
+/// session cannot guess the address, and learns it the way the session's children do, by
+/// inheriting it. That is what dbus-run-session gave, too.
+fn start_bus(argv: &[String]) -> Option<Child> {
+    if env::var_os("DBUS_SESSION_BUS_ADDRESS").is_some() {
+        return None;
+    }
+
+    let mut daemon = command(argv);
+    daemon.arg("--nofork").arg("--print-address");
+    if let Some(dir) = env::var_os("XDG_RUNTIME_DIR") {
+        let mut address = OsString::from("--address=unix:dir=");
+        address.push(dir);
+        daemon.arg(address);
+    }
+
+    let (_, err) = output();
+    let mut child = match daemon.stdout(Stdio::piped()).stderr(err).spawn() {
+        Ok(child) => child,
+        Err(error) => {
+            warn!("could not start the session bus: {error}");
+            return None;
+        }
+    };
+
+    // the address, on one line, once the daemon is listening - which makes reading it the
+    // readiness check as well. Nothing else is ever written there, so the pipe can be dropped.
+    let mut address = String::new();
+    let read = child
+        .stdout
+        .take()
+        .map(|stdout| BufReader::new(stdout).read_line(&mut address));
+
+    let address = address.trim_end();
+    if !matches!(read, Some(Ok(n)) if n > 0) || address.is_empty() {
+        warn!("the session bus exited without an address; the session has no bus");
+        let _ = child.kill();
+        let _ = child.wait();
+        return None;
+    }
+
+    env::set_var("DBUS_SESSION_BUS_ADDRESS", address);
+    Some(child)
+}
+
+/// stop the bus, after the tree, and wait for it.
+fn stop_bus(config: &Config, child: &mut Child) {
+    if let Ok(Some(_)) = child.try_wait() {
+        return;
+    }
+
+    let _ = Command::new(&config.kill)
+        .arg("-TERM")
+        .arg(child.id().to_string())
+        .status();
+
+    reap_within_grace(child, "the session bus");
+}
+
+/// the end of every session, whichever way it ended: the bus goes, the relay is given what is
+/// left in the pipe, and the payload's status is this process's.
+fn finish(
+    config: &Config,
+    bus: Option<&mut Child>,
+    relay: Option<JoinHandle<()>>,
+    status: i32,
+) -> ! {
+    if let Some(child) = bus {
+        stop_bus(config, child);
+    }
+
+    if let Some(handle) = relay {
+        // the relay ends when every writer has closed. The payload, the supervisor and the bus
+        // are gone by now; this is the last copy. Bounded, because something the bus activated
+        // can outlive it holding the pipe, and a logout does not wait on that.
+        if let Ok(mut log) = LOG.lock() {
+            log.take();
+        }
+
+        let mut waited = 0u32;
+        while !handle.is_finished() && waited < DRAIN_GRACE {
+            sleep(POLL);
+            waited += 1;
+        }
+    }
+
+    std::process::exit(status);
 }
 
 fn main() {
     let args = parse_args();
+
+    // first, so that everything after it - this program's own warnings included - is said where
+    // the session asked for it to be said.
+    let relay = args.log.clone().and_then(|tag| match relay(tag) {
+        Ok((writer, handle)) => {
+            if let Ok(mut log) = LOG.lock() {
+                *log = Some(writer);
+            }
+            Some(handle)
+        }
+        Err(error) => {
+            warn!("could not start the log relay: {error}");
+            None
+        }
+    });
 
     let config = match Config::load(Path::new(CONFIG_DIR)) {
         Ok(config) => config,
@@ -474,32 +755,40 @@ fn main() {
         }
     }
 
+    let mut bus = config.bus.as_deref().and_then(start_bus);
+
     let payload_argv0 = args.payload[0].to_string_lossy().into_owned();
+    let (out, err) = output();
     let mut payload = match Command::new(&args.payload[0])
         .args(&args.payload[1..])
+        .stdout(out)
+        .stderr(err)
         .spawn()
     {
         Ok(child) => child,
         Err(error) => {
             warn!("could not run {payload_argv0}: {error}");
-            std::process::exit(1);
+            finish(&config, bus.as_mut(), relay, 1);
         }
     };
 
     if let Some(probe) = &args.session_env {
         if let Err(status) = await_session(probe, &mut payload, &payload_argv0) {
-            std::process::exit(status);
+            finish(&config, bus.as_mut(), relay, status);
         }
     }
 
     // after the readiness check, for the same reason the variables are before the payload: a
     // value the payload publishes on becoming ready is in this environment by now, and the
     // supervisor is what passes it on to the tree.
-    let mut supervisor = user.and_then(|user| match command(&user.supervisor).spawn() {
-        Ok(child) => Some(child),
-        Err(error) => {
-            warn!("could not start the supervisor for {}: {error}", args.user);
-            None
+    let mut supervisor = user.and_then(|user| {
+        let (out, err) = output();
+        match command(&user.supervisor).stdout(out).stderr(err).spawn() {
+            Ok(child) => Some(child),
+            Err(error) => {
+                warn!("could not start the supervisor for {}: {error}", args.user);
+                None
+            }
         }
     });
 
@@ -512,5 +801,5 @@ fn main() {
         stop_supervisor(&config, user, &args.user, child);
     }
 
-    std::process::exit(status);
+    finish(&config, bus.as_mut(), relay, status);
 }
