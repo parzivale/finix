@@ -19,7 +19,13 @@ let
     Name=COSMIC
     Comment=This session logs you into the COSMIC desktop
     Comment[sv]=Denna session loggar in dig till skrivbordsmiljön COSMIC
-    Exec=${pkgs.dbus}/bin/dbus-run-session -- ${lib.getExe cfg.package}
+    Exec=${
+      config.providers.services.user.sessionCommand {
+        payload = [ (lib.getExe cfg.package) ];
+        sessionEnv = config.providers.services.user.waylandSessionEnv;
+        log = "cosmic";
+      }
+    }
     Type=Application
     DesktopNames=COSMIC
   '';

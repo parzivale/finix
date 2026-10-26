@@ -11,7 +11,13 @@ let
     [Desktop Entry]
     Comment=Umbrel, a Wayland compositor built on wlroots and SceneFX
     DesktopNames=umbriel
-    Exec=${lib.getExe' pkgs.dbus "dbus-run-session"} -- ${lib.getExe' cfg.package "start-umbriel"}
+    Exec=${
+      config.providers.services.user.sessionCommand {
+        payload = [ (lib.getExe' cfg.package "start-umbriel") ];
+        sessionEnv = config.providers.services.user.waylandSessionEnv;
+        log = "umbriel";
+      }
+    }
     Name=Umbriel
     Type=Application
   '';
@@ -65,7 +71,7 @@ in
     environment.systemPackages = [
       cfg.package
 
-      # override wayland session with one that includes absolute paths + dbus-run-session invocation
+      # override wayland session with one that includes absolute paths + the session launcher
       (lib.hiPrio sessionFile)
     ];
   };

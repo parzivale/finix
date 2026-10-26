@@ -11,7 +11,13 @@ let
     [Desktop Entry]
     Name=Hyprland
     Comment=An intelligent dynamic tiling Wayland compositor
-    Exec=${pkgs.dbus}/bin/dbus-run-session -- ${lib.getExe' cfg.package "start-hyprland"}
+    Exec=${
+      config.providers.services.user.sessionCommand {
+        payload = [ (lib.getExe' cfg.package "start-hyprland") ];
+        sessionEnv = config.providers.services.user.waylandSessionEnv;
+        log = "hyprland";
+      }
+    }
     Type=Application
     DesktopNames=Hyprland
     Keywords=tiling;wayland;compositor;
@@ -70,7 +76,7 @@ in
     environment.systemPackages = [
       cfg.package
 
-      # override wayland session with one that includes absolute paths + dbus-run-session invocation
+      # override wayland session with one that includes absolute paths + the session launcher
       (lib.hiPrio sessionFile)
     ];
   };

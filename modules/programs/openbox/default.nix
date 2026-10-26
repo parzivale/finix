@@ -12,7 +12,12 @@ let
     [Desktop Entry]
     Name=Openbox
     Comment=Log in using the Openbox window manager (without a session manager)
-    Exec=${pkgs.dbus}/bin/dbus-run-session ${cfg.package}/bin/openbox-session
+    Exec=${
+      config.providers.services.user.sessionCommand {
+        payload = [ "${cfg.package}/bin/openbox-session" ];
+        log = "openbox";
+      }
+    }
     TryExec=${cfg.package}/bin/openbox-session
     Icon=openbox
     Type=Application
@@ -44,7 +49,7 @@ in
     environment.systemPackages = [
       cfg.package
 
-      # override x11 session with one that includes absolute paths + dbus-run-session invocation
+      # override x11 session with one that includes absolute paths + the session launcher
       (lib.hiPrio sessionFile)
     ];
   };

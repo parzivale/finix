@@ -11,7 +11,13 @@ let
     [Desktop Entry]
     Comment=A wayland stacking compositor
     DesktopNames=labwc;wlroots
-    Exec=${pkgs.dbus}/bin/dbus-run-session -- ${lib.getExe cfg.package} ${lib.escapeShellArgs cfg.extraArgs}
+    Exec=${
+      config.providers.services.user.sessionCommand {
+        payload = [ (lib.getExe cfg.package) ] ++ cfg.extraArgs;
+        sessionEnv = config.providers.services.user.waylandSessionEnv;
+        log = "labwc";
+      }
+    }
     Icon=labwc
     Name=labwc
     Type=Application
@@ -76,7 +82,7 @@ in
     environment.systemPackages = [
       cfg.package
 
-      # override wayland session with one that includes absolute paths + dbus-run-session invocation
+      # override wayland session with one that includes absolute paths + the session launcher
       (lib.hiPrio sessionFile)
     ];
   };

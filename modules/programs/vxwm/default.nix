@@ -12,7 +12,12 @@ let
     [Desktop Entry]
     Name=vxwm
     Comment=Versatile X Window Manager
-    Exec=${pkgs.dbus}/bin/dbus-run-session -- ${cfg.package}/bin/vxwm
+    Exec=${
+      config.providers.services.user.sessionCommand {
+        payload = [ "${cfg.package}/bin/vxwm" ];
+        log = "vxwm";
+      }
+    }
     TryExec=${cfg.package}/bin/vxwm
     Type=Application
     DesktopNames=vxwm

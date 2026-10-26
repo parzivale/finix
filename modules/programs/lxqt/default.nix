@@ -15,7 +15,12 @@ let
     [Desktop Entry]
     Name=LXQt (X11)
     Comment=LXQt Desktop
-    Exec=${pkgs.lxqt.lxqt-session}/bin/startlxqt
+    Exec=${
+      config.providers.services.user.sessionCommand {
+        payload = [ "${pkgs.lxqt.lxqt-session}/bin/startlxqt" ];
+        log = "lxqt";
+      }
+    }
     Type=Application
     DesktopNames=LXQt
   '';
@@ -24,7 +29,13 @@ let
     [Desktop Entry]
     Name=LXQt (Wayland)
     Comment=LXQt Wayland Desktop
-    Exec=${pkgs.dbus}/bin/dbus-run-session -- ${pkgs.lxqt.lxqt-wayland-session}/bin/startlxqtwayland
+    Exec=${
+      config.providers.services.user.sessionCommand {
+        payload = [ "${pkgs.lxqt.lxqt-wayland-session}/bin/startlxqtwayland" ];
+        sessionEnv = config.providers.services.user.waylandSessionEnv;
+        log = "lxqt";
+      }
+    }
     Type=Application
     DesktopNames=LXQt
   '';

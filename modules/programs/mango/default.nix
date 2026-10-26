@@ -13,7 +13,13 @@ let
     Name=Mango
     DesktopNames=mango;wlroots
     Comment=mango WM
-    Exec=${pkgs.dbus}/bin/dbus-run-session -- ${lib.getExe cfg.package}
+    Exec=${
+      config.providers.services.user.sessionCommand {
+        payload = [ (lib.getExe cfg.package) ];
+        sessionEnv = config.providers.services.user.waylandSessionEnv;
+        log = "mango";
+      }
+    }
     Icon=mango
     Type=Application
   '';
@@ -73,7 +79,7 @@ in
     environment.systemPackages = [
       cfg.package
 
-      # override wayland session with one that includes absolute paths + dbus-run-session invocation
+      # override wayland session with one that includes absolute paths + the session launcher
       (lib.hiPrio sessionFile)
     ];
   };
