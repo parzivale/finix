@@ -7,44 +7,14 @@
 let
   cfg = config.programs.niri;
 
-  # what niri publishes once it is up: the wayland socket it bound, which is the one thing the
-  # session launcher cannot know in advance. niri takes whichever `wayland-N` is free through
-  # smithay's `new_auto` and has no flag to force one, so it is found rather than chosen - and
-  # finding none is what says niri is not ready yet.
-  #
-  # `*.*` excluded because the lock file beside each socket is `wayland-N.lock`.
-  sessionEnv = pkgs.writeShellScript "niri-session-env" ''
-    [ -n "''${XDG_RUNTIME_DIR:-}" ] || exit 1
-
-    socket=$(
-      cd "$XDG_RUNTIME_DIR" 2>/dev/null &&
-        ${lib.getExe pkgs.findutils} . -maxdepth 1 -name 'wayland-*' -not -name '*.*' \
-          -printf '%f\n' | ${lib.getExe' pkgs.coreutils "sort"} | ${lib.getExe' pkgs.coreutils "head"} -1
-    )
-
-    [ -n "$socket" ] || exit 1
-
-    echo "WAYLAND_DISPLAY=$socket"
-  '';
-
-  # through the session launcher where there are user trees for it to start, so that a greeter
-  # which offers this entry starts the whole session and not only the compositor. It needs no
-  # `--user` - it is the same file for everyone - and no `dbus-run-session`, because the launcher
-  # starts the bus. Without trees, the entry that was always here.
-  exec =
-    if config.providers.services.users != { } then
-      lib.escapeShellArgs [
-        "${config.providers.services.user.sessionLauncher}"
-        "--log"
-        "niri"
-        "--session-env"
-        "${sessionEnv}"
-        "--"
-        (lib.getExe cfg.package)
-        "--session"
-      ]
-    else
-      "${pkgs.dbus}/bin/dbus-run-session -- ${lib.getExe cfg.package} --session";
+  exec = config.providers.services.user.sessionCommand {
+    payload = [
+      (lib.getExe cfg.package)
+      "--session"
+    ];
+    sessionEnv = config.providers.services.user.waylandSessionEnv;
+    log = "niri";
+  };
 
   sessionFile = pkgs.writeTextDir "share/wayland-sessions/niri.desktop" ''
     [Desktop Entry]
@@ -100,7 +70,7 @@ in
     environment.systemPackages = [
       cfg.package
 
-      # override wayland session with one that includes absolute paths + dbus-run-session invocation
+      # override wayland session with one that includes absolute paths + the session launcher
       (lib.hiPrio sessionFile)
     ];
 

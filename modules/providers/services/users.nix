@@ -149,6 +149,64 @@ let
   launcher = pkgs.runCommandLocal "session-launch" { } ''
     ln -s ${lib.getExe launcherPackage} $out
   '';
+
+  # what a wayland compositor publishes once it is up: the socket it bound, which is the one
+  # thing the session launcher cannot know in advance. most take whichever `wayland-N` is free -
+  # smithay's `new_auto`, wlroots' `wl_display_add_socket_auto` - and have no flag to force one,
+  # so it is found rather than chosen, and finding none is what says the compositor is not ready
+  # yet. Nothing in it is any one compositor's, which is why it lives here and not beside one.
+  #
+  # `*.*` excluded because the lock file beside each socket is `wayland-N.lock`.
+  #
+  # The lowest-numbered socket, which is this session's only while the user has one session. A
+  # second graphical session of the same user shares the runtime directory, and this would find
+  # the first one's socket.
+  waylandSessionEnv = pkgs.writeShellScript "wayland-session-env" ''
+    [ -n "''${XDG_RUNTIME_DIR:-}" ] || exit 1
+
+    socket=$(
+      cd "$XDG_RUNTIME_DIR" 2>/dev/null &&
+        ${lib.getExe pkgs.findutils} . -maxdepth 1 -name 'wayland-*' -not -name '*.*' \
+          -printf '%f\n' | ${lib.getExe' pkgs.coreutils "sort"} | ${lib.getExe' pkgs.coreutils "head"} -1
+    )
+
+    [ -n "$socket" ] || exit 1
+
+    echo "WAYLAND_DISPLAY=$socket"
+  '';
+
+  # a session entry's `Exec=`: through the launcher where there are user trees for it to start,
+  # so that a greeter which offers the entry starts the whole session and not only its payload.
+  # It needs no `--user` - it is the same file for everyone - and no `dbus-run-session`, because
+  # the launcher starts the bus. Without trees, the entry every compositor module used to write.
+  sessionCommand =
+    {
+      payload,
+      sessionEnv ? null,
+      log ? null,
+    }:
+    if cfg.users != { } then
+      lib.escapeShellArgs (
+        [ "${launcher}" ]
+        ++ lib.optionals (log != null) [
+          "--log"
+          log
+        ]
+        ++ lib.optionals (sessionEnv != null) [
+          "--session-env"
+          "${sessionEnv}"
+        ]
+        ++ [ "--" ]
+        ++ payload
+      )
+    else
+      lib.escapeShellArgs (
+        [
+          "${pkgs.dbus}/bin/dbus-run-session"
+          "--"
+        ]
+        ++ payload
+      );
 in
 {
   options.providers.services = {
@@ -296,6 +354,51 @@ in
         as is every other command this runs. A caller with something to say in shell says it in
         a script, which is what one that had a shell command was already passing: a store path
         is one word either way.
+      '';
+    };
+
+    user.sessionCommand = lib.mkOption {
+      type = with lib.types; functionTo str;
+      readOnly = true;
+      default = sessionCommand;
+      defaultText = lib.literalMD "a function building a session entry's `Exec=`";
+      description = ''
+        What a session entry - a `.desktop` file in `share/wayland-sessions` or
+        `share/xsessions` - puts in its `Exec=`, so that a module providing a session never has
+        to know whether there are user trees, or what starts the bus:
+
+        ```nix
+        Exec=''${config.providers.services.user.sessionCommand {
+          payload = [ (lib.getExe cfg.package) ];
+          sessionEnv = config.providers.services.user.waylandSessionEnv;
+          log = "sway";
+        }}
+        ```
+
+        `payload` is an argv. `sessionEnv` and `log` are
+        {option}`providers.services.user.sessionLauncher`'s `--session-env` and `--log`, and
+        are left out of the command when null.
+
+        With {option}`providers.services.users` declared this is the session launcher around
+        the payload. Without, it is the payload under `dbus-run-session`, and `sessionEnv` and
+        `log` are unused - there is no tree to tell and no relay to run.
+
+        An X session passes no `sessionEnv`: the display manager starts the server and sets
+        `DISPLAY` before it runs `Exec=`, so the tree inherits it like everything else.
+      '';
+    };
+
+    user.waylandSessionEnv = lib.mkOption {
+      type = lib.types.package;
+      readOnly = true;
+      default = waylandSessionEnv;
+      defaultText = lib.literalMD "a generated script";
+      description = ''
+        A `--session-env` for any wayland compositor which binds a `wayland-N` socket in
+        `$XDG_RUNTIME_DIR`: it succeeds once there is one, printing `WAYLAND_DISPLAY`.
+
+        It takes the lowest-numbered socket, so it is only right while the user has one
+        graphical session.
       '';
     };
 
