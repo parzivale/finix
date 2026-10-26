@@ -62,6 +62,46 @@ in
       '';
     };
 
+    agent.enable = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        Whether to run a polkit authentication agent in every user's session tree - each user
+        with {option}`providers.services.users` declared.
+
+        Without one a polkit question has nobody to ask, and an action that would prompt fails
+        instead. The agent shows a dialog, so it has to be inside a graphical session and on its
+        bus, which is why it is a user unit and not a system one: it starts with whichever
+        session runs the session launcher, and so assumes that session is graphical.
+      '';
+    };
+
+    agent.command = lib.mkOption {
+      type = lib.types.str;
+      # built against the polkit the daemon uses, not against `pkgs.polkit`. `package` above is
+      # the elogind build when elogind is on, but that reaches the daemon and nothing else; an
+      # agent links libpolkit itself, and plain `pkgs.polkit` has `useSystemd` on. Built that
+      # way it asks systemd's `sd_pid_get_session`, which looks for a cgroup path like
+      # /user.slice/user-1000.slice/session-1.scope - and elogind's are flat, so every process
+      # gets "Unable to determine the session we are in: No session for pid" and no prompt ever
+      # appears.
+      #
+      # polkit-gnome because it goes through libpolkit-agent-1, which nixpkgs patches to call
+      # the setuid helper at /run/wrappers/bin/polkit-agent-helper-1 that this module installs.
+      # Agents which reimplement the protocol - soteria - hardcode /usr/lib/polkit-1 instead,
+      # which does not exist here, and exit before contacting polkit at all.
+      #
+      # `libexec`: the agent is not on the package's PATH and the package declares no main
+      # program.
+      default = "${
+        pkgs.polkit_gnome.override { polkit = cfg.package; }
+      }/libexec/polkit-gnome-authentication-agent-1";
+      defaultText = lib.literalExpression ''"''${pkgs.polkit_gnome.override { polkit = config.services.polkit.package; }}/libexec/polkit-gnome-authentication-agent-1"'';
+      description = ''
+        The authentication agent to run, as a command.
+      '';
+    };
+
     adminIdentities = lib.mkOption {
       type = lib.types.listOf lib.types.str;
       default = [ "unix-group:wheel" ];
