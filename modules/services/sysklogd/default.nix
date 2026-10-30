@@ -45,7 +45,7 @@ in
         lib.types.submodule (
           { config, ... }:
           {
-            config.path = lib.optionals (config.log != false) [ cfg.package ];
+            config.path = lib.optionals (config.log != null) [ cfg.package ];
           }
         )
       );
@@ -56,7 +56,7 @@ in
         lib.types.submodule (
           { config, ... }:
           {
-            config.path = lib.optionals (config.log != false) [ cfg.package ];
+            config.path = lib.optionals (config.log != null) [ cfg.package ];
           }
         )
       );

@@ -197,6 +197,13 @@ let
       # than useless: it is a child of the unit's process, which `login` later inherits and
       # mistakes for the shell. See `terminal` in the contract.
       log = !unit.terminal;
+
+      # finit notices a changed unit by its stanza file changing, so stamping each unit's
+      # fingerprint into its own file guarantees the file differs whenever the unit's definition
+      # does - even for a change finit's own stanza would not otherwise reflect. this is what
+      # `reload-triggers` is for, and it is also what a real `list` would read back were finit
+      # ever to stop reconciling on its own.
+      reload-triggers = [ cfg.switch.fingerprints.${name} ];
     }
     // lib.optionalAttrs (unit.path != [ ]) { inherit (unit) path; }
     // lib.optionalAttrs (unit.user != null) { inherit (unit) user; }
@@ -481,19 +488,7 @@ in
         };
       };
 
-      # finit notices a changed unit by its stanza file changing, so stamping each unit's
-      # fingerprint into its own file guarantees the file differs whenever the unit's definition
-      # does - even for a change finit's own stanza would not otherwise reflect. this is the same
-      # trick the openssh and tlp modules use to carry reload triggers, and it is also what a
-      # real `list` would read back were finit ever to stop reconciling on its own.
       environment.etc = lib.mkMerge [
-        (lib.mapAttrs' (
-          name: unit:
-          lib.nameValuePair "finit.d/${name}.conf" {
-            text = lib.mkAfter "\n# fingerprint: ${cfg.switch.fingerprints.${name}}\n";
-          }
-        ) bootSide)
-
         # on the script rather than on shutdownSide being non-empty: the levels at and after the
         # latch are themselves shutdown-side units, so that set is never empty, while a machine
         # whose shutdown side is only those anchors has nothing to run and gets no script.

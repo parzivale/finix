@@ -56,7 +56,7 @@ in
     };
 
     settings = lib.mkOption {
-      type = format.type;
+      inherit (format) type;
       default = { };
       description = ''
         `ifupdown-ng` configuration. See {manpage}`ifupdown-ng.conf(5)`

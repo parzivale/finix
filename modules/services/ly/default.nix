@@ -50,7 +50,7 @@ in
     };
 
     settings = lib.mkOption {
-      type = format.type;
+      inherit (format) type;
       defaultText = lib.literalExpression "See description.";
       description = ''
         `ly` configuration. See [upstream example](https://github.com/fairyglade/ly/blob/master/res/config.ini)
@@ -118,7 +118,7 @@ in
           session required pam_unix.so
           session optional pam_loginuid.so
           ${lib.optionalString (session_rundir != false) session_rundir}
-          session required ${config.security.pam.package}/lib/security/pam_lastlog.so silent
+          session required ${pkgs.util-linux.lastlog}/lib/security/pam_lastlog2.so silent # lastlog (order 10700)
           session required pam_limits.so
         '';
       };

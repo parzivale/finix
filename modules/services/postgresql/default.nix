@@ -61,7 +61,7 @@ in
     };
 
     settings = lib.mkOption {
-      type = format.type;
+      inherit (format) type;
       default = { };
       description = ''
         `postgresql` configuration. See [upstream documentation](https://www.postgresql.org/docs/current/config-setting.html#CONFIG-SETTING-CONFIGURATION-FILE)
@@ -142,7 +142,7 @@ in
     # its own anyway - it runs as the postgres user, exactly as the `pre` did.
     users.users.${cfg.user} = {
       name = cfg.user;
-      group = cfg.group;
+      inherit (cfg) group;
       home = cfg.dataDir;
       uid = config.ids.uids.postgres;
     };

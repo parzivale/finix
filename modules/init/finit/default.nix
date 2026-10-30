@@ -11,17 +11,25 @@ in
   imports = [
     ./initrd.nix
     ./mount.nix
+    ./options.nix
     ./providers.services.nix
-    ./stage1.nix
-    ./stage2.nix
   ];
 
   config = {
     assertions = [
       {
-        assertion = lib.versionAtLeast cfg.package.version "4.16";
-        message = "finit version must be at least 4.16";
+        assertion = lib.versionAtLeast config.finit.package.version "5.0";
+        message = "finit version must be at least 5.0";
       }
+    ];
+
+    finit.settings = lib.mkMerge [
+      {
+        inherit (cfg) readiness runlevel;
+      }
+      (lib.mkIf (cfg.environment != { }) { inherit (cfg) environment; })
+      (lib.mkIf (cfg.cgroups != { }) { cgroup = cfg.cgroups; })
+      (lib.mkIf (cfg.rlimits != { }) { rlimit = cfg.rlimits; })
     ];
 
     # TODO: decide a reasonable default here... user can override if needed
@@ -65,5 +73,7 @@ in
       conditions = "sys/key/ctrlaltdel";
       command = "${cfg.package}/bin/initctl reboot";
     };
+
+    system.switch.inhibitors.finit-format = "libconfuse";
   };
 }

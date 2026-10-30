@@ -58,8 +58,6 @@ in
           libxfs
           lvm2
           lxcfs
-          minio
-          minio-client
           nftables
           qemu-utils
           qemu_kvm
