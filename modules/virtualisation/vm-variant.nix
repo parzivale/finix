@@ -137,7 +137,7 @@ in
         )
         (
           lib.filterAttrs (
-            mountPoint: _:
+            mountPoint: fs:
             # The root is replaced below whatever it was, so it is not up for pass-through here -
             # a machine whose root is already a tmpfs would otherwise define it twice and
             # conflict.
@@ -147,7 +147,13 @@ in
             # the dropped mount is what makes persistent: it lands on the volatile root instead,
             # so the nix database starts empty every boot. `nix-register-closure` above is why
             # that is survivable.
-            mountPoint != "/" && !(lib.hasPrefix "/nix" mountPoint)
+            mountPoint != "/"
+            && !(lib.hasPrefix "/nix" mountPoint)
+            # And efivarfs, which is not a disk but needs EFI firmware, and the runner below
+            # boots the kernel directly under SeaBIOS. `nofail` does not cover it: the mount is
+            # refused as unsupported rather than missing a device, so `mount -a` fails and stops
+            # the trunk exactly as a stray disk would.
+            && fs.fsType != "efivarfs"
           ) cfg.hostFileSystems
         )
       )
