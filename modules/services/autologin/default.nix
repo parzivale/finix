@@ -54,19 +54,9 @@ in
   };
 
   config = lib.mkIf cfg.enable {
-    # a session started here takes a seat, and one which cannot is not a working session. Two
-    # modules can provide one - seatd, and elogind, which is logind and so manages seats itself
-    # - so this is a requirement on the pair rather than on either. Ordering after whichever
-    # happened to be enabled, and running seatless when neither was, made it invisible.
-    assertions = [
-      {
-        assertion = config.services.seatd.enable || config.services.elogind.enable;
-        message = ''
-          services.autologin starts a session, which needs a seat manager. Enable
-          services.seatd or services.elogind.
-        '';
-      }
-    ];
+    # a graphical session started here takes a seat, from seatd or elogind - pam_elogind is
+    # wired in above when either is enabled. A login shell on tty1 needs neither, and has
+    # always worked without one, so neither is required.
 
     security.pam.services.autologin = {
       text = ''
