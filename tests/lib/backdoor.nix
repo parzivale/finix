@@ -98,6 +98,10 @@ in
       command = backdoorScript;
       runlevel = "234";
 
+      # straight away, not after the bootstrap tier: the driver needs its shell to see a boot
+      # that stalls before it
+      conditions = [ ];
+
       # the backdoor runs bash which executes commands from hvc0 until EOF, then exits
       restart-max = 0;
     };

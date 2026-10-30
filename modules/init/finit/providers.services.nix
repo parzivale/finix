@@ -313,6 +313,42 @@ let
   shutdownSide = lib.filterAttrs onShutdownSide enabled;
 
   services = lib.filterAttrs isService bootSide;
+
+  # A stanza written straight to finit, rather than as a unit, which names no conditions at all.
+  #
+  # Before the contract, finit ran udev's coldplug and settle, and mounted /etc/fstab, in
+  # runlevel S - and finit finishes S before it enters the configured runlevel. So such a stanza
+  # could rely on every device and filesystem being there without saying so: restoring a
+  # backlight, say, which is only in /sys once udev has loaded the GPU driver. Here that work is
+  # units in the configured runlevel like everything else, and the same stanza would start
+  # alongside it and find nothing.
+  #
+  # So it gets what it used to be given: the tier after the head of the trunk, which is behind
+  # the filesystems and the coldplug, and the settle, which no tier waits for. Only where it
+  # runs in the ordinary runlevels - one listing S was written to run during bootstrap, and one
+  # in 0 or 6 alone runs on the way down, when none of the companions are held any more.
+  bootstrapConditions =
+    lib.optional (lib.length trunk.levels > 1) (conditionOf (lib.elemAt trunk.levels 1))
+    ++ lib.optional (enabled ? udev-settle) (conditionOf "udev-settle");
+
+  runsAfterBootstrap =
+    runlevel:
+    runlevel == null
+    || (
+      !(lib.hasPrefix "!" runlevel)
+      && !(lib.hasInfix "S" runlevel || lib.hasInfix "s" runlevel)
+      && lib.any (l: lib.hasInfix l runlevel) (lib.stringToCharacters bootRunlevels)
+    );
+
+  afterBootstrap =
+    { config, ... }:
+    {
+      config.conditions = lib.mkIf (cfg.backend == "finit" && runsAfterBootstrap config.runlevel) (
+        lib.mkOverride 1400 bootstrapConditions
+      );
+    };
+
+  stanzas = lib.mkOption { type = lib.types.attrsOf (lib.types.submodule afterBootstrap); };
 in
 {
   # enabling an implementation is what selects it: this names itself into the contract
@@ -332,6 +368,10 @@ in
       machines always have; this only matters when choosing between it and another.
     '';
   };
+
+  options.finit.services = stanzas;
+  options.finit.tasks = stanzas;
+  options.finit.run = stanzas;
 
   options.providers.services = {
     backend = lib.mkOption {
@@ -476,7 +516,13 @@ in
         # `tmpfiles-setup` unit, which finit also emits as a stanza - two stanzas of one name
         # is refused by the contract.
         // lib.optionalAttrs (config.finit.tmpfiles.rules != [ ]) {
-          tmpfiles-finit.command = "${tmpfilesReader} --create ${tmpfilesRules}";
+          tmpfiles-finit = {
+            command = "${tmpfilesReader} --create ${tmpfilesRules}";
+
+            # as early as finit will run it, not after the bootstrap tier: rules for
+            # directories the units themselves are about to use
+            conditions = [ ];
+          };
         };
 
       # the shutdown sequence as a hook script rather than a `run` stanza.
