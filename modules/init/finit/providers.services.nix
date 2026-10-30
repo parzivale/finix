@@ -327,6 +327,9 @@ in
       Enabling it points {option}`providers.services.backend` at `finit`, which is what
       actually selects an implementation - so this is a default, and a machine naming a
       backend directly still wins.
+
+      A machine which selects no implementation at all gets finit regardless, as finix
+      machines always have; this only matters when choosing between it and another.
     '';
   };
 
@@ -389,6 +392,13 @@ in
     (lib.mkIf config.finit.enable {
       providers.services.backend = lib.mkDefault "finit";
     })
+
+    # finix booted finit unconditionally before any other implementation existed, so a
+    # machine which names none still gets it. Weaker than the `mkDefault` every
+    # implementation's `enable` sets, so `dinit.enable = true` alone still selects dinit.
+    {
+      providers.services.backend = lib.mkOverride 1250 "finit";
+    }
 
     (lib.mkIf (cfg.backend == "finit") {
       # backend is a bare string key, so only this module can say which binary it means.
