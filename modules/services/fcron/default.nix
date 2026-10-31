@@ -163,7 +163,7 @@ in
         session		required	pam_permit.so
         #session		required	pam_unix.so
         session         required        pam_loginuid.so
-        session		required	pam_limits.so
+        session		required	pam_limits.so conf=/etc/security/limits.conf
       '';
     };
 

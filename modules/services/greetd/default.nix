@@ -106,7 +106,7 @@ in
         session required pam_env.so conffile=/etc/security/pam_env.conf readenv=0 # env (order 10100)
         session required pam_unix.so # unix (order 10200)
         session required pam_loginuid.so # loginuid (order 10300)
-        session required pam_limits.so
+        session required pam_limits.so conf=/etc/security/limits.conf
 
         ${lib.optionalString (session_rundir != false) session_rundir}
       '';

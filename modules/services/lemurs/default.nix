@@ -125,7 +125,7 @@ in
           session optional pam_loginuid.so # loginuid (order 10300)
           ${lib.optionalString (session_rundir != false) session_rundir}
           session required ${config.security.pam.package}/lib/security/pam_lastlog.so silent # lastlog (order 10700)
-          session required pam_limits.so
+          session required pam_limits.so conf=/etc/security/limits.conf
         '';
       };
     };

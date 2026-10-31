@@ -122,10 +122,18 @@ in
           lib.concatMapAttrsStringSep "\n" (
             var: { default, override }: "${var}${toField "DEFAULT" default}${toField "OVERRIDE" override}"
           ) cfg.environment;
+
+        # Every pam_limits line names this file, because a bare `pam_limits.so` reads the
+        # limits.conf nixpkgs compiles into linux-pam's own store path - empty, and not
+        # this one. Owned here rather than by any one module that writes to it: a
+        # `required` pam_limits fails the session when its conf is missing, so the file
+        # has to exist wherever pam does, not only where something happens to set limits.
+        limits."security/limits.conf".text = lib.mkDefault "";
       in
       lib.mkMerge [
         debug
         pam_env
+        limits
         etcTree
       ];
 

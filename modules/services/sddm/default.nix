@@ -192,7 +192,7 @@ in
         ${lib.optionalString (session_rundir != false) session_rundir}
         session  optional       pam_keyinit.so force revoke
         session  optional       pam_permit.so
-        session  required       pam_limits.so
+        session  required       pam_limits.so conf=/etc/security/limits.conf
       '';
 
       sddm-autologin.text = ''

@@ -88,7 +88,7 @@ in
         session required ${config.security.pam.package}/lib/security/pam_lastlog.so silent # lastlog (order 10700)
 
         ${lib.optionalString (session_rundir != false) session_rundir}
-        session required pam_limits.so
+        session required pam_limits.so conf=/etc/security/limits.conf
       '';
     };
 
