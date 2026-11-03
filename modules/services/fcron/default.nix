@@ -148,22 +148,37 @@ in
       text = lib.concatStringsSep "\n" cfg.deny;
     };
 
-    security.pam.services.fcrontab = {
-      text = ''
-        #
-        # The PAM configuration file for fcron daemon
-        #
+    security.pam.services.fcrontab.rules = {
+      account.unix = {
+        order = 10900;
+        control = "required";
+        modulePath = "pam_unix.so";
+      };
 
-        account		required	pam_unix.so
-        # Warning : fcron has no way to prompt user for a password !
-        auth		required	pam_permit.so
-        #auth		required	pam_unix.so nullok
-        #auth		required	pam_env.so conffile=/etc/security/pam_env.conf
-        session		required	pam_permit.so
-        #session		required	pam_unix.so
-        session         required        pam_loginuid.so
-        session		required	pam_limits.so
-      '';
+      # fcron has no way to prompt the user for a password
+      auth.permit = {
+        order = 10000;
+        control = "required";
+        modulePath = "pam_permit.so";
+      };
+
+      session = {
+        permit = {
+          order = 10000;
+          control = "required";
+          modulePath = "pam_permit.so";
+        };
+        loginuid = {
+          order = 10300;
+          control = "required";
+          modulePath = "pam_loginuid.so";
+        };
+        limits = {
+          order = 12200;
+          control = "required";
+          modulePath = "pam_limits.so";
+        };
+      };
     };
 
     environment.systemPackages = [
