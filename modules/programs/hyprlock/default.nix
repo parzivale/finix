@@ -30,8 +30,27 @@ in
   config = lib.mkIf cfg.enable {
     environment.systemPackages = [ cfg.package ];
 
-    security.pam.services.hyprlock = {
-      text = config.security.pam.services.login.text;
+    security.pam.services.hyprlock.rules = {
+      account.login = {
+        order = 10000;
+        control = "include";
+        modulePath = "login";
+      };
+      auth.login = {
+        order = 10000;
+        control = "include";
+        modulePath = "login";
+      };
+      password.login = {
+        order = 10000;
+        control = "include";
+        modulePath = "login";
+      };
+      session.login = {
+        order = 10000;
+        control = "include";
+        modulePath = "login";
+      };
     };
   };
 }
