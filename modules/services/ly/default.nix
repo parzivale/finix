@@ -14,13 +14,13 @@ let
 
   session_rundir =
     if config.services.sessiond.enable then
-      "session optional ${config.services.sessiond.package}/lib/security/pam_sessiond.so"
+      "${config.services.sessiond.package}/lib/security/pam_sessiond.so"
     else if config.services.elogind.enable then
-      "session optional ${pkgs.elogind}/lib/security/pam_elogind.so"
+      "${pkgs.elogind}/lib/security/pam_elogind.so"
     else if config.services.seatd.enable then
-      "session optional ${pkgs.pam_rundir}/lib/security/pam_rundir.so"
+      "${pkgs.pam_rundir}/lib/security/pam_rundir.so"
     else
-      false;
+      null;
 in
 {
   options.services.ly = {
@@ -101,24 +101,88 @@ in
     environment.systemPackages = [ cfg.package ];
 
     security.pam.services = lib.optionalAttrs (cfg.settings.service_name == "ly") {
-      ly = {
-        text = ''
-          # Account management.
-          account required pam_unix.so
-          # Authentication management.
-          auth optional pam_unix.so likeauth nullok
-          auth sufficient pam_unix.so likeauth nullok try_first_pass
-          auth required pam_deny.so
-          # Password management.
-          password sufficient pam_unix.so nullok yescrypt
-          # Session management.
-          session required pam_env.so debug conffile=/etc/security/pam_env.conf readenv=1
-          session required pam_unix.so
-          session optional pam_loginuid.so
-          ${lib.optionalString (session_rundir != false) session_rundir}
-          session required ${pkgs.util-linux.lastlog}/lib/security/pam_lastlog2.so silent # lastlog (order 10700)
-          session required pam_limits.so
-        '';
+      ly.rules = {
+        account.unix = {
+          order = 10900;
+          control = "required";
+          modulePath = "pam_unix.so";
+        };
+
+        auth = {
+          unix-early = {
+            order = 11500;
+            control = "optional";
+            modulePath = "pam_unix.so";
+            settings = {
+              likeauth = true;
+              nullok = true;
+            };
+          };
+          unix = {
+            order = 12800;
+            control = "sufficient";
+            modulePath = "pam_unix.so";
+            settings = {
+              likeauth = true;
+              nullok = true;
+              try_first_pass = true;
+            };
+          };
+          deny = {
+            order = 13600;
+            control = "required";
+            modulePath = "pam_deny.so";
+          };
+        };
+
+        password.unix = {
+          order = 10200;
+          control = "sufficient";
+          modulePath = "pam_unix.so";
+          settings = {
+            nullok = true;
+            yescrypt = true;
+          };
+        };
+
+        session = {
+          env = {
+            order = 10100;
+            control = "required";
+            modulePath = "pam_env.so";
+            settings = {
+              debug = true;
+              conffile = "/etc/security/pam_env.conf";
+              readenv = 1;
+            };
+          };
+          unix = {
+            order = 10200;
+            control = "required";
+            modulePath = "pam_unix.so";
+          };
+          loginuid = {
+            order = 10300;
+            control = "optional";
+            modulePath = "pam_loginuid.so";
+          };
+          rundir = lib.mkIf (session_rundir != null) {
+            order = 10400;
+            control = "optional";
+            modulePath = session_rundir;
+          };
+          lastlog = {
+            order = 10700;
+            control = "required";
+            modulePath = "${pkgs.util-linux.lastlog}/lib/security/pam_lastlog2.so";
+            settings.silent = true;
+          };
+          limits = {
+            order = 10800;
+            control = "required";
+            modulePath = "pam_limits.so";
+          };
+        };
       };
     };
 
