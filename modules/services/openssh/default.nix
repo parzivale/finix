@@ -73,13 +73,13 @@ let
 
   session_rundir =
     if config.services.sessiond.enable then
-      "session optional ${config.services.sessiond.package}/lib/security/pam_sessiond.so"
+      "${config.services.sessiond.package}/lib/security/pam_sessiond.so"
     else if config.services.elogind.enable then
-      "session optional ${pkgs.elogind}/lib/security/pam_elogind.so"
+      "${pkgs.elogind}/lib/security/pam_elogind.so"
     else if config.services.seatd.enable then
-      "session optional ${pkgs.pam_rundir}/lib/security/pam_rundir.so"
+      "${pkgs.pam_rundir}/lib/security/pam_rundir.so"
     else
-      false;
+      null;
 in
 {
   options.services.openssh = {
@@ -337,26 +337,79 @@ in
     environment.etc."ssh/sshd_config".source = configFile;
 
     security.pam.services.sshd = lib.mkIf cfg.settings.UsePAM {
-      text = ''
-        # Account management.
-        account required pam_unix.so debug # unix (order 10900)
+      rules = {
+        account.unix = {
+          order = 10900;
+          control = "required";
+          modulePath = "pam_unix.so";
+          settings.debug = true;
+        };
 
-        # Authentication management.
-        auth sufficient pam_unix.so likeauth try_first_pass debug # unix (order 11500)
-        auth required pam_deny.so debug # deny (order 12300)
+        auth = {
+          unix = {
+            order = 11500;
+            control = "sufficient";
+            modulePath = "pam_unix.so";
+            settings = {
+              likeauth = true;
+              try_first_pass = true;
+              debug = true;
+            };
+          };
+          deny = {
+            order = 12300;
+            control = "required";
+            modulePath = "pam_deny.so";
+            settings.debug = true;
+          };
+        };
 
-        # Password management.
-        password sufficient pam_unix.so nullok yescrypt debug # unix (order 10200)
+        password.unix = {
+          order = 10200;
+          control = "sufficient";
+          modulePath = "pam_unix.so";
+          settings = {
+            nullok = true;
+            yescrypt = true;
+            debug = true;
+          };
+        };
 
-        # Session management.
-        session required pam_env.so debug conffile=/etc/security/pam_env.conf readenv=0 # env (order 10100)
-        session required pam_unix.so debug # unix (order 10200)
-
-        ${lib.optionalString (session_rundir != false) session_rundir}
-
-        session required pam_loginuid.so debug # loginuid (order 10300)
-        session required pam_limits.so
-      '';
+        session = {
+          env = {
+            order = 10100;
+            control = "required";
+            modulePath = "pam_env.so";
+            settings = {
+              debug = true;
+              conffile = "/etc/security/pam_env.conf";
+              readenv = 0;
+            };
+          };
+          unix = {
+            order = 10200;
+            control = "required";
+            modulePath = "pam_unix.so";
+            settings.debug = true;
+          };
+          rundir = lib.mkIf (session_rundir != null) {
+            order = 10250;
+            control = "optional";
+            modulePath = session_rundir;
+          };
+          loginuid = {
+            order = 10300;
+            control = "required";
+            modulePath = "pam_loginuid.so";
+            settings.debug = true;
+          };
+          limits = {
+            order = 12200;
+            control = "required";
+            modulePath = "pam_limits.so";
+          };
+        };
+      };
     };
 
     # TODO: move this into programs.ssh maybe?
