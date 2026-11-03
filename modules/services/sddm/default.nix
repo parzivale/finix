@@ -17,13 +17,13 @@ let
 
   session_rundir =
     if config.services.sessiond.enable then
-      "session optional ${config.services.sessiond.package}/lib/security/pam_sessiond.so"
+      "${config.services.sessiond.package}/lib/security/pam_sessiond.so"
     else if config.services.elogind.enable then
-      "session optional ${pkgs.elogind}/lib/security/pam_elogind.so"
+      "${pkgs.elogind}/lib/security/pam_elogind.so"
     else if config.services.seatd.enable then
-      "session optional ${pkgs.pam_rundir}/lib/security/pam_rundir.so"
+      "${pkgs.pam_rundir}/lib/security/pam_rundir.so"
     else
-      false;
+      null;
 in
 {
   imports = [ modules.xorg ];
@@ -192,46 +192,150 @@ in
       sddm.gid = config.ids.gids.sddm;
     };
 
-    security.pam.services = {
-      sddm.text = ''
-        auth      substack      login
-        account   include       login
-        password  substack      login
-        session   include       login
-      '';
+    security.pam.services =
+      let
+        # only allow the sddm user through the greeter service
+        sddmOnly = {
+          order = 10000;
+          control = "required";
+          modulePath = "pam_succeed_if.so";
+          args = [
+            "audit"
+            "quiet_success"
+            "user"
+            "="
+            "sddm"
+          ];
+        };
+      in
+      {
+        sddm.rules = {
+          auth.login = {
+            order = 10000;
+            control = "substack";
+            modulePath = "login";
+          };
+          account.login = {
+            order = 10000;
+            control = "include";
+            modulePath = "login";
+          };
+          password.login = {
+            order = 10000;
+            control = "substack";
+            modulePath = "login";
+          };
+          session.login = {
+            order = 10000;
+            control = "include";
+            modulePath = "login";
+          };
+        };
 
-      sddm-greeter.text = ''
-        # Authentication management.
-        auth     required       pam_succeed_if.so audit quiet_success user = sddm
-        auth     optional       pam_permit.so
+        sddm-greeter.rules = {
+          auth = {
+            sddm-only = sddmOnly;
+            permit = {
+              order = 10100;
+              control = "optional";
+              modulePath = "pam_permit.so";
+            };
+          };
 
-        # Account management.
-        account  required       pam_succeed_if.so audit quiet_success user = sddm
-        account  sufficient     pam_unix.so
+          account = {
+            sddm-only = sddmOnly;
+            unix = {
+              order = 10100;
+              control = "sufficient";
+              modulePath = "pam_unix.so";
+            };
+          };
 
-        # Password management.
-        password required       pam_deny.so
+          password.deny = {
+            order = 10000;
+            control = "required";
+            modulePath = "pam_deny.so";
+          };
 
-        # Session management.
-        session  required       pam_succeed_if.so audit quiet_success user = sddm
-        session  required       pam_env.so conffile=/etc/security/pam_env.conf readenv=0
-        ${lib.optionalString (session_rundir != false) session_rundir}
-        session  optional       pam_keyinit.so force revoke
-        session  optional       pam_permit.so
-        session  required       pam_limits.so
-      '';
+          session = {
+            sddm-only = sddmOnly;
+            env = {
+              order = 10100;
+              control = "required";
+              modulePath = "pam_env.so";
+              settings = {
+                conffile = "/etc/security/pam_env.conf";
+                readenv = 0;
+              };
+            };
+            rundir = lib.mkIf (session_rundir != null) {
+              order = 10200;
+              control = "optional";
+              modulePath = session_rundir;
+            };
+            keyinit = {
+              order = 10300;
+              control = "optional";
+              modulePath = "pam_keyinit.so";
+              settings = {
+                force = true;
+                revoke = true;
+              };
+            };
+            permit = {
+              order = 10400;
+              control = "optional";
+              modulePath = "pam_permit.so";
+            };
+            limits = {
+              order = 10500;
+              control = "required";
+              modulePath = "pam_limits.so";
+            };
+          };
+        };
 
-      sddm-autologin.text = ''
-        auth     requisite pam_nologin.so
-        auth     required  pam_succeed_if.so uid >= ${toString 0} quiet
-        auth     required  pam_permit.so
+        sddm-autologin.rules = {
+          auth = {
+            nologin = {
+              order = 10000;
+              control = "requisite";
+              modulePath = "pam_nologin.so";
+            };
+            root-uid = {
+              order = 10100;
+              control = "required";
+              modulePath = "pam_succeed_if.so";
+              args = [
+                "uid"
+                ">="
+                (toString 0)
+                "quiet"
+              ];
+            };
+            permit = {
+              order = 10200;
+              control = "required";
+              modulePath = "pam_permit.so";
+            };
+          };
 
-        account  include   sddm
-
-        password include   sddm
-
-        session  include   sddm
-      '';
-    };
+          account.sddm = {
+            order = 10000;
+            control = "include";
+            modulePath = "sddm";
+          };
+          password.sddm = {
+            order = 10000;
+            control = "include";
+            modulePath = "sddm";
+          };
+          session.sddm = {
+            order = 10000;
+            control = "include";
+            modulePath = "sddm";
+          };
+        };
+      };
   };
 }
