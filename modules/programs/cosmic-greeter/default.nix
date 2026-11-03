@@ -102,8 +102,27 @@ in
     services.dbus.packages = [ cfg.package ];
 
     # Required for screen locker
-    security.pam.services.cosmic-greeter = {
-      text = config.security.pam.services.login.text;
+    security.pam.services.cosmic-greeter.rules = {
+      account.login = {
+        order = 10000;
+        control = "include";
+        modulePath = "login";
+      };
+      auth.login = {
+        order = 10000;
+        control = "include";
+        modulePath = "login";
+      };
+      password.login = {
+        order = 10000;
+        control = "include";
+        modulePath = "login";
+      };
+      session.login = {
+        order = 10000;
+        control = "include";
+        modulePath = "login";
+      };
     };
   };
 }
