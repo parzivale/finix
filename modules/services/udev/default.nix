@@ -139,7 +139,11 @@ let
       {
         preferLocalBuild = true;
         allowSubstitutes = false;
-        packages = lib.unique (map toString ([ pkgs.udev ] ++ cfg.packages));
+        # `cfg.package`, the eudev the daemon runs, rather than `pkgs.udev`: that is nixpkgs'
+        # libudev (systemd-minimal-libs) and ships no hwdb files, so eudev's own database
+        # never reached hwdb.bin. NixOS's line reads `[ udev ]` with a local
+        # `udev = config.systemd.package`, which is what this matches.
+        packages = lib.unique (map toString ([ cfg.package ] ++ cfg.packages));
       }
       ''
         mkdir -p etc/udev/hwdb.d
