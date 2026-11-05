@@ -22,6 +22,10 @@ in
       # finit tty stanza, which is what a hand-written finit.ttys would have been.
       providers.services.backend = "finit";
       services.getty.enable = true;
+
+      # these parts drive finit's own `initctl` - `-j status`, `cond dump`, `reload`, runlevels -
+      # which the contract's front-end shadows at hiPrio and does not speak
+      providers.services.ctl.enable = false;
       services.mdevd.enable = true;
     };
 
