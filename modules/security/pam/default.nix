@@ -102,6 +102,16 @@ in
   };
 
   config = {
+    # where pam_lastlog2 keeps its database. Every login path runs it as `required`, so this is
+    # the contract's rule rather than finit's: as `finit.tmpfiles.rules` it would exist on finit
+    # alone, and logins anywhere else would depend on the directory happening to be there.
+    providers.services.tmpfiles.rules = [
+      {
+        path = "/var/lib/lastlog";
+        type.directory.mode = "0755";
+      }
+    ];
+
     environment.etc =
       let
         etcTree = lib.mapAttrs' (

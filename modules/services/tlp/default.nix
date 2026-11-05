@@ -55,7 +55,7 @@ in
     };
 
     settings = lib.mkOption {
-      type = format.type;
+      inherit (format) type;
       default = { };
       description = ''
         `tlp` configuration. See [upstream documentation](https://linrunner.de/tlp/settings)

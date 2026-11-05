@@ -157,9 +157,9 @@ let
             i: chunk:
             lib.nameValuePair (linkName name i) {
               description = "${name} prerequisites, part ${toString (i + 1)} of ${toString (last + 1)}";
-              runlevels = runlevelsFor name unit;
+              runlevel = runlevelsFor name unit;
               command = true';
-              remain = true;
+              remain-after-exit = true;
               conditions = chunk ++ lib.optional (i > 0) (taskCondition (linkName name (i - 1)));
             }
           ) chunks
@@ -171,7 +171,7 @@ let
     {
       inherit (unit) description;
 
-      runlevels = runlevelsFor name unit;
+      runlevel = runlevelsFor name unit;
       conditions = (chainFor name unit).conditions;
       environment = unit.environment;
 
@@ -196,7 +196,14 @@ let
       # Except for a unit which takes the terminal for its own output, where `logit` is worse
       # than useless: it is a child of the unit's process, which `login` later inherits and
       # mistakes for the shell. See `terminal` in the contract.
-      log = !unit.terminal;
+      log = if unit.terminal then null else { };
+
+      # finit notices a changed unit by its stanza file changing, so stamping each unit's
+      # fingerprint into its own file guarantees the file differs whenever the unit's definition
+      # does - even for a change finit's own stanza would not otherwise reflect. A reload
+      # trigger is exactly that: finit's module writes it into the file as a comment. It is
+      # also what a real `list` would read back were finit ever to stop reconciling on its own.
+      reload-triggers = [ "fingerprint: ${cfg.switch.fingerprints.${name}}" ];
     }
     // lib.optionalAttrs (unit.path != [ ]) { inherit (unit) path; }
     // lib.optionalAttrs (unit.user != null) { inherit (unit) user; }
@@ -244,22 +251,23 @@ let
       notify = notify.${ready};
     }
     # a forking daemon is something finit observes for itself, so it is told rather than
-    # waited for. The `!` matters: without it finit *manages* the pid file - creating it when
-    # it starts the service and removing it when it stops - which would assert the condition
-    # immediately and make the readiness meaningless. With it, the daemon writes the file and
-    # finit watches for it, which is what was asked for.
+    # waited for. Only `pidfile`, not `pidfile-create`: with that finit *manages* the pid file -
+    # creating it when it starts the service and removing it when it stops - which would assert
+    # the condition immediately and make the readiness meaningless. Without it, the daemon
+    # writes the file and finit watches for it, which is what was asked for. Before finit 5
+    # this was `pid:!<file>`, and the `!` was what said so.
     // lib.optionalAttrs (ready == "waitFor" && waitKindOf unit == "pidfile") {
       type = "forking";
-      pid = "!${svc.readiness.waitFor.pidfile.file}";
+      pidfile = svc.readiness.waitFor.pidfile.file;
     }
-    // lib.optionalAttrs (unit.stopTimeout != null) { kill = unit.stopTimeout; };
+    // lib.optionalAttrs (unit.stopTimeout != null) { stop-timeout = unit.stopTimeout; };
 
   mkTask =
     name: unit:
     common name unit
     // {
       command = if kindOf unit == "anchor" then true' else (variantOf unit).command;
-      remain = true;
+      remain-after-exit = true;
     };
 
   # the shutdown side is emitted as a single stanza running a generated script, rather than as
@@ -292,10 +300,10 @@ let
     {
       description = "${name} has started";
 
-      runlevels = runlevelsFor name unit;
+      runlevel = runlevelsFor name unit;
       conditions = [ (readyConditionOf name) ];
       command = if wait == null || waitKindOf' unit == "pidfile" then true' else wait;
-      remain = true;
+      remain-after-exit = true;
     };
 
   isService = _: unit: kindOf unit == "service";
@@ -481,26 +489,12 @@ in
         };
       };
 
-      # finit notices a changed unit by its stanza file changing, so stamping each unit's
-      # fingerprint into its own file guarantees the file differs whenever the unit's definition
-      # does - even for a change finit's own stanza would not otherwise reflect. this is the same
-      # trick the openssh and tlp modules use to carry reload triggers, and it is also what a
-      # real `list` would read back were finit ever to stop reconciling on its own.
-      environment.etc = lib.mkMerge [
-        (lib.mapAttrs' (
-          name: unit:
-          lib.nameValuePair "finit.d/${name}.conf" {
-            text = lib.mkAfter "\n# fingerprint: ${cfg.switch.fingerprints.${name}}\n";
-          }
-        ) bootSide)
-
-        # on the script rather than on shutdownSide being non-empty: the levels at and after the
-        # latch are themselves shutdown-side units, so that set is never empty, while a machine
-        # whose shutdown side is only those anchors has nothing to run and gets no script.
-        (lib.optionalAttrs (shutdownScript != null) {
-          "finit/hook/sys/shutdown/providers-services-shutdown".source = shutdownScript;
-        })
-      ];
+      # on the script rather than on shutdownSide being non-empty: the levels at and after the
+      # latch are themselves shutdown-side units, so that set is never empty, while a machine
+      # whose shutdown side is only those anchors has nothing to run and gets no script.
+      environment.etc = lib.optionalAttrs (shutdownScript != null) {
+        "finit/hook/sys/shutdown/providers-services-shutdown".source = shutdownScript;
+      };
 
       # finit reconciles by itself: `initctl reload` re-reads /etc/finit.d and starts, stops and
       # restarts stanzas to match what it finds there - tests/finit/remain-after-exit.nix pins

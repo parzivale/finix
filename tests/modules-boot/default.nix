@@ -110,11 +110,6 @@ let
     # at all, let alone booted. Named here rather than left to the catch above, so that
     # the reason is written where somebody reads it.
     virtualbox = "an x86_64 host; there is no aarch64 build of VirtualBox";
-
-    # incus puts minio on its unit's PATH, and nixpkgs marks minio insecure - so evaluating
-    # this machine at all needs permittedInsecurePackages, which is a machine-wide loosening
-    # of policy to boot one module, and not worth it
-    incus = "nixpkgs.config.permittedInsecurePackages, for the minio on its PATH";
   };
 
   skipped = needsConfiguration ++ lib.attrNames cannotBoot;

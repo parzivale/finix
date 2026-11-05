@@ -97,7 +97,7 @@
       # companion latch, so the two can be compared when alpha is stopped
       finit.services.control = {
         description = "conditioned on live readiness";
-        runlevels = "S12345789";
+        runlevel = "S12345789";
         conditions = "service/alpha/ready";
         command = daemon "control";
       };

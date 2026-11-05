@@ -15,7 +15,7 @@ in
 {
   config = lib.mkIf cfg.enable {
     providers.services.units.sessiond = {
-      description = "daemon for power management";
+      description = "Session management daemon";
 
       # `sysinit`, beside seatd and elogind: a session manager is the same kind of thing as a
       # seat manager, and belongs in the same tier as the rest of them, so that everything

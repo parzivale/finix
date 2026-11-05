@@ -42,7 +42,7 @@ let
       };
 
       settings = lib.mkOption {
-        type = (pkgs.formats.ini { }).type;
+        inherit ((pkgs.formats.ini { })) type;
         default = { };
         example = {
           main = {
