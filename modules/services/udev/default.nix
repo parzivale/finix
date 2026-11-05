@@ -146,7 +146,10 @@ let
         for i in $packages; do
           echo "Adding hwdb files for package $i"
           for j in $i/{etc,lib,var/lib}/udev/hwdb.d/*; do
-            ln -s $j etc/udev/hwdb.d/$(basename $j)
+            # A copy, not a symlink: since eudev 3.3.0 `--root` resolves links inside the
+            # root, so a link to /nix/store is looked for under $(pwd)/nix/store, every file
+            # is skipped, and no hwdb.bin is written.
+            cp $j etc/udev/hwdb.d/$(basename $j)
           done
         done
 
