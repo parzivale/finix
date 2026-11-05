@@ -39,12 +39,9 @@ in
     providers.services.units.fcron = {
       description = "fcron daemon";
 
-      # the systab has to be loaded before the daemon reads it. `task/fcrontab/success` named
-      # finit's own task; it is a contract unit now, so this is an ordinary edge.
-      requires = [
-        "basic"
-        "fcrontab"
-      ];
+      # not after `fcrontab`: fcron notices a changed systab and reloads it itself, while an edge
+      # to the oneshot restarted the daemon whenever the systab changed
+      requires = [ "basic" ];
 
       # `--foreground`, so the process running is all any backend can observe
       type.service.command = "${cfg.package}/bin/fcron --foreground " + lib.escapeShellArgs cfg.extraArgs;

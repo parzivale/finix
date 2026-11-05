@@ -1,21 +1,13 @@
-# tests for finit remain:yes feature (RemainAfterExit equivalent)
+# remain-after-exit part of the finit test (see default.nix)
+#
+# tests for the remain:yes feature (RemainAfterExit equivalent)
 #
 # tests that tasks with remain:yes stay active after completion,
 # run post: scripts on stop, and handle runlevel transitions correctly.
 {
-  name = "finit.remain-after-exit";
-
   nodes.machine =
     { pkgs, ... }:
     {
-      services.mdevd.enable = true;
-
-      # finit is PID 1 here: the contract needs a backend named before it can point boot.init
-      # at one. getty supplies the terminal finix asserts exists - on finit it reduces to a
-      # finit tty stanza, which is what a hand-written finit.ttys would have been.
-      providers.services.backend = "finit";
-      services.getty.enable = true;
-
       # test task with remain:yes that runs in runlevels S and 2
       finit.tasks.test-remain = {
         runlevel = "S2";
@@ -24,7 +16,7 @@
           echo "remain task started" > /run/remain-test/started
           echo "setting up resources"
         '';
-        post = pkgs.writeShellScript "test-remain-stop" ''
+        exec-stop-post = pkgs.writeShellScript "test-remain-stop" ''
           ${pkgs.coreutils}/bin/mkdir -p /run/remain-test
           echo "remain task stopped" > /run/remain-test/stopped
           echo "cleaning up resources"
@@ -40,7 +32,7 @@
           ${pkgs.coreutils}/bin/mkdir -p /run/remain-test
           echo "multi-runlevel started in rl $(cat /run/finit/runlevel 2>/dev/null || echo unknown)" > /run/remain-test/multi-rl
         '';
-        post = pkgs.writeShellScript "multi-rl-stop" ''
+        exec-stop-post = pkgs.writeShellScript "multi-rl-stop" ''
           ${pkgs.coreutils}/bin/mkdir -p /run/remain-test
           echo "multi-runlevel cleanup" > /run/remain-test/multi-rl-cleanup
         '';
@@ -67,7 +59,7 @@
           ${pkgs.coreutils}/bin/mkdir -p /run/remain-test
           echo "regular task ran" > /run/remain-test/regular
         '';
-        post = pkgs.writeShellScript "regular-post" ''
+        exec-stop-post = pkgs.writeShellScript "regular-post" ''
           ${pkgs.coreutils}/bin/mkdir -p /run/remain-test
           echo "regular post ran" > /run/remain-test/regular-post
         '';
@@ -89,17 +81,9 @@
         output = machine.succeed(f"initctl -j status {name}")
         return json.loads(output)
 
-    machine.start()
-
-    # wait for full boot sequence
-    machine.wait_for_console_text("finix - stage 1")
-    machine.wait_for_console_text("finix - stage 2")
-    machine.wait_for_console_text("entering runlevel S")
-    machine.wait_for_console_text("entering runlevel 2")
-
     # basic remain task functionality
 
-    with subtest("remain task completes and stays active"):
+    with subtest("remain-after-exit: remain task completes and stays active"):
         # task should have run
         machine.succeed("test -f /run/remain-test/started")
         content = machine.succeed("cat /run/remain-test/started")
@@ -112,11 +96,11 @@
         status = get_status("test-remain")
         assert status["status"] == "done", f"expected status 'done', got: {status['status']}"
 
-    with subtest("remain task condition is asserted"):
+    with subtest("remain-after-exit: remain task condition is asserted"):
         # check that the success condition exists
         machine.succeed("test -f /run/finit/cond/task/test-remain/success")
 
-    with subtest("remain task condition persists after reload"):
+    with subtest("remain-after-exit: remain task condition persists after reload"):
         # get condition status before reload
         cond_dump = json.loads(machine.succeed("initctl -j cond dump"))
         cond = next((c for c in cond_dump if c["condition"] == "task/test-remain/success"), None)
@@ -133,7 +117,7 @@
         assert cond is not None, "task/test-remain/success condition not found after reload"
         assert cond["status"] == "on", f"expected condition status 'on' after reload, got: {cond['status']} (condition entered flux state - bug!)"
 
-    with subtest("dependent service started due to condition"):
+    with subtest("remain-after-exit: dependent service started due to condition"):
         # service depending on remain task should be running
         machine.succeed("test -f /run/remain-test/dependent")
         status = get_status("dependent-service")
@@ -141,7 +125,7 @@
 
     # config modification + reload behavior (test before runlevel changes to ensure clean state)
 
-    with subtest("remain task in done state restarts when config modified and reloaded"):
+    with subtest("remain-after-exit: remain task in done state restarts when config modified and reloaded"):
         # create scripts for this test in writable location
         machine.succeed("echo '#!/bin/sh' > /run/remain-test/start-v1.sh")
         machine.succeed("echo 'echo version1 > /run/remain-test/modifiable-version' >> /run/remain-test/start-v1.sh")
@@ -199,13 +183,13 @@
 
     # multi-runlevel task behavior
 
-    with subtest("multi-runlevel remain task is active in runlevel 2"):
+    with subtest("remain-after-exit: multi-runlevel remain task is active in runlevel 2"):
         machine.succeed("test -f /run/remain-test/multi-rl")
         machine.fail("test -f /run/remain-test/multi-rl-cleanup")
         status = get_status("multi-runlevel")
         assert status["status"] == "done", f"expected status 'done', got: {status['status']}"
 
-    with subtest("switching to runlevel 3 does not trigger post script for multi-runlevel task"):
+    with subtest("remain-after-exit: switching to runlevel 3 does not trigger post script for multi-runlevel task"):
         # switch to runlevel 3
         machine.succeed("initctl runlevel 3")
         machine.wait_for_console_text("entering runlevel 3")
@@ -219,7 +203,7 @@
         status = get_status("multi-runlevel")
         assert status["status"] == "done", f"expected status 'done', got: {status['status']}"
 
-    with subtest("switching to runlevel 4 triggers post script for multi-runlevel task"):
+    with subtest("remain-after-exit: switching to runlevel 4 triggers post script for multi-runlevel task"):
         # switch to runlevel 4 (task is only valid in 2 and 3)
         machine.succeed("initctl runlevel 4")
         machine.wait_for_console_text("entering runlevel 4")
@@ -231,7 +215,7 @@
 
     # explicit stop behavior
 
-    with subtest("explicit stop triggers post script"):
+    with subtest("remain-after-exit: explicit stop triggers post script"):
         # switch back to runlevel 2 where test-remain is valid
         machine.succeed("initctl runlevel 2")
         machine.wait_for_console_text("entering runlevel 2")
@@ -254,7 +238,7 @@
 
     # regular task comparison
 
-    with subtest("regular task (no remain) does not run post on completion"):
+    with subtest("remain-after-exit: regular task (no remain) does not run post on completion"):
         # regular task should have run
         machine.succeed("test -f /run/remain-test/regular")
 
@@ -262,8 +246,5 @@
         # (only on explicit stop for services, not tasks without remain)
         # This verifies that the remain:yes behavior is different
         machine.fail("test -f /run/remain-test/regular-post")
-
-    with subtest("shutdown"):
-        machine.shutdown()
   '';
 }

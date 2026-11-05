@@ -114,16 +114,6 @@ in
 
     environment.etc."udev/rules.d".source = rules;
 
-    # TODO: share between device managers
-    system.activation.scripts.keventd = lib.mkIf config.boot.kernel.enable {
-      text = ''
-        # Allow the kernel to find our firmware.
-        if [ -e /sys/module/firmware_class/parameters/path ]; then
-          echo -n "${config.hardware.firmware}/lib/firmware" > /sys/module/firmware_class/parameters/path
-        fi
-      '';
-    };
-
     system.switch.inhibitors.device-manager = "keventd";
 
     # build out the default initramfs image

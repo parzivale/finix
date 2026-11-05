@@ -7,7 +7,9 @@
 let
   cfg = config.services.udisks2;
 
-  format = pkgs.formats.ini { };
+  format = pkgs.formats.ini {
+    listToValue = lib.concatMapStringsSep "," (lib.generators.mkValueStringDefault { });
+  };
 in
 {
   imports = [ ./providers.services.nix ];
@@ -39,9 +41,8 @@ in
     };
 
     settings = lib.mkOption {
-      type = lib.types.submodule {
-        freeformType = format.type;
-      };
+      inherit (format) type;
+
       default = { };
       description = ''
         `udisks2` configuration. See {manpage}`udisks2.conf(5)`
@@ -62,6 +63,7 @@ in
     };
 
     environment.systemPackages = [ cfg.package ];
+    environment.etc."udisks2/udisks2.conf".source = format.generate "udisks2.conf" cfg.settings;
 
     services.dbus.enable = true;
     services.dbus.packages = [ cfg.package ];

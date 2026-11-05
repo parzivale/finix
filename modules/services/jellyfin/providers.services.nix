@@ -25,7 +25,8 @@ in
 
     users.users = lib.optionalAttrs (cfg.user == "jellyfin") {
       jellyfin = {
-        group = "jellyfin";
+        inherit (cfg) group;
+
         isSystemUser = true;
       };
     };

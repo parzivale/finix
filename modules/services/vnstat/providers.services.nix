@@ -28,7 +28,7 @@ in
         # vnstatd reads /etc/vnstat.conf, but the unit names the file that was generated from,
         # so a changed configuration is a changed unit. The `# reload trigger` this replaces
         # was appended to finit.d/vnstat.conf, and so reached finit alone.
-        command = "${pkgs.vnstat}/bin/vnstatd ${lib.escapeShellArgs cfg.extraArgs}";
+        command = "${cfg.package}/bin/vnstatd ${lib.escapeShellArgs cfg.extraArgs}";
 
         # and it is a reload now rather than a restart: vnstatd rereads its configuration on
         # SIGHUP, and restarting it drops whatever it has not yet written to the database

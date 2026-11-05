@@ -49,6 +49,9 @@ in
     #
     # `gardendevctl trigger` only queues the events, so the coldplug stays on the head of the
     # trunk, where devices have to start appearing, and costs nothing to wait for.
+    #
+    # The two were `run` stanzas ordered against each other by finit priority, which no other
+    # implementation has; the settle `requires` the trigger, which says the same to every one.
     providers.services.units.gardendevd-coldplug = {
       description = "trigger coldplug events";
 

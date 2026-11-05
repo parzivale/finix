@@ -219,24 +219,6 @@ in
 
     environment.etc."mdev.conf".source = mdevConf;
 
-    # the device manager as contract units rather than finit stanzas. Written as stanzas it
-    # existed only on finit: a machine running any other backend enabled this module, got
-    # nothing, and booted with no device manager at all.
-    # TODO: share between udev and mdevd
-    system.activation.scripts.mdevd = lib.mkIf config.boot.kernel.enable {
-      text = ''
-        # The deprecated hotplug uevent helper is not used anymore
-        if [ -e /proc/sys/kernel/hotplug ]; then
-          echo "" > /proc/sys/kernel/hotplug
-        fi
-
-        # Allow the kernel to find our firmware.
-        if [ -e /sys/module/firmware_class/parameters/path ]; then
-          echo -n "${config.hardware.firmware}/lib/firmware" > /sys/module/firmware_class/parameters/path
-        fi
-      '';
-    };
-
     system.switch.inhibitors.device-manager = "mdevd";
 
     # build out the default initramfs image

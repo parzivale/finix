@@ -14,6 +14,9 @@ let
 in
 {
   config = lib.mkIf cfg.enable {
+    # the device manager as contract units rather than finit stanzas. Written as stanzas it
+    # existed only on finit: a machine running any other backend enabled this module, got
+    # nothing, and booted with no device manager at all.
     providers.services.units.mdevd = {
       description = "device event daemon (mdevd)";
 

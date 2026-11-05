@@ -6,7 +6,7 @@
 # usage:
 #   nix-build tests                   # build all tests
 #   nix-build tests -A boot           # build specific test
-#   nix-build tests -A finit.tmpfiles # build test from subdirectory
+#   nix-build tests -A finit          # build test made of several files (finit/default.nix)
 #
 # interactive mode:
 #   nix-build tests -A boot.driverInteractive
@@ -54,8 +54,11 @@ let
     name: type: type == "directory" && !(builtins.elem name excludes)
   ) dirContents;
 
-  # for each subdirectory, create a nested attrset of tests
-  # e.g., finit/tmpfiles.nix -> finit.tmpfiles
+  # for each subdirectory, either:
+  # - it has a default.nix: a suite of tests (a function) or a single test composed from the
+  #   files next to it (an attrset)
+  # - otherwise create a nested attrset of tests
+  #   (e.g., foo/bar.nix -> foo.bar)
   # use recurseIntoAttrs so nix-build recurses into subdirectories
   subDirTests = lib.mapAttrs (
     dirName: _:
@@ -68,15 +71,20 @@ let
       ) subDirContents;
     in
     # a directory with a default.nix describes its own tests, rather than being one file one
-    # test. That is for a suite where the same test runs against several implementations: the
-    # file is a function of which one, so there is nothing for auto-discovery to import.
+    # test. A function is a suite where the same test runs against several implementations:
+    # the file is a function of which one, so there is nothing for auto-discovery to import.
+    # Anything else is a single test composed from the files next to it.
     if subDirContents ? "default.nix" then
-      lib.recurseIntoAttrs (
-        import dir {
+      let
+        suite = import dir;
+      in
+      if builtins.isFunction suite then
+        lib.recurseIntoAttrs (suite {
           inherit lib pkgs runTest;
           mkTest = testLib.mkTest;
-        }
-      )
+        })
+      else
+        runTest dir
     else
       lib.recurseIntoAttrs (
         lib.mapAttrs' (filename: _: {
