@@ -347,7 +347,7 @@ in
         ${lib.optionalString (session_rundir != false) session_rundir}
 
         session required pam_loginuid.so debug # loginuid (order 10300)
-        session required pam_limits.so
+        session required pam_limits.so conf=/etc/security/limits.conf
       '';
     };
 

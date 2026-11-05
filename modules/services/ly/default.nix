@@ -119,7 +119,7 @@ in
           session optional pam_loginuid.so
           ${lib.optionalString (session_rundir != false) session_rundir}
           session required ${pkgs.util-linux.lastlog}/lib/security/pam_lastlog2.so silent # lastlog (order 10700)
-          session required pam_limits.so
+          session required pam_limits.so conf=/etc/security/limits.conf
         '';
       };
     };

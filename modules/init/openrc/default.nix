@@ -353,14 +353,14 @@ in
           auth      required  pam_permit.so
           account   required  pam_permit.so
           password  required  pam_deny.so
-          session   optional  pam_limits.so
+          session   optional  pam_limits.so conf=/etc/security/limits.conf
         '';
 
         start-stop-daemon.text = ''
           auth      required  pam_permit.so
           account   required  pam_permit.so
           password  required  pam_deny.so
-          session   optional  pam_limits.so
+          session   optional  pam_limits.so conf=/etc/security/limits.conf
         '';
       };
 
