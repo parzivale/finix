@@ -18,8 +18,10 @@ in
       description = "network manager service";
 
       # the bus and its socket gate are in the head tier, so `service/dbus/ready` is behind
-      # this without being named
-      requires = [ "basic" ];
+      # this without being named. wpa_supplicant is named so that it is on the bus before
+      # NetworkManager first looks for it, rather than NetworkManager starting with wifi
+      # unavailable and waiting for the name to appear.
+      requires = [ "basic" ] ++ lib.optional config.services.wpa_supplicant.enable "wpa_supplicant";
 
       # read from a fixed path and named nowhere else, so a changed configuration
       # would otherwise leave the daemon running with the old one

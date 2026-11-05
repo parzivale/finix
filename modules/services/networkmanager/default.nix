@@ -11,13 +11,16 @@ let
 
   configFile = format.generate "00-nixos.conf" cfg.settings;
 
-  packages = [
-    cfg.package
-    pkgs.wpa_supplicant
-  ];
+  # wpa_supplicant is not here any more: it was put on the bus as a package, which installed its
+  # activation file, so dbus-daemon started it - as root, unsupervised - the first time
+  # NetworkManager asked for wifi. It is a supervised service of its own now, below.
+  packages = [ cfg.package ];
 in
 {
-  imports = [ ./providers.services.nix ];
+  imports = [
+    ./providers.services.nix
+    ../wpa_supplicant
+  ];
 
   options.services.networkmanager = {
     enable = lib.mkOption {
@@ -84,6 +87,10 @@ in
       # has set it up, silently dropping DNS updates.
       rc-manager = lib.mkDefault "resolvconf";
     };
+
+    # NetworkManager's wifi backend, which it reaches over the bus. A default rather than a
+    # requirement, so a machine using iwd as the backend can turn it off.
+    services.wpa_supplicant.enable = lib.mkDefault true;
 
     boot.kernelModules = [
       "ctr"
