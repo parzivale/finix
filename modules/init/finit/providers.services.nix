@@ -408,7 +408,23 @@ in
       # Mounting it twice would most likely have been harmless - finit would have found it mounted
       # and carried on - but "most likely harmless" is not a thing to find out on PID 1, and the
       # claim says which of the two is responsible for it either way.
-      providers.services.virtualMounts."/sys/fs/cgroup" = null;
+      #
+      # /dev/pts and /dev/shm are finit's too (src/finit.c): it mounts the first early, for
+      # plugins that want a pty, and remounts it with the tty group and mode=0620 once
+      # /etc/group exists; the second it mounts 1777 unless something already has.
+      #
+      # /dev/mqueue is asked for even though finit would mount one, because what finit mounts
+      # there is a tmpfs - `fs_mount("mqueue", "/dev/mqueue", "tmpfs", ...)` - which is a
+      # directory called mqueue rather than the message queue filesystem. Finding the real one
+      # mounted, it leaves it alone.
+      providers.services.initPaths = {
+        "/sys/fs/cgroup" = null;
+        "/dev/pts" = null;
+        "/dev/shm" = null;
+      }
+      // lib.getAttrs [ "/dev/mqueue" ] (
+        import ../../providers/services/init-paths.nix { inherit config; }
+      );
 
       # finit ships all three, and they reach it over its own socket. They are on PATH anyway
       # through finit.package being in systemPackages - naming them here is what stops that

@@ -503,14 +503,20 @@ in
       # the generation about to be started, recorded as the running one. Before the exec rather
       # than in activation, which runs on every switch too: rewriting these then would tell the
       # next `list` that whatever is running was already what is being switched into.
-      providers.services.pre = [
-        {
-          op = "copyTree";
+      #
+      # And the four mounts, all asked for: dinit mounts nothing.
+      providers.services.initPaths = {
+        ${runFingerprints}.copy = {
           from = fingerprintDir;
-          to = runFingerprints;
           writable = true;
-        }
-      ];
+        };
+      }
+      // lib.getAttrs [
+        "/sys/fs/cgroup"
+        "/dev/pts"
+        "/dev/shm"
+        "/dev/mqueue"
+      ] (import ../../providers/services/init-paths.nix { inherit config; });
 
       # dinit ships all three, and they reach it over the control socket - /run/dinitctl, which
       # is both dinit's own default and what the argv above asks for, so they need no

@@ -78,6 +78,14 @@ in
       # every other backend gets it.
       providers.services.exec = [ (lib.getExe' sinit' "sinit") ];
 
+      # all four: sinit mounts nothing, and neither does finix-rc.
+      providers.services.initPaths = lib.getAttrs [
+        "/sys/fs/cgroup"
+        "/dev/pts"
+        "/dev/shm"
+        "/dev/mqueue"
+      ] (import ../../providers/services/init-paths.nix { inherit config; });
+
       # sinit only ever acts on this by reacting to a signal sent to pid 1 - unlike every other
       # backend here, there is no command which asks it to shut down directly, only one which
       # asks the kernel to deliver the signal sinit's own sigwait loop is waiting on. It is what

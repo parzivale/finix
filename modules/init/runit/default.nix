@@ -478,6 +478,15 @@ in
       # every backend needs, and finix-init is that. What this used to be was that preamble
       # written out again here - activation, then exec - which is the shape all of them had.
       providers.services.exec = [ "${pkgs.runit}/bin/runit-init" ];
+
+      # all four: runit mounts nothing.
+      providers.services.initPaths = lib.getAttrs [
+        "/sys/fs/cgroup"
+        "/dev/pts"
+        "/dev/shm"
+        "/dev/mqueue"
+      ] (import ../../providers/services/init-paths.nix { inherit config; });
+
       # runit is the only backend which ships nothing under these names. `runit-init` is the
       # whole interface: it writes /etc/runit/stopit, sets or clears the executable bit on
       # /etc/runit/reboot, and sends SIGCONT to PID 1, which wakes runit into stage 3.

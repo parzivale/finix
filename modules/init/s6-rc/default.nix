@@ -782,38 +782,38 @@ in
       # s6's own init, directly. There is no wrapper any more.
       #
       # What the wrapper did was untar the generated tree, because two of its entries are fifos and
-      # a store path cannot hold one. `pre` does that as data now: the tree is an ordinary store
-      # directory, copied where the maker baked its own location, and the two channels made
-      # afterwards. gnutar and coreutils leave the boot path with it.
+      # a store path cannot hold one. `initPaths` does that as data now: the tree is an ordinary
+      # store directory, copied where the maker baked its own location, and the two channels made
+      # inside it afterwards - after, because they are deeper. gnutar and coreutils leave the boot
+      # path with it.
       providers.services.exec = [ "${initBase}/bin/init" ];
 
-      providers.services.pre = [
+      providers.services.initPaths = {
         # the generated tree, where every script in it expects to be. Writable because s6 writes
         # into run-image as it runs, and dereferenced because a copy of store symlinks would be a
         # tree of read-only paths.
-        {
-          op = "copyTree";
+        ${initBase}.copy = {
           from = initTree;
-          to = initBase;
           writable = true;
-        }
-      ]
-      ++ map (f: {
-        op = "mkfifo";
-        path = "${initBase}/${f}";
-        mode = 384; # 0600, as the maker makes them
-      }) initFifos
-      ++ [
+        };
+
         # the generation about to be started, recorded as the running one. Before the exec rather
         # than in activation, which runs on every switch too: rewriting these then would tell the
         # next `list` that whatever is running was already what is being switched into.
-        {
-          op = "copyTree";
+        ${runFingerprints}.copy = {
           from = fingerprintDir;
-          to = runFingerprints;
           writable = true;
-        }
-      ];
+        };
+      }
+      // lib.genAttrs' initFifos (f: lib.nameValuePair "${initBase}/${f}" { fifo.mode = 384; }) # 0600, as the maker makes them
+
+      # and the four mounts, all asked for: s6-linux-init mounts none of them.
+      // lib.getAttrs [
+        "/sys/fs/cgroup"
+        "/dev/pts"
+        "/dev/shm"
+        "/dev/mqueue"
+      ] (import ../../providers/services/init-paths.nix { inherit config; });
 
       # s6-linux-init-maker generates these three beside the init it generates, each one talking
       # to s6-linux-init-shutdownd over the fifo in the run-image. So they are named under the

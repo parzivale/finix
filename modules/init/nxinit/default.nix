@@ -108,17 +108,21 @@ in
       # arguments. Point rcinit at an ELF - which means giving finix-rc a way to find its
       # manifest without being told - and this op goes away.
       #
-      # A `pre` op rather than anything in finix-init itself, which is the distinction that
-      # option exists to make - "add an op when a backend needs one, not before". `symlink`
-      # unlinks first, so a switch onto a machine that already has one is fine, and `pre` runs
-      # after mounts and activation and immediately before the exec, which is exactly the window.
-      providers.services.pre = [
-        {
-          op = "symlink";
-          from = "/proc/self/fd";
-          to = "/dev/fd";
-        }
-      ];
+      # A path this backend asks for rather than anything in finix-init itself. A symlink
+      # replaces whatever is there, so a switch onto a machine that already has one is fine, and
+      # it is made after mounts and activation and immediately before the exec, which is exactly
+      # the window.
+      #
+      # And the four mounts, all asked for: nxinit mounts nothing, and neither does finix-rc.
+      providers.services.initPaths = {
+        "/dev/fd".symlink.target = "/proc/self/fd";
+      }
+      // lib.getAttrs [
+        "/sys/fs/cgroup"
+        "/dev/pts"
+        "/dev/shm"
+        "/dev/mqueue"
+      ] (import ../../providers/services/init-paths.nix { inherit config; });
 
       # nxinit only ever acts on this by reacting to a signal sent to pid 1 - there is no command
       # which asks it to shut down directly, only one which asks the kernel to deliver the signal

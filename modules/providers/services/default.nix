@@ -7,6 +7,34 @@
 let
   cfg = config.providers.services;
 
+  # `initPaths` without its claims, as `{ path, kind, value }` - `kind` being whichever of
+  # `mount`, `directory`, `symlink`, `fifo` or `copy` the entry is tagged with.
+  requestedInitPaths = lib.mapAttrsToList (
+    path: entry:
+    let
+      kind = lib.head (lib.attrNames entry);
+    in
+    {
+      inherit path kind;
+      value = entry.${kind};
+    }
+  ) (lib.filterAttrs (_: entry: entry != null) cfg.initPaths);
+
+  # shallowest first, then by name - which is the ordering that matters and not an alphabetical
+  # one: a path cannot be put inside a parent which is not there yet.
+  byDepth =
+    pathOf:
+    let
+      depth = p: lib.length (lib.splitString "/" p);
+    in
+    lib.sort (
+      a: b:
+      if depth (pathOf a) != depth (pathOf b) then
+        depth (pathOf a) < depth (pathOf b)
+      else
+        pathOf a < pathOf b
+    );
+
   # a user's own home, named from the configuration rather than looked up at runtime.
   #
   # `or` so a unit may name a user this module does not declare - a system account created
@@ -222,99 +250,142 @@ in
         makes enabling two of them a conflict rather than one of them quietly winning.
       '';
     };
-
-    virtualMounts = lib.mkOption {
-      internal = true;
-
-      type = lib.types.attrsOf (
-        lib.types.nullOr (
-          lib.types.submodule {
-            options = {
-              device = lib.mkOption {
-                type = lib.types.str;
-                description = "What to pass as the source. A pseudo-filesystem ignores it, but mount still wants one, and it is what shows up in `findmnt`.";
-              };
-
-              fsType = lib.mkOption {
-                type = lib.types.str;
-                description = "The filesystem type, as the kernel names it.";
-              };
-
-              options = lib.mkOption {
-                type = with lib.types; listOf str;
-                default = [ ];
-                description = "Mount options, split by `finix-init` into flags and data the way every other mount here is.";
-              };
+    initPaths =
+      let
+        mount = lib.types.submodule {
+          options = {
+            device = lib.mkOption {
+              type = lib.types.str;
+              description = "What to pass as the source. A pseudo-filesystem ignores it, but mount still wants one, and it is what shows up in `findmnt`.";
             };
-          }
-        )
-      );
 
-      default = { };
+            fsType = lib.mkOption {
+              type = lib.types.str;
+              description = "The filesystem type, as the kernel names it.";
+            };
 
-      description = ''
-        The filesystems the machine has regardless of what is configured, mounted by `finix-init`
-        before activation - keyed by mount point.
+            options = lib.mkOption {
+              type = with lib.types; listOf str;
+              default = [ ];
+              description = "Mount options, split by `finix-init` into flags and data the way every other mount here is.";
+            };
+          };
+        };
 
-        Not storage, and not anything a service asked for: the ones a Linux system is expected to
-        have before userspace starts, which no configuration names because naming them would be
-        describing the kernel rather than the machine. `finix-init` mounts them in order of depth,
-        so a mount point inside another filesystem is reached after the filesystem holding it, and
-        nothing here has to be declared in a particular order to work.
+        directory = lib.types.submodule { };
 
-        Declared rather than assumed. These were mounted unconditionally by a binary nobody had
-        asked to mount them, which is a set of assumptions dressed as a contract - and it had a
-        consequence: s6-linux-init wants to own `/run`, and a preamble that had already mounted one
-        was a problem to design around rather than a question anyone had been asked.
+        symlink = lib.types.submodule {
+          options.target = lib.mkOption {
+            type = lib.types.str;
+            description = "What the link points at. An existing link is replaced.";
+          };
+        };
 
-        An implementation which owns one of these claims it by setting that mount point to `null`,
-        and nothing else changes. That is why this is an attribute set and not a list: a claim is
-        then one entry rather than a redefinition of the whole set, so two implementations claiming
-        two different mounts do not have to agree on what the rest of it is. What an implementation
-        gives up by claiming one is whatever `finix-init` puts there - `/run` in particular holds
-        `/run/booted-system` and `/run/current-system`, so an implementation taking it over is
-        taking those on too.
+        fifo = lib.types.submodule {
+          options.mode = lib.mkOption {
+            type = lib.types.int;
+            description = "The pipe's permissions, as a number: `384` is 0600.";
+          };
+        };
 
-        The set is worth having for a reason that took a broken machine to notice. It was once
-        `/sys`, `/dev` and `/run` alone, and the four missing from it - `/dev/pts`, `/dev/shm`,
-        `/dev/mqueue` and `/sys/fs/cgroup` - were exactly the ones finit mounts for itself. So on
-        finit nothing was wrong, and selecting sinit, which mounts nothing because mounting is not
-        its job, produced a machine with no `/dev/pts` at all.
+        copy = lib.types.submodule {
+          options = {
+            from = lib.mkOption {
+              type = lib.types.path;
+              description = "The tree to copy. Symlinks in it are followed: it is in the store, and a copy of store links would be read-only whatever `writable` said.";
+            };
 
-        Nothing reports that in those terms. No `/dev/pts` means no pty can be allocated: a
-        terminal emulator starts, connects to the compositor, initialises its fonts, fails to spawn
-        a shell and exits, and `ssh` hands out sessions with no terminal. Every program that never
-        wanted a pty is fine, which is what makes it look like a fault in the one that broke.
+            writable = lib.mkOption {
+              type = lib.types.bool;
+              default = false;
+              description = "Whether the copy is made writable by its owner.";
+            };
+          };
+        };
+      in
+      lib.mkOption {
+        internal = true;
 
-        `/proc` is not here and cannot be: `finix-init` reads `finix_system=` out of `/proc/cmdline`
-        to find the configuration this would be declared in, so it mounts that one for itself
-        before anything is known.
-      '';
-    };
+        type = lib.types.attrsOf (
+          lib.types.nullOr (
+            lib.types.attrTag {
+              mount = lib.mkOption {
+                type = mount;
+                description = "A filesystem, mounted before activation.";
+              };
+              directory = lib.mkOption {
+                type = directory;
+                description = "A directory, created after activation.";
+              };
+              symlink = lib.mkOption {
+                type = symlink;
+                description = "A symbolic link, made after activation.";
+              };
+              fifo = lib.mkOption {
+                type = fifo;
+                description = "A named pipe, made after activation - which a derivation cannot contain.";
+              };
+              copy = lib.mkOption {
+                type = copy;
+                description = "A copy of a tree, replacing whatever is there, made after activation.";
+              };
+            }
+          )
+        );
 
-    pre = lib.mkOption {
-      type = with lib.types; listOf attrs;
-      default = [ ];
+        default = { };
+
+        description = ''
+          The paths an init needs before it can run, keyed by path, which `finix-init` puts in
+          place before exec'ing it: `mount` entries before activation, everything else after it
+          and immediately before the exec. Each kind is ordered shallowest first, so a mount
+          point is reached after the filesystem holding it and a pipe is made inside the tree
+          copied around it.
+
+          As small as it can be. What every backend gets is only what `finix-init` needs for
+          itself - `/sys`, `/dev` and `/run`, because activation reads `/sys`, names device nodes
+          and puts the generation's symlinks in `/run` - and everything else is asked for by the
+          backend that needs it, or claimed by it:
+
+          - an entry is a request: `initPaths."/dev/pts".mount = { ... };`
+          - `null` is a claim, "this init does it itself": finit and systemd mount `/dev/pts`
+            for themselves, and say so with `initPaths."/dev/pts" = null;`
+          - absent is neither, and for the paths in `baselineInitPaths` that is an error.
+
+          The last is what makes a short default safe. The default was once `/sys`, `/dev` and
+          `/run` alone, and the four missing from it - `/dev/pts`, `/dev/shm`, `/dev/mqueue` and
+          `/sys/fs/cgroup` - were exactly the ones finit mounts for itself. So on finit nothing
+          was wrong, and selecting sinit, which mounts nothing because mounting is not its job,
+          produced a machine with no `/dev/pts` at all. Nothing reported that in those terms: a
+          terminal emulator started, failed to spawn a shell and exited, and `ssh` handed out
+          sessions with no terminal. Now a backend that says nothing about one of them does not
+          evaluate.
+
+          `/proc` is not here and cannot be: `finix-init` reads `finix_system=` out of
+          `/proc/cmdline` to find the configuration this would be declared in, so it mounts that
+          one for itself before anything is known.
+        '';
+      };
+
+    baselineInitPaths = lib.mkOption {
+      type = with lib.types; listOf str;
       internal = true;
+      readOnly = true;
+
+      default = [
+        "/sys"
+        "/sys/fs/cgroup"
+        "/dev"
+        "/dev/pts"
+        "/dev/shm"
+        "/dev/mqueue"
+        "/run"
+      ];
 
       description = ''
-        Steps `finix-init` takes after activation and before exec'ing the service manager, as
-        data rather than as a shell script written per backend.
-
-        Each entry names an `op` and its arguments:
-
-        - `{ op = "copyTree"; from = <path>; to = <path>; writable = <bool>; }` - replace `to`
-          with a copy of `from`, following symlinks. Dereferencing is the point: `from` is in
-          the store, so a plain copy would be a tree of links back into it and `writable` would
-          be a lie.
-        - `{ op = "mkdir"; path = <path>; }`
-        - `{ op = "symlink"; from = <path>; to = <path>; }`
-        - `{ op = "mkfifo"; path = <path>; mode = <int>; }` - which is why some of these trees
-          cannot be store paths at all: a derivation cannot contain a named pipe.
-
-        Add an op when a backend needs one, not before. Two already wanted the same thing - the
-        generation's own record of what is running, copied somewhere writable because the store
-        is not - and each had its own three lines of `rm -rf`, `cp -rL` and `chmod -R u+w`.
+        The filesystems a Linux userland expects before it starts. Each must be in
+        {option}`providers.services.initPaths` - asked of `finix-init`, or claimed with `null`
+        by an init that mounts it itself.
       '';
     };
 
@@ -919,100 +990,62 @@ in
     # backend as a shell script each one got slightly differently.
     boot.init = if cfg.exec != null then lib.getExe finixInit else cfg.initExecutable;
 
+    # what finix-init needs for itself, and nothing a backend could be asked to need: activation
+    # reads /sys and names device nodes, and the generation's symlinks go in /run. The rest of
+    # `baselineInitPaths` is each backend's to ask for or claim.
+    #
+    # As definitions rather than as the option's `default`, so that claiming one is an edit to one
+    # entry. A `default` is replaced wholesale by the first definition of the option: an
+    # implementation writing `initPaths."/run" = null` against a defaulted set would be left
+    # holding a set with `/run` in it and nothing else, and the machine would come up with no
+    # `/dev` rather than with one fewer mount than it asked for.
+    providers.services.initPaths = lib.mapAttrs (_: lib.mkDefault) (
+      lib.getAttrs [ "/sys" "/dev" "/run" ] (import ./init-paths.nix { inherit config; })
+    );
+
     # the argv, the steps before it, and the filesystems that have to exist for either to work.
     #
     # Not in `boot.json`: that name belongs to the bootspec, which bootloader installers parse and
     # which names the toplevel - so putting this there would intrude on a format that is not ours
     # and make the file describing the toplevel a dependency of it.
-    # as definitions rather than as the option's `default`, so that claiming one is an edit to one
-    # entry. A `default` is replaced wholesale by the first definition of the option: an
-    # implementation writing `virtualMounts."/run" = null` against a defaulted set would be left
-    # holding a set with `/run` in it and nothing else, and the machine would come up with no
-    # `/dev` rather than with one fewer mount than it asked for.
-    providers.services.virtualMounts = lib.mapAttrs (_: lib.mkDefault) {
-      "/sys" = {
-        device = "sys";
-        fsType = "sysfs";
-        options = [
-          "nosuid"
-          "nodev"
-          "noexec"
-        ];
-      };
-
-      # the controller hierarchy. An init which supervises through cgroups wants to create and
-      # populate this itself, which is a claim rather than a second mount - see finit, which does.
-      "/sys/fs/cgroup" = {
-        device = "cgroup2";
-        fsType = "cgroup2";
-        options = [
-          "nosuid"
-          "nodev"
-          "noexec"
-        ];
-      };
-
-      "/dev" = {
-        device = "devtmpfs";
-        fsType = "devtmpfs";
-        options = [ "nosuid" ];
-      };
-
-      # the pty multiplexer's own filesystem. `gid` is the tty group, which is what a pty's slave
-      # side is owned by, and `mode=0620` is what makes `write` and `wall` reach a terminal
-      # without making it readable by everyone logged in. `ptmxmode` is for `/dev/ptmx` itself:
-      # devtmpfs provides the node, and without this the permissions on it are 0000.
-      "/dev/pts" = {
-        device = "devpts";
-        fsType = "devpts";
-        options = [
-          "nosuid"
-          "noexec"
-          "gid=${toString config.ids.gids.tty}"
-          "mode=0620"
-          "ptmxmode=0666"
-        ];
-      };
-
-      # POSIX shared memory, which is a tmpfs by convention and by every program that uses it.
-      # 1777 because it is a shared namespace: anyone may create a segment, and the sticky bit is
-      # what stops them removing each other's.
-      "/dev/shm" = {
-        device = "shm";
-        fsType = "tmpfs";
-        options = [
-          "nosuid"
-          "nodev"
-          "mode=1777"
-        ];
-      };
-
-      "/dev/mqueue" = {
-        device = "mqueue";
-        fsType = "mqueue";
-        options = [
-          "nosuid"
-          "nodev"
-          "noexec"
-        ];
-      };
-
-      "/run" = {
-        device = "tmpfs";
-        fsType = "tmpfs";
-        options = [
-          "nosuid"
-          "nodev"
-        ];
-      };
-    };
-
     providers.services.initConfig = lib.mkIf (cfg.exec != null) (
       pkgs.writeText "finix-init.json" (
         builtins.toJSON {
           version = 1;
           exec = cfg.exec;
-          pre = cfg.pre;
+
+          # everything in `initPaths` that is not a mount, in the steps finix-init already takes
+          # after activation. Shallowest first, so a pipe is made inside the tree copied around
+          # it rather than the copy replacing the pipe.
+          pre =
+            let
+              op =
+                e:
+                {
+                  directory = {
+                    op = "mkdir";
+                    inherit (e) path;
+                  };
+                  symlink = {
+                    op = "symlink";
+                    from = e.value.target;
+                    to = e.path;
+                  };
+                  fifo = {
+                    op = "mkfifo";
+                    inherit (e) path;
+                    inherit (e.value) mode;
+                  };
+                  copy = {
+                    op = "copyTree";
+                    from = "${e.value.from}";
+                    to = e.path;
+                    inherit (e.value) writable;
+                  };
+                }
+                .${e.kind};
+            in
+            map op (byDepth (e: e.path) (lib.filter (e: e.kind != "mount") requestedInitPaths));
 
           # what `/` is declared to be, when the kernel cannot mount that itself.
           #
@@ -1064,21 +1097,11 @@ in
                 lib.attrValues config.fileSystems
               );
 
-              # a mount point claimed by an implementation is null, which is not the same as
-              # absent: the entry is still there to say who stopped it from being mounted here.
-              virtual = lib.mapAttrsToList (mountPoint: m: m // { inherit mountPoint; }) (
-                lib.filterAttrs (_: m: m != null) cfg.virtualMounts
+              virtual = map (e: e.value // { mountPoint = e.path; }) (
+                lib.filter (e: e.kind == "mount") requestedInitPaths
               );
 
-              depth = p: lib.length (lib.splitString "/" p);
-
-              shallowestFirst = lib.sort (
-                a: b:
-                if depth a.mountPoint != depth b.mountPoint then
-                  depth a.mountPoint < depth b.mountPoint
-                else
-                  a.mountPoint < b.mountPoint
-              );
+              shallowestFirst = byDepth (fs: fs.mountPoint);
 
               named = map (fs: {
                 inherit (fs)
@@ -1194,6 +1217,25 @@ in
           ${lib.concatStringsSep " -> " (scan.cycle or [ ])}
         '';
       }
+
+      # absent rather than null: nobody asked finix-init for it and nobody claimed it, so the
+      # machine would come up without it and say so only through whatever needed it failing.
+      (
+        let
+          unsaid = lib.filter (p: !(cfg.initPaths ? ${p})) cfg.baselineInitPaths;
+        in
+        {
+          assertion = cfg.exec == null || unsaid == [ ];
+          message = ''
+            providers.services backend `${cfg.backend}` says nothing about ${lib.concatStringsSep ", " unsaid}.
+
+            Each of these is expected before userspace starts, so each has to be in
+            `providers.services.initPaths`: asked of finix-init, from
+            modules/providers/services/init-paths.nix, or set to `null` if the init mounts it
+            itself.
+          '';
+        }
+      )
     ]
 
     ++ lib.mapAttrsToList (

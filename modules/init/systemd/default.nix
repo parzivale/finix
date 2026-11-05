@@ -946,22 +946,31 @@ in
       };
 
       # systemd is its own init, and `finix-init` execs it as pid 1 - so it is pid 1 by exec
-      # rather than from the kernel, which it does not mind. What it does need is /proc, /sys and
-      # a cgroup2 mount, and `providers.services.virtualMounts` has all three in place before
-      # this runs.
+      # rather than from the kernel, which it does not mind.
       providers.services.exec = [ "${scfg.package}/lib/systemd/systemd" ];
 
       # the generation about to be started, recorded as the running one. Before the exec rather
       # than in activation, which also runs on every switch: rewriting these then would tell the
       # next `list` that whatever is running was already what is being switched into.
-      providers.services.pre = [
-        {
-          op = "copyTree";
+      #
+      # And the mounts. /dev/pts, /dev/shm and /sys/fs/cgroup are systemd's own: its mount table
+      # (src/shared/mount-setup.c) mounts each unless something already has, and the cgroup2 one
+      # with `nsdelegate,memory_recursiveprot`, which is more than finix-init would ask for.
+      # /dev/mqueue is not in that table - it is dev-mqueue.mount, a unit, and the unit
+      # directory here is generated from this configuration's units - so it is asked for.
+      providers.services.initPaths = {
+        ${runFingerprints}.copy = {
           from = fingerprintDir;
-          to = runFingerprints;
           writable = true;
-        }
-      ];
+        };
+
+        "/sys/fs/cgroup" = null;
+        "/dev/pts" = null;
+        "/dev/shm" = null;
+      }
+      // lib.getAttrs [ "/dev/mqueue" ] (
+        import ../../providers/services/init-paths.nix { inherit config; }
+      );
 
       environment.etc."systemd/system".source = unitDir;
 

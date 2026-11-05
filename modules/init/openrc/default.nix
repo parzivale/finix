@@ -319,14 +319,21 @@ in
       # the generation about to be started, recorded as the running one. Before the exec rather
       # than in activation, which runs on every switch too: rewriting these then would tell the
       # next `list` that what is running was already what is being switched into.
-      providers.services.pre = [
-        {
-          op = "copyTree";
+      #
+      # And the four mounts, all asked for. openrc's own devfs, sysfs and cgroups scripts would
+      # mount them, but the runlevels here are generated from the units and carry none of those.
+      providers.services.initPaths = {
+        ${runUnits}.copy = {
           from = initd;
-          to = runUnits;
           writable = true;
-        }
-      ];
+        };
+      }
+      // lib.getAttrs [
+        "/sys/fs/cgroup"
+        "/dev/pts"
+        "/dev/shm"
+        "/dev/mqueue"
+      ] (import ../../providers/services/init-paths.nix { inherit config; });
 
       # `now` is not optional. Each of these takes a time to go down at - openrc-shutdown is
       # `shutdown(8)`, which schedules rather than acts - and without one it prints "No shutdown
