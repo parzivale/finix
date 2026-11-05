@@ -101,4 +101,6 @@ in
 lib.mapAttrs (_: row backends) core
 // lib.mapAttrs (_: spec: row (lib.subtractLists spec.without backends) spec.file) coreNarrowed
 // perBackend
-// { inherit graph; }
+// {
+  inherit graph;
+}

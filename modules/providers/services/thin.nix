@@ -66,8 +66,7 @@ rec {
 
           # null means `fork` readiness - up the moment it is running. `notify` and `s6` never
           # reach here; the contract refuses them against these backends.
-          readiness_command =
-            if kind == "service" then readinessLib.scriptFor name v.readiness else null;
+          readiness_command = if kind == "service" then readinessLib.scriptFor name v.readiness else null;
 
           shutdown_side = shutdownLib.onShutdownSide cfg.trunk name unit;
         };
