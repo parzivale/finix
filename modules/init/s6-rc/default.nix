@@ -95,6 +95,29 @@ let
     done
   '';
 
+  # whether a unit's output is sent to the system log rather than left to s6's own.
+  #
+  # Left alone, a unit writes wherever s6-svscan does, which is s6-linux-init's catch-all
+  # logger - and the init is built with `-1`, which copies everything that logger sees to the
+  # console. So on this backend every daemon's chatter was on the screen and nowhere else,
+  # where on finit the same unit's output is in syslog. This puts it in the same place.
+  #
+  # Decided when the unit starts, by whether the socket is there, rather than at build time.
+  # The syslog daemon is attached to the head of the trunk, so the units in that same tier can
+  # start before it has made /dev/log, and `logger` with no socket does not fail: it carries on
+  # reading and drops every line. Those units would have lost their output entirely, at the
+  # point in the boot where it is most likely to explain something. Without the socket, a unit
+  # keeps the catch-all, which is no worse than before; with it, `logger` reconnects on its own
+  # if the daemon restarts underneath it.
+  #
+  # Not the syslog daemon itself, whose output would be fed back into it - on a restart the
+  # socket is still there, so the check above would not catch it. Both syslog modules call it
+  # `syslogd`. And not a unit which takes the terminal: `logger` is a child of the unit's own
+  # process, and that is exactly what `terminal` says must not happen - see it in the contract.
+  logsToSyslog = name: unit: kindOf unit != "anchor" && !unit.terminal && name != "syslogd";
+
+  logger = lib.getExe' pkgs.util-linux "logger";
+
   # null unless this unit is a service with a waitFor readiness
   waitScript =
     name: unit:
@@ -107,6 +130,12 @@ let
       ${lib.concatStringsSep "\n" (
         lib.mapAttrsToList (k: v: "export ${k}=${lib.escapeShellArg v}") unit.environment
       )}
+      ${lib.optionalString (logsToSyslog name unit) ''
+        # Everything a unit writes goes to the system log, as it does on finit - see `logsToSyslog`.
+        if [ -S /dev/log ]; then
+          exec > >(exec ${logger} -t ${name}) 2>&1
+        fi
+      ''}
       ${
         lib.optionalString (waitScript name unit != null) ''
           # s6 speaks one readiness protocol, so a waitFor is turned into it: the daemon starts

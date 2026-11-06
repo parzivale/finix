@@ -17,6 +17,10 @@
 #
 # and its dependencies order change operations without propagating stops, which is the
 # contract's start-only edge with no emulation at all - only dinit otherwise manages that.
+#
+# It also has no logging of its own for a unit: left alone, output goes to s6-linux-init's
+# catch-all logger and from there to the console. So the system log is checked here too, for
+# a service and a oneshot both, since the backend has to arrange that itself.
 {
   name = "providers.services-s6rc";
 
@@ -37,6 +41,11 @@
       services.mdevd.enable = true;
       services.getty.enable = true;
 
+      # the harness sends all of syslog to the console, which is also where s6's catch-all logger
+      # copies everything - so the console cannot say which of the two a line came through. A
+      # file only syslogd writes to can.
+      services.sysklogd.extraConfig = "*.* /var/log/units";
+
       environment.systemPackages = [
         pkgs.s6
         pkgs.s6-rc
@@ -48,6 +57,7 @@
       providers.services.units = {
         alpha = {
           type.service.command = pkgs.writeShellScript "alpha" ''
+            echo "alpha-to-syslog"
             ${note "alpha"}
             exec ${pkgs.coreutils}/bin/sleep infinity
           '';
@@ -76,6 +86,15 @@
           '';
           requires = [ "beta" ];
         };
+
+        # a oneshot runs through s6-rc's runner rather than under a supervisor, so its output
+        # takes a different road to the same place
+        delta = {
+          type.oneshot.command = pkgs.writeShellScript "delta" ''
+            echo "delta-to-syslog" >&2
+          '';
+          requires = [ "sysinit" ];
+        };
       };
 
       environment.etc."services-switch".source = config.system.build.servicesSwitch;
@@ -98,6 +117,14 @@
         # only appear after beta-ready. Were the notification ignored, beta would count as up
         # the moment it spawned and gamma would race ahead of it.
         assert order() == ["alpha", "beta-ready", "gamma"], f"order was {order()}"
+
+    with subtest("a unit's output reaches the system log, tagged with its name"):
+        # stdout for the service, stderr for the oneshot: both are redirected, and either one
+        # missing would be a unit whose errors still go only to the console
+        for unit in ["alpha", "delta"]:
+            machine.wait_until_succeeds(
+                f"grep -qs '{unit}: {unit}-to-syslog' /var/log/units", timeout=60
+            )
 
     with subtest("the switch engine reconciles against s6-rc"):
         out = machine.succeed("/etc/services-switch 2>&1")
