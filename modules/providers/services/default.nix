@@ -45,6 +45,9 @@ let
   # the preamble the kernel runs before any backend: see pkgs/finix-init
   finixInit = pkgs.callPackage ../../../pkgs/finix-init { };
 
+  # the same waiting a service's `waitFor` readiness does, for a oneshot's
+  readinessLib = import ./readiness.nix { inherit pkgs lib; };
+
   pathOrStr = with lib.types; coercedTo path (x: "${x}") str;
   program =
     lib.types.coercedTo (
@@ -571,6 +574,135 @@ in
                       '';
                     };
 
+                    # A oneshot is ready once it has exited, on every implementation. So a
+                    # oneshot's readiness is folded into its command here, once: the command is
+                    # run, then the wait, and the unit exits once both have succeeded. No
+                    # implementation needs to know about it, and none can get it differently.
+                    #
+                    # A oneshot with no readiness keeps its command exactly as written, so this
+                    # changes nothing about any unit which does not ask for it.
+                    oneshotCommand =
+                      oneshot:
+                      let
+                        wait = readinessLib.scriptFor name oneshot.readiness;
+                        bounded =
+                          if oneshot.readinessTimeout == null then
+                            "exec ${wait}"
+                          else
+                            ''
+                              ${lib.getExe' pkgs.coreutils "timeout"} ${toString oneshot.readinessTimeout} ${wait} || {
+                                echo ${lib.escapeShellArg "${name}: not ready after ${toString oneshot.readinessTimeout}s"} >&2
+                                exit 1
+                              }
+                            '';
+                      in
+                      if oneshot.readiness == null then
+                        if oneshot.command == null then
+                          throw "providers.services.units.${name}: a oneshot needs a `command`, a `readiness`, or both"
+                        else
+                          oneshot.command
+                      else
+                        # interpolated, since this is past the point where `program` would
+                        # have made a string of it and an implementation may expect one
+                        "${pkgs.writeShellScript "${name}-oneshot" ''
+                          set -e
+                          ${lib.optionalString (oneshot.command != null) oneshot.command}
+                          ${bounded}
+                        ''}";
+
+                    waitFor = lib.mkOption {
+                      description = ''
+                        Ready once something appears and is live, for a daemon with no
+                        readiness protocol of its own - which is most of them.
+
+                        The tag says what is being waited for, and so what counts as
+                        live. An implementation reaches for a native mechanism where it
+                        has one for that kind, and polls otherwise. This is inference
+                        rather than assertion, which is why it is not `notify` or `s6`.
+                      '';
+
+                      type = lib.types.attrTag {
+                        socket = lib.mkOption {
+                          description = ''
+                            Ready once connecting to the socket succeeds.
+
+                            Not merely that the path is there: a unix socket exists from
+                            `bind`, and `listen` comes afterwards, so a client arriving
+                            in that window is refused by a socket which demonstrably
+                            exists.
+                          '';
+                          type = lib.types.submodule {
+                            options.path = lib.mkOption {
+                              type = lib.types.str;
+                              example = "/run/dbus/system_bus_socket";
+                              description = "The socket this unit binds.";
+                            };
+                          };
+                        };
+
+                        pidfile = lib.mkOption {
+                          description = ''
+                            Ready once the file exists and the process it names is alive.
+
+                            This also says the daemon forks into the background to write
+                            it, which finit and dinit observe directly. A program which
+                            stays in the foreground and happens to write a pid file is
+                            not this - it is `path` - and an implementation waiting for a
+                            fork which never comes will fail the unit on its start
+                            timeout.
+                          '';
+                          type = lib.types.submodule {
+                            options.file = lib.mkOption {
+                              type = lib.types.str;
+                              example = "/run/nginx.pid";
+                              description = "The file the daemon writes its process ID to.";
+                            };
+                          };
+                        };
+
+                        path = lib.mkOption {
+                          description = ''
+                            Ready once the path exists, which is all that can be known
+                            about an arbitrary file.
+                          '';
+                          type = lib.types.submodule {
+                            options.path = lib.mkOption {
+                              type = lib.types.str;
+                              example = "/run/something.ready";
+                              description = "The path to wait for.";
+                            };
+                          };
+                        };
+
+                        check = lib.mkOption {
+                          description = ''
+                            Ready once this command exits successfully.
+
+                            The command does the waiting - it is run once, and returning
+                            is what says the unit is up - so anything whose readiness only
+                            it can answer belongs here: a database accepting queries, an
+                            endpoint returning 200. The other kinds are the common cases
+                            of this one, written out so they need no script.
+
+                            A command which never returns stalls everything behind the
+                            unit until {option}`startTimeout`, where the implementation
+                            can bound it. It is the script's business to give up.
+                          '';
+                          type = lib.types.submodule {
+                            options.command = lib.mkOption {
+                              type = program;
+                              example = lib.literalExpression ''
+                                pkgs.writeShellScript "pg-ready" '''
+                                  until pg_isready -q; do sleep 0.1; done
+                                '''
+                              '';
+                              description = "The command whose successful exit means ready.";
+                            };
+                          };
+                        };
+                      };
+                    };
+
                     reload = lib.mkOption {
                       type = with lib.types; nullOr program;
                       default = null;
@@ -684,98 +816,7 @@ in
                                 };
                               };
 
-                              waitFor = lib.mkOption {
-                                description = ''
-                                  Ready once something appears and is live, for a daemon with no
-                                  readiness protocol of its own - which is most of them.
-
-                                  The tag says what is being waited for, and so what counts as
-                                  live. An implementation reaches for a native mechanism where it
-                                  has one for that kind, and polls otherwise. This is inference
-                                  rather than assertion, which is why it is not `notify` or `s6`.
-                                '';
-
-                                type = lib.types.attrTag {
-                                  socket = lib.mkOption {
-                                    description = ''
-                                      Ready once connecting to the socket succeeds.
-
-                                      Not merely that the path is there: a unix socket exists from
-                                      `bind`, and `listen` comes afterwards, so a client arriving
-                                      in that window is refused by a socket which demonstrably
-                                      exists.
-                                    '';
-                                    type = lib.types.submodule {
-                                      options.path = lib.mkOption {
-                                        type = lib.types.str;
-                                        example = "/run/dbus/system_bus_socket";
-                                        description = "The socket this unit binds.";
-                                      };
-                                    };
-                                  };
-
-                                  pidfile = lib.mkOption {
-                                    description = ''
-                                      Ready once the file exists and the process it names is alive.
-
-                                      This also says the daemon forks into the background to write
-                                      it, which finit and dinit observe directly. A program which
-                                      stays in the foreground and happens to write a pid file is
-                                      not this - it is `path` - and an implementation waiting for a
-                                      fork which never comes will fail the unit on its start
-                                      timeout.
-                                    '';
-                                    type = lib.types.submodule {
-                                      options.file = lib.mkOption {
-                                        type = lib.types.str;
-                                        example = "/run/nginx.pid";
-                                        description = "The file the daemon writes its process ID to.";
-                                      };
-                                    };
-                                  };
-
-                                  path = lib.mkOption {
-                                    description = ''
-                                      Ready once the path exists, which is all that can be known
-                                      about an arbitrary file.
-                                    '';
-                                    type = lib.types.submodule {
-                                      options.path = lib.mkOption {
-                                        type = lib.types.str;
-                                        example = "/run/something.ready";
-                                        description = "The path to wait for.";
-                                      };
-                                    };
-                                  };
-
-                                  check = lib.mkOption {
-                                    description = ''
-                                      Ready once this command exits successfully.
-
-                                      The command does the waiting - it is run once, and returning
-                                      is what says the unit is up - so anything whose readiness only
-                                      it can answer belongs here: a database accepting queries, an
-                                      endpoint returning 200. The other kinds are the common cases
-                                      of this one, written out so they need no script.
-
-                                      A command which never returns stalls everything behind the
-                                      unit until {option}`startTimeout`, where the implementation
-                                      can bound it. It is the script's business to give up.
-                                    '';
-                                    type = lib.types.submodule {
-                                      options.command = lib.mkOption {
-                                        type = program;
-                                        example = lib.literalExpression ''
-                                          pkgs.writeShellScript "pg-ready" '''
-                                            until pg_isready -q; do sleep 0.1; done
-                                          '''
-                                        '';
-                                        description = "The command whose successful exit means ready.";
-                                      };
-                                    };
-                                  };
-                                };
-                              };
+                              inherit waitFor;
                             }
                           );
                         in
@@ -796,7 +837,66 @@ in
 
                       oneshot = lib.mkOption {
                         description = "A command which runs to completion.";
-                        type = lib.types.submodule { options = { inherit command; }; };
+                        # what an implementation reads is `command` alone, with any readiness
+                        # already folded into it - see oneshotCommand above.
+                        #
+                        # Only `command`, and not the options it was made from: the switch
+                        # fingerprints `type` whole, so two fields set to null on every oneshot
+                        # would have marked every oneshot on every machine as changed, and
+                        # re-run them all on the first switch after this was added. A changed
+                        # readiness still changes the command, which is all the switch needs.
+                        apply = oneshot: { command = oneshotCommand oneshot; };
+                        type = lib.types.submodule {
+                          options = {
+                            command = command // {
+                              type = lib.types.nullOr program;
+                              default = null;
+                              description = ''
+                                The command this unit runs.
+
+                                May be left out when {option}`readiness` is set, for a unit
+                                whose only job is to wait for something - a device node
+                                appearing, say - so that whatever requires it waits too.
+                              '';
+                            };
+
+                            readiness = lib.mkOption {
+                              type = lib.types.nullOr (lib.types.attrTag { inherit waitFor; });
+                              default = null;
+                              example = lib.literalExpression ''{ waitFor.path.path = "/dev/ttyUSB0"; }'';
+                              description = ''
+                                Something which must be live, after the command has exited,
+                                before this unit counts as done.
+
+                                Without it a oneshot is ready the moment its command exits
+                                successfully. With it, it is ready once the command has exited
+                                and the thing named here has appeared, and units requiring it
+                                wait for both. Every `waitFor` kind is accepted, and works on
+                                every implementation: the wait is run as part of the unit's own
+                                command, so nothing has to observe it.
+
+                                Only `waitFor`: `fork`, `notify` and `s6` describe a process
+                                which stays running, and a oneshot is one which does not.
+                              '';
+                            };
+
+                            readinessTimeout = lib.mkOption {
+                              type = with lib.types; nullOr ints.positive;
+                              default = null;
+                              example = 10;
+                              description = ''
+                                How long, in seconds, the wait in {option}`readiness` may take
+                                before the unit fails. Its dependants then never start, and
+                                the rest of the boot carries on without them.
+
+                                `null` waits indefinitely - which, for something that may never
+                                appear, holds everything behind this unit for as long as the
+                                machine is up. Unlike {option}`startTimeout` this is enforced
+                                by the unit itself, so it works on every implementation.
+                              '';
+                            };
+                          };
+                        };
                       };
 
                       anchor = lib.mkOption {

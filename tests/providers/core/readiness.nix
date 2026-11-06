@@ -9,6 +9,12 @@
 # deliberately not here: only finit and s6-rc can observe them, so a core test asking for one
 # would not be a core test. Each backend's own test covers those.
 #
+# A oneshot may wait too, with `type.oneshot.readiness`: it is done once its command has exited
+# and the thing named has appeared. That is the shape of a unit gating others on a device node,
+# which is tested here with a file a slow daemon creates instead, since a test machine has no
+# device to wait for that it could make appear on cue. It has no command at all, which is the
+# case that matters - a unit whose only job is the wait.
+#
 # Each daemon sleeps before it becomes live, so a dependant which started without waiting has
 # time to be caught doing it: it writes down whether what it required was there when it ran.
 {
@@ -65,6 +71,26 @@ in
           type.service.command = coreLib.observer "after-check" (liveFile "by-check");
           requires = [ "by-check" ];
         };
+
+        # a oneshot which does nothing but wait. It requires only `sysinit`, as by-device does,
+        # so nothing orders it after the file appearing except its own readiness.
+        by-device = {
+          type.service.command = coreLib.slowDaemon "by-device" delay;
+          requires = [ "sysinit" ];
+        };
+
+        device-gate = {
+          type.oneshot = {
+            readiness.waitFor.path.path = liveFile "by-device";
+            readinessTimeout = 60;
+          };
+          requires = [ "sysinit" ];
+        };
+
+        after-gate = {
+          type.service.command = coreLib.observer "after-gate" (liveFile "by-device");
+          requires = [ "device-gate" ];
+        };
       };
     };
 
@@ -74,8 +100,8 @@ in
     machine.start()
     wait_booted()
 
-    with subtest("both dependants eventually ran"):
-        for name in ["after-path", "after-check"]:
+    with subtest("every dependant eventually ran"):
+        for name in ["after-path", "after-check", "after-gate"]:
             machine.wait_until_succeeds(f"test -e ${coreLib.markerDir}/{name}.saw", timeout=120)
 
     with subtest("waitFor.path held its dependant until the path was there"):
@@ -89,6 +115,13 @@ in
         saw = marker("after-check.saw")
         assert saw == "yes", (
             f"after-check started before by-check was live (saw {saw})"
+        )
+
+    with subtest("a oneshot's readiness held its dependant until the path was there"):
+        saw = marker("after-gate.saw")
+        assert saw == "yes", (
+            f"after-gate started before by-device was live (saw {saw}) - the oneshot was "
+            "treated as done without waiting for its readiness"
         )
 
     machine.shutdown()
